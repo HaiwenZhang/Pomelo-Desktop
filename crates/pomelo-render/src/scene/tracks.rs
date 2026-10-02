@@ -1,0 +1,797 @@
+//! Immutable analytic trace batches. Camera changes never rebuild this buffer.
+
+use pomelo_core::{
+    i18n::MessageKey,
+    model::{Diagnostic, LayerId, ObjectId, Point, Segment},
+    task::CancellationToken,
+};
+
+use crate::split_position;
+use std::borrow::Borrow;
+
+/// Eight 16-byte vectors; keep the matching shader declaration in this order.
+/// Point vectors store [x_high, y_high, x_low, y_low].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct TraceInstance {
+    pub a: [f32; 4],
+    pub b: [f32; 4],
+    pub center: [f32; 4],
+    /// [radius_high, radius_low, start_radians, signed_sweep_radians].
+    pub arc: [f32; 4],
+    pub bounds_min: [f32; 4],
+    pub bounds_max: [f32; 4],
+    /// [object, track, layer, net].
+    pub ids: [u32; 4],
+    /// [kind (0 line / 1 arc), combined source index, width bits, flags (bit 0 full, bit 1 long, bit 2 outline)].
+    pub flags: [u32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<TraceInstance>() == 128);
+const _: () = assert!(std::mem::offset_of!(TraceInstance, ids) == 96);
+const _: () = assert!(std::mem::offset_of!(TraceInstance, flags) == 112);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceBatch {
+    pub layer: LayerId,
+    pub start: u32,
+    pub count: u32,
+    pub outline: bool,
+}
+
+#[derive(Debug)]
+pub struct PreparedTracks {
+    pub instances: Vec<TraceInstance>,
+    pub batches: Vec<TraceBatch>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TraceLimits {
+    pub max_instances: usize,
+    pub max_bytes: usize,
+}
+
+impl Default for TraceLimits {
+    fn default() -> Self {
+        Self {
+            max_instances: 4_000_000,
+            max_bytes: 512 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PrepareError {
+    #[error("RENDER_PREPARE_CANCELLED")]
+    Cancelled,
+    #[error("RENDER_PREPARE_LIMIT actual={actual} limit={limit}")]
+    Limit { actual: usize, limit: usize },
+    #[error("RENDER_PREPARE_INVALID object={0:?}")]
+    Invalid(ObjectId),
+    #[error("RENDER_PREPARE_ALLOCATION")]
+    Allocation,
+}
+
+impl PrepareError {
+    pub fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Cancelled => Diagnostic::error("RENDER_PREPARE_CANCELLED", MessageKey::Cancelled),
+            Self::Limit { actual, limit } => {
+                let mut diagnostic =
+                    Diagnostic::error("RENDER_PREPARE_LIMIT", MessageKey::GeometryLimit);
+                diagnostic.message = diagnostic
+                    .message
+                    .arg("actual", *actual)
+                    .arg("limit", *limit);
+                diagnostic
+            }
+            Self::Invalid(id) => {
+                let mut diagnostic =
+                    Diagnostic::error("RENDER_PREPARE_INVALID", MessageKey::RenderPrepareInvalid);
+                diagnostic.object = Some(*id);
+                diagnostic.message = diagnostic.message.arg("object", id.0);
+                diagnostic
+            }
+            Self::Allocation => Diagnostic::error(
+                "RENDER_PREPARE_ALLOCATION",
+                MessageKey::RenderPrepareAllocation,
+            ),
+        }
+    }
+}
+
+fn split_point(point: Point) -> [f32; 4] {
+    let [x, dx] = split_position(point.x);
+    let [y, dy] = split_position(point.y);
+    [x, y, dx, dy]
+}
+
+impl PreparedTracks {
+    /// Bounds include round caps and directed arc extrema. Stable source order
+    /// is preserved within each layer, including multiple segments of one track.
+    pub fn build(
+        segments: &[Segment],
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        Self::build_with_outline(segments, &[], limits, cancellation)
+    }
+
+    /// Borrow both source collections; board outlines form separate batches after traces.
+    pub fn build_with_outline(
+        segments: &[Segment],
+        outline: &[Segment],
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        Self::build_segments(
+            segments.iter().chain(outline),
+            segments.len().saturating_add(outline.len()),
+            segments.len(),
+            limits,
+            cancellation,
+        )
+    }
+
+    /// Prepare dimension strokes without cloning or flattening source geometry.
+    /// Draw these in a separate renderer with PCB selection disabled.
+    pub fn build_drawings(
+        drawings: &[pomelo_core::model::BoardDrawing],
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        let mut count = 0usize;
+        for drawing in drawings {
+            if cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
+            count = count
+                .checked_add(drawing.segments.len())
+                .ok_or(PrepareError::Limit {
+                    actual: usize::MAX,
+                    limit: limits.max_instances,
+                })?;
+        }
+        Self::build_segments(
+            drawings.iter().flat_map(|drawing| drawing.segments.iter()),
+            count,
+            usize::MAX,
+            limits,
+            cancellation,
+        )
+    }
+
+    /// Text strokes use their own renderer source; PCB selection must be disabled
+    /// on its draw frame even when source numeric object IDs overlap.
+    pub fn build_texts(
+        texts: &crate::text::PreparedTexts,
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        let mut cursor = 0;
+        for batch in &texts.batches {
+            if cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
+            if batch.strokes.start != cursor
+                || batch.strokes.end < cursor
+                || batch.strokes.end > texts.strokes.len()
+            {
+                return Err(PrepareError::Invalid(batch.object));
+            }
+            cursor = batch.strokes.end;
+        }
+        if cursor != texts.strokes.len() {
+            return Err(PrepareError::Invalid(
+                texts
+                    .batches
+                    .last()
+                    .map_or(ObjectId(0), |batch| batch.object),
+            ));
+        }
+        let segments = texts.batches.iter().flat_map(|batch| {
+            texts.strokes[batch.strokes.clone()]
+                .iter()
+                .map(move |stroke| Segment {
+                    id: batch.object,
+                    track_id: ObjectId(0),
+                    layer: batch.layer,
+                    net: pomelo_core::model::NetId(0),
+                    a: Point {
+                        x: stroke.a[0],
+                        y: stroke.a[1],
+                    },
+                    b: Point {
+                        x: stroke.b[0],
+                        y: stroke.b[1],
+                    },
+                    width: stroke.width,
+                    arc: None,
+                    bond_wire: None,
+                })
+        });
+        Self::build_segments(segments, cursor, usize::MAX, limits, cancellation)
+    }
+
+    /// Convert one text object at a time, retaining only final GPU instances.
+    pub fn build_source_texts(
+        texts: &[pomelo_core::model::BoardText],
+        font: &impl crate::text::StrokeGlyphs,
+        max_objects: usize,
+        max_characters: usize,
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<(Self, Vec<ObjectId>, crate::text::TextPreparationSummary), Diagnostic> {
+        let mut instances: Vec<TraceInstance> = Vec::new();
+        let mut objects = Vec::new();
+        let instance_limit = limits.max_instances.min(u32::MAX as usize);
+        let byte_stride = std::mem::size_of::<TraceInstance>() + std::mem::size_of::<TraceBatch>();
+        let capacity_limit = instance_limit.min(limits.max_bytes / byte_stride);
+        // Size the final allocation without retaining transformed board geometry.
+        // Growing a large Vec can temporarily keep both old and new allocations.
+        // Sizing is advisory: semantic failures must be reported by the ordered
+        // visitor, where an earlier object/budget error takes precedence.
+        let stroke_count = crate::text::count_text_strokes(
+            &texts[..texts.len().min(max_objects)],
+            font,
+            max_characters,
+            cancellation,
+        )
+        .map_or(0, |(count, _)| count);
+        instances
+            .try_reserve_exact(stroke_count.min(capacity_limit))
+            .map_err(|_| PrepareError::Allocation.diagnostic())?;
+        let summary = crate::text::PreparedTexts::visit_recovering_missing_glyphs(
+            texts,
+            font,
+            max_objects,
+            max_characters,
+            instance_limit,
+            cancellation,
+            |text, strokes| {
+                let count = instances.len().checked_add(strokes.len()).ok_or_else(|| {
+                    PrepareError::Limit {
+                        actual: usize::MAX,
+                        limit: limits.max_bytes,
+                    }
+                    .diagnostic()
+                })?;
+                let bytes = count.saturating_mul(byte_stride);
+                if bytes > limits.max_bytes {
+                    return Err(PrepareError::Limit {
+                        actual: bytes,
+                        limit: limits.max_bytes,
+                    }
+                    .diagnostic());
+                }
+                let segments = strokes.iter().map(|stroke| Segment {
+                    id: text.id,
+                    track_id: ObjectId(0),
+                    layer: text.layer,
+                    net: pomelo_core::model::NetId(0),
+                    a: Point::new(stroke.a[0], stroke.a[1]),
+                    b: Point::new(stroke.b[0], stroke.b[1]),
+                    width: stroke.width,
+                    arc: None,
+                    bond_wire: None,
+                });
+                let mut object =
+                    Self::build_segments(segments, strokes.len(), usize::MAX, limits, cancellation)
+                        .map_err(|error| error.diagnostic())?;
+                let offset = instances.len() as u32;
+                for instance in &mut object.instances {
+                    instance.flags[1] += offset;
+                }
+                if count > instances.capacity() {
+                    let capacity = count
+                        .max(instances.capacity().saturating_mul(2))
+                        .min(capacity_limit);
+                    instances
+                        .try_reserve_exact(capacity - instances.len())
+                        .map_err(|_| PrepareError::Allocation.diagnostic())?;
+                }
+                objects
+                    .try_reserve(1)
+                    .map_err(|_| PrepareError::Allocation.diagnostic())?;
+                instances.append(&mut object.instances);
+                objects.push(text.id);
+                Ok(())
+            },
+        )?;
+        let tracks =
+            Self::finish_instances(instances, cancellation).map_err(|error| error.diagnostic())?;
+        Ok((tracks, objects, summary))
+    }
+
+    fn build_segments(
+        segments: impl Iterator<Item = impl Borrow<Segment>>,
+        count: usize,
+        outline_start: usize,
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        if cancellation.is_cancelled() {
+            return Err(PrepareError::Cancelled);
+        }
+        let count_limit = limits.max_instances.min(u32::MAX as usize);
+        if count > count_limit {
+            return Err(PrepareError::Limit {
+                actual: count,
+                limit: count_limit,
+            });
+        }
+        // Bound the worst case: every instance belongs to a different layer.
+        // Sorting is in-place and does not allocate a second instance array.
+        let bytes = count
+            .checked_mul(std::mem::size_of::<TraceInstance>() + std::mem::size_of::<TraceBatch>())
+            .ok_or(PrepareError::Limit {
+                actual: usize::MAX,
+                limit: limits.max_bytes,
+            })?;
+        if bytes > limits.max_bytes {
+            return Err(PrepareError::Limit {
+                actual: bytes,
+                limit: limits.max_bytes,
+            });
+        }
+        let mut instances = Vec::new();
+        instances
+            .try_reserve_exact(count)
+            .map_err(|_| PrepareError::Allocation)?;
+        for (index, segment) in segments.enumerate() {
+            let segment = segment.borrow();
+            if cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
+            let valid = [
+                segment.a.x,
+                segment.a.y,
+                segment.b.x,
+                segment.b.y,
+                segment.width,
+            ]
+            .into_iter()
+            .all(|value| value.is_finite() && (value as f32).is_finite())
+                && segment.width >= 0.0;
+            if !valid {
+                return Err(PrepareError::Invalid(segment.id));
+            }
+            let (center, arc, kind) = if let Some(arc) = segment.arc {
+                if ![arc.center.x, arc.center.y, arc.radius, arc.start, arc.sweep]
+                    .into_iter()
+                    .all(|value| value.is_finite() && (value as f32).is_finite())
+                    || arc.radius <= 0.0
+                    || arc.sweep.abs() > std::f64::consts::TAU + 1e-12
+                {
+                    return Err(PrepareError::Invalid(segment.id));
+                }
+                let [radius, residual] = split_position(arc.radius);
+                (
+                    split_point(arc.center),
+                    [
+                        radius,
+                        residual,
+                        arc.start.rem_euclid(std::f64::consts::TAU) as f32,
+                        arc.sweep as f32,
+                    ],
+                    1,
+                )
+            } else {
+                ([0.0; 4], [0.0; 4], 0)
+            };
+            let bounds = segment.bounds().ok_or(PrepareError::Invalid(segment.id))?;
+            if !bounds.is_valid() {
+                return Err(PrepareError::Invalid(segment.id));
+            }
+            let bounds_min = split_point(bounds.min);
+            let bounds_max = split_point(bounds.max);
+            if !bounds_min.into_iter().chain(bounds_max).all(f32::is_finite) {
+                return Err(PrepareError::Invalid(segment.id));
+            }
+            instances.push(TraceInstance {
+                a: split_point(segment.a),
+                b: split_point(segment.b),
+                center,
+                arc,
+                bounds_min,
+                bounds_max,
+                ids: [
+                    segment.id.0,
+                    segment.track_id.0,
+                    segment.layer.0,
+                    segment.net.0,
+                ],
+                flags: [
+                    kind,
+                    index as u32,
+                    (segment.width as f32).to_bits(),
+                    (u32::from(index >= outline_start) << 2)
+                        | segment.arc.map_or(0, |arc| {
+                            u32::from(arc.sweep.abs() >= std::f64::consts::TAU - 1e-12)
+                                | (u32::from(arc.sweep.abs() > std::f64::consts::PI) << 1)
+                        }),
+                ],
+            });
+        }
+        Self::finish_instances(instances, cancellation)
+    }
+
+    fn finish_instances(
+        mut instances: Vec<TraceInstance>,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        let mut batches: Vec<TraceBatch> = Vec::new();
+        instances.sort_unstable_by_key(|instance| {
+            (instance.flags[3] & 4, instance.ids[2], instance.flags[1])
+        });
+        // Allocate batch metadata for actual layer/outline runs, rather than
+        // one slot per stroke (millions of strokes can share a few layers).
+        let mut batch_count = 0;
+        let mut previous_key = None;
+        for instance in &instances {
+            if cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
+            let key = (instance.flags[3] & 4, instance.ids[2]);
+            if previous_key != Some(key) {
+                batch_count += 1;
+                previous_key = Some(key);
+            }
+        }
+        batches
+            .try_reserve_exact(batch_count)
+            .map_err(|_| PrepareError::Allocation)?;
+        for (index, instance) in instances.iter().enumerate() {
+            if cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
+            let layer = LayerId(instance.ids[2]);
+            let outline = instance.flags[3] & 4 != 0;
+            if let Some(batch) = batches
+                .last_mut()
+                .filter(|batch| batch.layer == layer && batch.outline == outline)
+            {
+                batch.count += 1;
+            } else {
+                batches.push(TraceBatch {
+                    layer,
+                    start: index as u32,
+                    count: 1,
+                    outline,
+                });
+            }
+        }
+        Ok(Self { instances, batches })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pomelo_core::model::{Arc, NetId};
+
+    fn line(id: u32, layer: u32) -> Segment {
+        Segment {
+            id: ObjectId(id),
+            track_id: ObjectId(100),
+            layer: LayerId(layer),
+            net: NetId(7),
+            a: Point::new(100_000.000_123, 2.0),
+            b: Point::new(100_001.0, 3.0),
+            width: 0.1,
+            arc: None,
+            bond_wire: None,
+        }
+    }
+
+    fn drawing(id: u32, segments: Vec<Segment>) -> pomelo_core::model::BoardDrawing {
+        pomelo_core::model::BoardDrawing {
+            id: ObjectId(id),
+            owner_id: None,
+            layer: LayerId::DIMENSION,
+            net: NetId(0),
+            graphic_ids: Vec::new(),
+            segments,
+            text_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn drawing_groups_preserve_source_strokes_layers_and_do_not_become_board_outlines() {
+        let groups = [
+            drawing(100, vec![line(9, 2), line(3, 1)]),
+            drawing(101, vec![line(8, 2)]),
+        ];
+        let prepared = PreparedTracks::build_drawings(
+            &groups,
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared
+                .instances
+                .iter()
+                .map(|instance| instance.ids[0])
+                .collect::<Vec<_>>(),
+            [3, 9, 8]
+        );
+        assert_eq!(
+            prepared
+                .instances
+                .iter()
+                .map(|instance| instance.flags[1])
+                .collect::<Vec<_>>(),
+            [1, 0, 2]
+        );
+        assert!(prepared.batches.iter().all(|batch| !batch.outline));
+        assert_eq!(prepared.batches.len(), 2);
+        assert_eq!(groups[0].segments[0].id, ObjectId(9));
+        assert_eq!(groups[1].id, ObjectId(101));
+    }
+
+    #[test]
+    fn drawing_preparation_checks_aggregate_budget_and_reports_invalid_stroke_identity() {
+        let mut groups = [
+            drawing(100, vec![line(9, 1)]),
+            drawing(101, vec![line(8, 1)]),
+        ];
+        let limits = TraceLimits {
+            max_instances: 1,
+            ..TraceLimits::default()
+        };
+        assert!(matches!(
+            PreparedTracks::build_drawings(&groups, limits, &CancellationToken::default()),
+            Err(PrepareError::Limit {
+                actual: 2,
+                limit: 1
+            })
+        ));
+        groups[1].segments[0].width = f64::NAN;
+        assert!(matches!(
+            PreparedTracks::build_drawings(
+                &groups,
+                TraceLimits::default(),
+                &CancellationToken::default()
+            ),
+            Err(PrepareError::Invalid(ObjectId(8)))
+        ));
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        assert!(matches!(
+            PreparedTracks::build_drawings(&groups, limits, &cancellation),
+            Err(PrepareError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn batches_group_layers_without_reordering_source_segments_within_layer() {
+        let prepared = PreparedTracks::build(
+            &[line(9, 2), line(3, 1), line(8, 2)],
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared
+                .instances
+                .iter()
+                .map(|i| i.ids[0])
+                .collect::<Vec<_>>(),
+            [3, 9, 8]
+        );
+        assert_eq!(
+            prepared.batches,
+            [
+                TraceBatch {
+                    layer: LayerId(1),
+                    start: 0,
+                    count: 1,
+                    outline: false
+                },
+                TraceBatch {
+                    layer: LayerId(2),
+                    start: 1,
+                    count: 2,
+                    outline: false
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn many_strokes_on_one_layer_do_not_allocate_one_batch_slot_per_stroke() {
+        let segments: Vec<_> = (0..10_000).map(|id| line(id, 1)).collect();
+        let prepared = PreparedTracks::build(
+            &segments,
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(prepared.instances.len(), 10_000);
+        assert_eq!(prepared.batches.len(), 1);
+        assert_eq!(prepared.batches[0].count, 10_000);
+        assert!(prepared.batches.capacity() < 10_000);
+    }
+
+    #[test]
+    fn outline_keeps_source_identity_and_separate_batches_after_traces() {
+        let prepared = PreparedTracks::build_with_outline(
+            &[line(10, 3), line(20, 1)],
+            &[line(30, 1), line(40, 2)],
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared
+                .instances
+                .iter()
+                .map(|instance| instance.ids[0])
+                .collect::<Vec<_>>(),
+            [20, 10, 30, 40]
+        );
+        assert_eq!(
+            prepared
+                .batches
+                .iter()
+                .map(|batch| batch.outline)
+                .collect::<Vec<_>>(),
+            [false, false, true, true]
+        );
+        assert_eq!(prepared.instances[2].flags[1], 2);
+        assert_eq!(prepared.instances[2].flags[3] & 4, 4);
+        assert_eq!(prepared.instances[2].ids[2], 1);
+    }
+
+    #[test]
+    fn combined_trace_and_outline_count_obeys_one_budget() {
+        assert!(matches!(
+            PreparedTracks::build_with_outline(
+                &[line(1, 1)],
+                &[line(2, 1)],
+                TraceLimits {
+                    max_instances: 1,
+                    ..TraceLimits::default()
+                },
+                &CancellationToken::default()
+            ),
+            Err(PrepareError::Limit {
+                actual: 2,
+                limit: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn uploaded_points_preserve_small_features_at_large_coordinates() {
+        let segment = line(1, 1);
+        let prepared = PreparedTracks::build(
+            std::slice::from_ref(&segment),
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        let a = prepared.instances[0].a;
+        assert!((f64::from(a[0]) + f64::from(a[2]) - segment.a.x).abs() < 1e-10);
+    }
+
+    #[test]
+    fn negative_arc_sweep_and_cardinal_bounds_survive_preparation() {
+        let mut segment = line(1, 1);
+        segment.a = Point::new(10.0, 0.0);
+        segment.b = Point::new(-10.0, 0.0);
+        segment.arc = Some(Arc {
+            center: Point::new(0.0, 0.0),
+            radius: 10.0,
+            start: 0.0,
+            sweep: -std::f64::consts::PI,
+        });
+        let prepared = PreparedTracks::build(
+            &[segment],
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        let instance = prepared.instances[0];
+        assert_eq!(instance.flags[0], 1);
+        assert!(instance.arc[3] < 0.0);
+        assert!(
+            (f64::from(instance.bounds_min[1]) + f64::from(instance.bounds_min[3]) + 10.05).abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn byte_budget_is_checked_before_allocating_instances() {
+        assert!(matches!(
+            PreparedTracks::build(
+                &[line(1, 1)],
+                TraceLimits {
+                    max_bytes: 127,
+                    ..TraceLimits::default()
+                },
+                &CancellationToken::default()
+            ),
+            Err(PrepareError::Limit { .. })
+        ));
+    }
+
+    #[test]
+    fn non_finite_input_is_not_uploaded() {
+        let mut segment = line(1, 1);
+        segment.a.x = f64::NAN;
+        assert!(matches!(
+            PreparedTracks::build(
+                &[segment],
+                TraceLimits::default(),
+                &CancellationToken::default()
+            ),
+            Err(PrepareError::Invalid(ObjectId(1)))
+        ));
+    }
+
+    #[test]
+    fn full_circle_flag_is_not_inferred_from_rounded_shader_angles() {
+        let mut full = line(1, 1);
+        full.a = Point::new(10.0, 0.0);
+        full.b = full.a;
+        full.arc = Some(Arc {
+            center: Point::new(0.0, 0.0),
+            radius: 10.0,
+            start: 0.0,
+            sweep: std::f64::consts::TAU,
+        });
+        let mut partial = full.clone();
+        partial.id = ObjectId(2);
+        partial.arc.as_mut().unwrap().sweep -= 1e-7;
+        let prepared = PreparedTracks::build(
+            &[full, partial],
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared
+                .instances
+                .iter()
+                .map(|instance| instance.flags[3] & 1)
+                .collect::<Vec<_>>(),
+            [1, 0]
+        );
+    }
+
+    #[test]
+    fn cancellation_wins_before_resource_checks() {
+        let token = CancellationToken::default();
+        token.cancel();
+        assert!(matches!(
+            PreparedTracks::build(
+                &[line(1, 1)],
+                TraceLimits {
+                    max_bytes: 0,
+                    max_instances: 0
+                },
+                &token
+            ),
+            Err(PrepareError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn preparation_errors_render_in_all_supported_languages() {
+        for error in [
+            PrepareError::Cancelled,
+            PrepareError::Invalid(ObjectId(1)),
+            PrepareError::Allocation,
+            PrepareError::Limit {
+                actual: 9,
+                limit: 8,
+            },
+        ] {
+            for locale in pomelo_core::i18n::Locale::ALL {
+                assert!(error.diagnostic().message.render(locale).is_ok());
+            }
+        }
+    }
+}

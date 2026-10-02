@@ -1,0 +1,32 @@
+[package]
+name = "pomelo-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+native-gpu = ["dep:gpui", "dep:windows", "dep:anyhow"]
+
+[dependencies]
+pomelo-core.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.7", default-features = false, optional = true }
+windows = { version = "0.62", optional = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
+
+[dev-dependencies]
+pomelo-import.workspace = true
+image.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

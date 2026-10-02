@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "zed_revision": "1a28cff4b409169bac058bca40dfbfeb7621d19b",
+  "sources": [
+    {
+      "name": "gpui-pre",
+      "version": "0.3.7",
+      "sha256": "0e87a42bb37c7cb4e76dd1ac0ce88851e46e976e0373a47ab3e0757abffee54d"
+    },
+    {
+      "name": "gpui-pre-windows",
+      "version": "0.3.7",
+      "sha256": "f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3"
+    }
+  ],
+  "patches": [
+    {
+      "file": "0001-native-gpu-callback.patch",
+      "sha256": "ea4671b238819f6b8c59c4368ff1f1f15951337cf5c481444d6f21a3b962f823"
+    }
+  ]
+}

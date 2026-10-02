@@ -1,0 +1,42 @@
+# 原生设置入口与偏好验证
+
+日期：2026-10-02。当前范围为 Windows 应用的语言与外观设置，不代表全部 BRD MVP 或发布验收完成。
+
+## 实现
+
+`pomelo/src/settings/mod.rs` 使用 GPUI Kit 标准 Dialog 与 RadioGroup，提供跟随系统、英文、简体中文、繁体中文、日文、韩语，以及深浅主题。文件菜单、工具栏与 `Ctrl+,` 共用 OpenSettings 命令。已有弹层打开时不叠加设置对话框。
+
+选择立即调用应用 i18n/theme 服务，并复用串行后台写入和退出等待；不引入另一份偏好文件或翻译资源。语言切换重建菜单并刷新窗口，设置内容在每次绘制时读取当前 locale/theme。配置错误在相应设置组附近按当前语言展示；来源文件编码继续独立于界面语言。显示单位仍属于文档视图，不在这里增加全局单位覆盖。
+
+新增 7 个语义消息键和五语共 35 条译文。标题、分组、帮助与关闭命令均使用共享 rust-i18n。组件默认关闭图标的可访问名称固定为英文，因此本页隐藏该图标，提供应用翻译的“关闭”按钮与标准 Escape 关闭行为。
+
+## 已取得的证据
+
+使用 Computer Use 的 `@oai/sky` 操作实际 `target/debug/pomelo.exe`，检查截图和可访问控件树。此次实窗检查先在无文档欢迎页上进行，窗口约 1440×920；后续检测到用户正在操作另一个已打开电路板的窗口，停止继续发送输入。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Ctrl+, | 实际打开设置弹层，显示语言和主题选项 |
+| 语言即时切换 | 从跟随系统的简体中文切换英文，当前弹层、欢迎页及菜单同步变为英文 |
+| 主题即时切换 | 从深色切换浅色，弹层和窗口即时更新，浅色选项显示选中 |
+| Escape | 实际关闭弹层，返回欢迎页，控件树不再包含设置选项 |
+| 重启恢复 | 关闭此次启动的测试窗口，再启动更新后的程序，恢复英文与浅色主题 |
+| 工具栏入口 | 更新后的程序中点击 Settings… 打开设置，无英文默认关闭图标 |
+| 最终版本简体中文 | 打开的设置页切换简体中文，分组为“语言”“外观”，按钮为“关闭”；标题和帮助不显示翻译键 |
+
+可访问树未提供足以证明 GPUI 内部焦点所有权的信息，不能据此认定 Tab 顺序或关闭后焦点恢复已验收。菜单入口已接入同一 Action，但本轮未通过菜单点击单独验证。
+
+## 自动检查
+
+```powershell
+python -X utf8 scripts/cargo.py +stable test -p pomelo --locked --offline
+python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
+```
+
+应用现有 44 项测试通过；五语资源、参数、并发格式化与源码文案门禁 9 项通过；Windows debug 构建和工作区全部目标/功能 Clippy 通过。应用测试覆盖偏好替换、损坏恢复、失败诊断和语言/主题互不覆盖，未新增仅重复 UI 实现的单元测试。
+
+## 尚待验收
+
+繁中、日文、韩文的真实设置屏幕，菜单点击入口，Tab/Space 操作与焦点恢复，重复快捷键不叠加，最小窗口/字体放大/DPI，保存失败时的实际恢复流程，以及已有文档或导入任务中切换设置的完整流程。这些不因资源门禁通过而视为已完成。

@@ -1,0 +1,22 @@
+[package]
+name = "pomelo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pomelo-core.workspace = true
+pomelo-import.workspace = true
+pomelo-render = { workspace = true, features = ["native-gpu"] }
+gpui-kit.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sys-locale.workspace = true
+dirs.workspace = true
+tempfile.workspace = true
+image.workspace = true
+
+[lints]
+workspace = true
