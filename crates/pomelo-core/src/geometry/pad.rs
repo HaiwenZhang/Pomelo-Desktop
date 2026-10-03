@@ -111,14 +111,14 @@ impl Pad {
         )
         .rotate(-owner.angle);
         if self.kind == PadKind::CIRCLE {
-            return Some(local.x.hypot(local.y) - self.width * 0.5);
+            return Some(super::web_hypot(local.x, local.y) - self.width * 0.5);
         }
         if self.kind == PadKind::DONUT {
             let inner = self.inner_diameter?;
             if !inner.is_finite() || inner < 0.0 || inner > self.width {
                 return None;
             }
-            let radius = local.x.hypot(local.y);
+            let radius = super::web_hypot(local.x, local.y);
             return Some((radius - self.width * 0.5).max(inner * 0.5 - radius));
         }
         let corner = self.corner_radius();
@@ -128,7 +128,7 @@ impl Pad {
             x.max(y)
                 .max((x + y + corner) * std::f64::consts::FRAC_1_SQRT_2)
         } else {
-            (x + corner).max(0.0).hypot((y + corner).max(0.0))
+            super::web_hypot((x + corner).max(0.0), (y + corner).max(0.0))
                 + (x + corner).max(y + corner).min(0.0)
                 - corner
         })

@@ -31,9 +31,43 @@ pub struct CopperBatch {
     pub bounds: Option<Bounds>,
     /// Analytic edges will require a separate curved boundary coverage pass.
     pub curved: bool,
+    /// Clipped self-touching contours use independent parity fans.
+    /// Static earcut meshes leave this absent.
+    pub parity_rings: Option<Vec<ParityRing>>,
+}
+
+#[derive(Debug)]
+pub struct ParityRing {
+    pub indices: Range<u32>,
+    pub outer: bool,
 }
 
 impl CopperBatch {
+    pub(super) fn parity(
+        zone: &Zone,
+        source_index: usize,
+        bounds: Bounds,
+        vertex_count: u32,
+        index_count: u32,
+        ranges: Vec<ParityRing>,
+    ) -> Result<Self, PrepareError> {
+        Ok(Self {
+            object: zone.id,
+            selected_object: pomelo_core::selection::SelectedObject::Zone(zone.id),
+            layer: zone.layer,
+            net: zone.net,
+            source_index: u32::try_from(source_index)
+                .map_err(|_| PrepareError::Invalid(zone.id))?,
+            vertex_start: 0,
+            vertex_count,
+            index_start: 0,
+            outer_count: 0,
+            hole_count: index_count,
+            bounds: Some(bounds),
+            curved: true,
+            parity_rings: Some(ranges),
+        })
+    }
     pub fn outer_indices(&self) -> Range<u32> {
         self.index_start..self.index_start + self.outer_count
     }
@@ -176,6 +210,7 @@ impl PreparedCopper {
                 hole_count: (mesh.indices.len() - outer) as u32,
                 bounds,
                 curved: mesh.curved,
+                parity_rings: None,
             });
         }
         // Preserve source order within a layer without copying vertex/index buffers.

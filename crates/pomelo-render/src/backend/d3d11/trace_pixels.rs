@@ -28,6 +28,520 @@ use windows::{
 
 const SIDE: u32 = 128;
 
+#[path = "line_precision_pixels.rs"]
+mod line_precision;
+
+#[path = "backdrill_pixels.rs"]
+mod backdrill;
+
+#[path = "die_pad_pixels.rs"]
+mod die_pad;
+
+#[path = "curve_fill_pixels.rs"]
+mod curve_fill;
+
+#[test]
+#[ignore = "requires a Windows hardware D3D11 adapter; diagnostic readback only"]
+fn hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache() {
+    use crate::backend::d3d11::{BoardFrame, BoardRenderer, CopperTelemetry};
+    use pomelo_core::{
+        display::BoardDisplay,
+        interaction::Camera,
+        model::{CustomPadGeometry, DrillShape, LayerId, Pad, PadKind, Pin, Via},
+        selection::SelectedObject,
+    };
+    let (mut device, mut context) = (None, None);
+    // SAFETY: initialized output slots; only a real hardware adapter is requested.
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&[D3D_FEATURE_LEVEL_11_0]),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+        .unwrap();
+    }
+    let (device, context) = (device.unwrap(), context.unwrap());
+    let target = Target::new(&device);
+    let bounds = ViewBounds::new(
+        point(ScaledPixels(0.0), ScaledPixels(0.0)),
+        size(ScaledPixels(SIDE as f32), ScaledPixels(SIDE as f32)),
+    );
+    let gpu = NativeGpuContext {
+        device: &device,
+        context: &context,
+        viewport: [SIDE as f32, SIDE as f32],
+        bounds,
+        content_mask: ContentMask { bounds },
+    };
+    let cancel = CancellationToken::default();
+    let square = |r: f64| {
+        vec![
+            Point::new(-r, -r),
+            Point::new(r, -r),
+            Point::new(r, r),
+            Point::new(-r, r),
+        ]
+    };
+    let mut pad = Pad::circle(LayerId(1), 4.0);
+    pad.kind = PadKind::CUSTOM;
+    pad.custom = Some(Arc::new(CustomPadGeometry {
+        contours: vec![square(2.0), square(0.5)],
+        paths: vec![],
+    }));
+    let drill = DrillShape {
+        width: 0.0,
+        height: 0.0,
+        plated: false,
+    };
+    let pin = Pin {
+        id: ObjectId(50),
+        owner_id: ObjectId(49),
+        net: NetId(1),
+        name: String::new(),
+        reference: String::new(),
+        at: Point::new(-3.0, 0.0),
+        angle: 0.0,
+        mirrored: false,
+        drill: 0.0,
+        drill_shape: drill,
+        pads: vec![pad],
+        stackup_region: None,
+        die: None,
+    };
+    let mut disk = Pad::circle(LayerId(1), 3.0);
+    disk.kind = PadKind::CUSTOM;
+    disk.custom = Some(Arc::new(CustomPadGeometry {
+        contours: vec![
+            (0..32)
+                .map(|i| {
+                    let a = i as f64 * std::f64::consts::TAU / 32.0;
+                    Point::new(a.cos() * 1.5, a.sin() * 1.5)
+                })
+                .collect(),
+        ],
+        paths: vec![vec![Segment {
+            id: ObjectId(0),
+            track_id: ObjectId(0),
+            layer: LayerId(0),
+            net: NetId(0),
+            a: Point::new(1.5, 0.0),
+            b: Point::new(1.5, 0.0),
+            width: 0.0,
+            arc: Some(BoardArc {
+                center: Point::default(),
+                radius: 1.5,
+                start: 0.0,
+                sweep: std::f64::consts::TAU,
+            }),
+            bond_wire: None,
+        }]],
+    }));
+    // Equal numeric IDs must retain separate pin/via identity in the overlay pass.
+    let via = Via {
+        id: pin.id,
+        net: pin.net,
+        at: Point::new(3.0, 0.0),
+        drill: 0.0,
+        drill_shape: drill,
+        padstack: ObjectId(51),
+        padstack_name: String::new(),
+        start_layer: Some(LayerId(1)),
+        end_layer: Some(LayerId(1)),
+        pads: Arc::from([disk]),
+        backdrill: None,
+        stackup_region: None,
+        angle: 0.47,
+        mirrored: true,
+        finger: None,
+    };
+    let mut pads = crate::pads::PreparedPads::build(
+        &[pin],
+        &[via],
+        crate::pads::PadLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    pads.custom_mesh = Some(Arc::new(
+        pads.build_custom_meshes(
+            crate::copper::CopperLimits::default(),
+            &pomelo_core::copper::MeshLimits::default(),
+            &cancel,
+        )
+        .unwrap(),
+    ));
+    let tracks = Arc::new(
+        PreparedTracks::build(
+            &[Segment {
+                id: ObjectId(10),
+                track_id: ObjectId(10),
+                layer: LayerId(0),
+                net: NetId(2),
+                a: Point::new(-5.0, 0.0),
+                b: Point::new(-1.0, 0.0),
+                width: 0.2,
+                arc: None,
+                bond_wire: None,
+            }],
+            TraceLimits::default(),
+            &cancel,
+        )
+        .unwrap(),
+    );
+    let traces = TraceFrame {
+        tracks,
+        bounds: Bounds {
+            min: Point::new(-6.0, -6.0),
+            max: Point::new(6.0, 6.0),
+        },
+        camera: Some(Camera {
+            center: Point::default(),
+            pixels_per_mm: 10.0,
+            flipped: false,
+        }),
+        scale_factor: 1.0,
+        colors: Arc::new(BTreeMap::from([
+            (LayerId(0), [1.0, 0.0, 0.0, 1.0]),
+            (LayerId(1), [0.0, 0.0, 1.0, 1.0]),
+        ])),
+        fallback_color: [1.0; 4],
+        color_mode: pomelo_core::display::ColorMode::Layer,
+        pass: super::super::OverlayPass::Base,
+        filled: false,
+        hover_selection: None,
+        highlighted_objects: None,
+        highlighted_net: None,
+        highlighted_trace: None,
+        highlighted_object: None,
+        hovered_object: None,
+        highlighted_related_objects: None,
+    };
+    let display = BoardDisplay {
+        filled: false,
+        layer_order: vec![LayerId(0), LayerId(1)],
+        ..BoardDisplay::default()
+    };
+    let mut frame = BoardFrame {
+        curves: None,
+        traces,
+        display: Arc::new(display),
+        pads: Some(Arc::new(pads)),
+        copper: Arc::new(
+            crate::copper::PreparedCopper::build(
+                &[],
+                crate::copper::CopperLimits::default(),
+                &cancel,
+            )
+            .unwrap(),
+        ),
+        copper_opacity: 0.25,
+        layer_order: Arc::new(vec![LayerId(0), LayerId(1)]),
+        glyphs: None,
+        labels: None,
+        zone_outlines: None,
+        drawings: None,
+        texts: None,
+        drills: None,
+        drill_color: [0.5; 4],
+    };
+    let outlines = Arc::new(TraceTelemetry::default());
+    let mut renderer = BoardRenderer::new(
+        Arc::new(TraceTelemetry::default()),
+        Arc::new(CopperTelemetry::default()),
+        Arc::new(TraceTelemetry::default()),
+        Arc::new(CopperTelemetry::default()),
+        Arc::new(TraceTelemetry::default()),
+        Arc::new(TraceTelemetry::default()),
+        Arc::new(TraceTelemetry::default()),
+    )
+    .with_custom_outline_telemetry(Arc::clone(&outlines));
+    for _ in 0..12 {
+        target.bind(&context);
+        renderer.draw(&gpu, &frame).unwrap();
+    }
+    let baseline = target.read(&context);
+    assert!(
+        rgb(&baseline, 14, 54)[2] > 70,
+        "exterior outline must be visible"
+    );
+    assert!(
+        rgb(&baseline, 29, 62)[2] > 70,
+        "hole outline must be visible"
+    );
+    assert!(
+        rgb(&baseline, 109, 64)[2] > 70,
+        "mirrored/rotated analytic via circle must be visible"
+    );
+    assert!(
+        rgb(&baseline, 34, 64)[0] > 180 && rgb(&baseline, 34, 64)[2] == 0,
+        "hole must retain the underlying trace"
+    );
+    assert!(
+        rgb(&baseline, 24, 64)[0] > 180 && rgb(&baseline, 24, 64)[2] == 0,
+        "non-filled custom pad interior must retain the underlying trace"
+    );
+    let uploaded = outlines.snapshot();
+    assert_eq!(uploaded.uploaded_instances, 9);
+    frame.traces.highlighted_object = Some((SelectedObject::Pin(ObjectId(50)), [1.0; 4]));
+    target.bind(&context);
+    renderer.draw(&gpu, &frame).unwrap();
+    let selected = target.read(&context);
+    assert!(
+        rgb(&selected, 14, 54)[0] > 70,
+        "pin selection must highlight its exterior"
+    );
+    assert_eq!(
+        rgb(&selected, 109, 64),
+        rgb(&baseline, 109, 64),
+        "same-ID via must remain unselected"
+    );
+    assert_eq!(
+        rgb(&selected, 24, 64),
+        rgb(&baseline, 24, 64),
+        "selection must not fill the empty pad interior"
+    );
+    frame.traces.highlighted_object = None;
+    frame.traces.hovered_object = Some((SelectedObject::Via(ObjectId(50)), [1.0; 4]));
+    target.bind(&context);
+    renderer.draw(&gpu, &frame).unwrap();
+    let hovered = target.read(&context);
+    assert!(
+        rgb(&hovered, 109, 64)[1] > 70,
+        "via hover must use its own analytic boundary"
+    );
+    assert_eq!(rgb(&hovered, 14, 54), rgb(&baseline, 14, 54));
+    frame.traces.hovered_object = None;
+    Arc::make_mut(&mut frame.display)
+        .hidden_layers
+        .insert(LayerId(1));
+    target.bind(&context);
+    renderer.draw(&gpu, &frame).unwrap();
+    let hidden = target.read(&context);
+    assert_eq!(rgb(&hidden, 14, 54), [0, 0, 0]);
+    assert_eq!(rgb(&hidden, 109, 64), [0, 0, 0]);
+    let stats = outlines.snapshot();
+    assert_eq!(stats.uploaded_bytes, uploaded.uploaded_bytes);
+    assert_eq!(
+        stats.cache_builds, 1,
+        "display and overlays must not rebuild immutable edges"
+    );
+    renderer.reset();
+    assert_eq!(outlines.snapshot().resets, 1);
+}
+
+#[test]
+#[ignore = "requires a Windows hardware D3D11 adapter; diagnostic readback only"]
+fn hardware_msdf_atlas_matches_web_sampling_rotation_mirroring_and_dpi() {
+    use crate::text::msdf::{MsdfFont, PreparedGlyphs};
+    use pomelo_core::{
+        interaction::Camera,
+        model::{BoardText, LayerId, TextAlignment},
+    };
+    let (mut device, mut context) = (None, None);
+    // SAFETY: valid initialized outputs, hardware device only, checked returned handles.
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&[D3D_FEATURE_LEVEL_11_0]),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+        .unwrap();
+    }
+    let device = device.unwrap();
+    let context = context.unwrap();
+    let target = Target::new(&device);
+    let gpu = gpui::NativeGpuContext {
+        device: &device,
+        context: &context,
+        viewport: [SIDE as f32, SIDE as f32],
+        bounds: ViewBounds::new(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(SIDE as f32), ScaledPixels(SIDE as f32)),
+        ),
+        content_mask: ContentMask {
+            bounds: ViewBounds::new(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(SIDE as f32), ScaledPixels(SIDE as f32)),
+            ),
+        },
+    };
+    let cancel = CancellationToken::default();
+    let font = Arc::new(MsdfFont::bundled(["G铜"], &cancel).unwrap());
+    let tracks = Arc::new(PreparedTracks::build(&[], TraceLimits::default(), &cancel).unwrap());
+    let mut colors = BTreeMap::new();
+    colors.insert(LayerId(0), [0.3, 0.7, 0.4, 1.0]);
+    let base = TraceFrame {
+        tracks,
+        bounds: Bounds {
+            min: Point::new(-6.0, -6.0),
+            max: Point::new(6.0, 6.0),
+        },
+        camera: Some(Camera {
+            center: Point::default(),
+            pixels_per_mm: 10.0,
+            flipped: false,
+        }),
+        scale_factor: 1.0,
+        colors: Arc::new(colors),
+        fallback_color: [1.0; 4],
+        color_mode: pomelo_core::display::ColorMode::Layer,
+        pass: super::super::OverlayPass::Base,
+        filled: true,
+        hover_selection: None,
+        highlighted_objects: None,
+        highlighted_net: None,
+        highlighted_trace: None,
+        highlighted_object: None,
+        hovered_object: None,
+        highlighted_related_objects: None,
+    };
+    let mut comparisons = Vec::new();
+    for ch in ["G", "铜"] {
+        for mirrored in [false, true] {
+            for flipped in [false, true] {
+                for angle in [0.0, 0.47] {
+                    for dpi in [1.0f32, 2.0] {
+                        let text = BoardText {
+                            id: ObjectId(71),
+                            owner_id: None,
+                            layer: LayerId(0),
+                            class_id: 0,
+                            subclass: 0,
+                            text: ch.into(),
+                            at: Point::new(-1.0, -1.0),
+                            angle,
+                            mirrored,
+                            align: TextAlignment::Center,
+                            font_index: 0,
+                            width: 3.0,
+                            height: 3.0,
+                            spacing: 0.0,
+                            line_spacing: 4.0,
+                            stroke_width: 0.1,
+                        };
+                        let source = Arc::new(
+                            PreparedGlyphs::build(&[text], Arc::clone(&font), 1024 * 1024, &cancel)
+                                .unwrap(),
+                        );
+                        let mut frame = base.with_source(Arc::clone(&source));
+                        frame.scale_factor = dpi;
+                        frame.camera = Some(Camera {
+                            pixels_per_mm: 10.0 / f64::from(dpi),
+                            flipped,
+                            ..Camera::default()
+                        });
+                        let mut renderer: TraceRenderer<PreparedGlyphs> =
+                            TraceRenderer::new(Arc::new(TraceTelemetry::default()));
+                        target.bind(&context);
+                        renderer.draw(&gpu, &frame).unwrap();
+                        let actual = target.read(&context);
+                        let glyph = &source.instances[0];
+                        let page = font.pages.iter().find(|p| p.page == glyph.page()).unwrap();
+                        let xy = [
+                            f64::from(glyph.xywh[0]) + f64::from(glyph.low[0]),
+                            f64::from(glyph.xywh[1]) + f64::from(glyph.low[1]),
+                        ];
+                        let (w, h) = (f64::from(glyph.xywh[2]), f64::from(glyph.xywh[3]));
+                        let (cos, sin) =
+                            (f64::from(glyph.rotation[0]), f64::from(glyph.rotation[1]));
+                        let uv = glyph.uv.map(f64::from);
+                        let du = uv[2] - uv[0];
+                        let dv = uv[1] - uv[3];
+                        let dx = ((cos / 10.0 / w * du * f64::from(page.width)).powi(2)
+                            + (-sin / 10.0 / h * dv * f64::from(page.height)).powi(2))
+                        .sqrt();
+                        let dy = ((-sin / 10.0 / w * du * f64::from(page.width)).powi(2)
+                            + (-cos / 10.0 / h * dv * f64::from(page.height)).powi(2))
+                        .sqrt();
+                        let softness = 0.5 / (4.0 / dx.max(dy).max(0.0001)).max(1.0);
+                        let mut max_error = 0u8;
+                        let mut total = 0u64;
+                        for y in 0..SIDE {
+                            for x in 0..SIDE {
+                                let px = (f64::from(x) + 0.5 - 64.0) / 10.0
+                                    * if flipped { -1.0 } else { 1.0 }
+                                    - xy[0];
+                                let py = -(f64::from(y) + 0.5 - 64.0) / 10.0 - xy[1];
+                                let u = (px * cos + py * sin) / w;
+                                let v = (-px * sin + py * cos) / h;
+                                let alpha = if (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)
+                                {
+                                    let tx = (uv[0] + u * du) * f64::from(page.width) - 0.5;
+                                    let ty = (uv[3] + v * dv) * f64::from(page.height) - 0.5;
+                                    let sample = |channel: usize| {
+                                        let ix = tx.floor() as i64;
+                                        let iy = ty.floor() as i64;
+                                        let fx = tx - tx.floor();
+                                        let fy = ty - ty.floor();
+                                        let pixel = |x: i64, y: i64| {
+                                            f64::from(
+                                                page.rgba[(y.clamp(0, i64::from(page.height) - 1)
+                                                    as usize
+                                                    * page.width as usize
+                                                    + x.clamp(0, i64::from(page.width) - 1)
+                                                        as usize)
+                                                    * 4
+                                                    + channel],
+                                            ) / 255.0
+                                        };
+                                        (pixel(ix, iy) * (1.0 - fx) + pixel(ix + 1, iy) * fx)
+                                            * (1.0 - fy)
+                                            + (pixel(ix, iy + 1) * (1.0 - fx)
+                                                + pixel(ix + 1, iy + 1) * fx)
+                                                * fy
+                                    };
+                                    let r = sample(0);
+                                    let g = sample(1);
+                                    let b = sample(2);
+                                    let median = r.min(g).max(r.max(g).min(b));
+                                    let t = ((median - (0.5 - softness)) / (softness * 2.0))
+                                        .clamp(0.0, 1.0);
+                                    t * t * (3.0 - 2.0 * t)
+                                } else {
+                                    0.0
+                                };
+                                for (c, color) in [0.3, 0.7, 0.4].into_iter().enumerate() {
+                                    let expected = (color * alpha * 255.0).round() as u8;
+                                    let error = actual[((y * SIDE + x) * 4) as usize + c]
+                                        .abs_diff(expected);
+                                    max_error = max_error.max(error);
+                                    total += u64::from(error);
+                                }
+                            }
+                        }
+                        let mean = total as f64 / f64::from(SIDE * SIDE * 3);
+                        comparisons.push(serde_json::json!({"text":ch,"mirrored":mirrored,"flipped":flipped,"angle":angle,"dpi":dpi,"max_rgb_error":max_error,"mean_rgb_error":mean}));
+                        assert!(
+                            max_error <= 4 && mean <= 0.05,
+                            "MSDF sampling mismatch {ch} mirror={mirrored} flip={flipped} angle={angle} DPI={dpi}: max={max_error}, mean={mean}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if let Some(dir) = std::env::var_os("POMELO_CANVAS_GPU_REPORT_DIR") {
+        let path = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("d3d11-msdf-sampling.json"),
+            serde_json::to_vec_pretty(&comparisons).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 #[test]
 #[ignore = "requires a Windows hardware D3D11 adapter; diagnostic readback only"]
 fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
@@ -101,6 +615,10 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         bond_wire: None,
     };
     let mut frame = TraceFrame {
+        pass: crate::backend::d3d11::OverlayPass::Base,
+        filled: true,
+        hover_selection: None,
+        color_mode: pomelo_core::display::ColorMode::Layer,
         tracks: Arc::new(
             PreparedTracks::build(&[line], TraceLimits::default(), &cancellation).unwrap(),
         ),
@@ -157,6 +675,100 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         fill[0] == 0 && (126..=129).contains(&fill[1]) && fill[2] == 0,
         "half-opacity copper: {fill:?}"
     );
+    // Exercise the actual MSDF callback inside the zone stencil, including overlapping holes.
+    let font = Arc::new(crate::text::msdf::MsdfFont::bundled(["G"], &cancellation).unwrap());
+    let mut glyphs = crate::text::msdf::PreparedGlyphs::build(
+        &[pomelo_core::model::BoardText {
+            id: zone.id,
+            owner_id: None,
+            layer: zone.layer,
+            class_id: 0,
+            subclass: 0,
+            text: "G".into(),
+            at: Point::new(0.0, 0.0),
+            angle: 0.0,
+            mirrored: false,
+            align: pomelo_core::model::TextAlignment::Left,
+            font_index: 0,
+            width: 20.0,
+            height: 20.0,
+            spacing: 0.0,
+            line_spacing: 20.0,
+            stroke_width: 0.0,
+        }],
+        font,
+        1024 * 1024,
+        &cancellation,
+    )
+    .unwrap();
+    for glyph in &mut glyphs.instances {
+        glyph.ids[1] = pomelo_core::display::DisplayCategory::Zone as u32;
+    }
+    let glyph_frame = frame.base().with_source(Arc::new(glyphs));
+    let mut glyph_renderer = TraceRenderer::<crate::text::msdf::PreparedGlyphs>::new(Arc::new(
+        TraceTelemetry::default(),
+    ));
+    target.bind(&context);
+    glyph_renderer.draw(&gpu, &glyph_frame).unwrap();
+    let unmasked = target.read(&context);
+    let mut annotated = CopperRenderer::new(Arc::new(CopperTelemetry::default()));
+    annotated.prepare(&gpu, &copper, true).unwrap();
+    target.bind(&context);
+    traces.draw(&gpu, &frame).unwrap();
+    annotated
+        .draw_annotated(&gpu, &frame, 0.5, zone.layer, &mut |_| {
+            glyph_renderer.draw_prepared(
+                &gpu,
+                &glyph_frame,
+                crate::backend::d3d11::board::TraceScope::Labels(
+                    zone.layer,
+                    pomelo_core::display::DisplayCategory::Zone,
+                    Some(zone.id),
+                ),
+            )
+        })
+        .unwrap();
+    let masked = target.read(&context);
+    let mut camera = pomelo_core::interaction::Camera::default();
+    assert!(camera.fit(
+        frame.bounds,
+        f64::from(SIDE),
+        f64::from(SIDE),
+        f64::from(SIDE) * 0.04
+    ));
+    let mut shown = 0;
+    for y in 0..SIDE as usize {
+        for x in 0..SIDE as usize {
+            let p = camera.view_to_board(
+                Point::new(x as f64 + 0.5, y as f64 + 0.5),
+                f64::from(SIDE),
+                f64::from(SIDE),
+            );
+            let in_hole = (p.x > 4.1 && p.x < 11.9 && p.y > 4.1 && p.y < 11.9)
+                || (p.x > 8.1 && p.x < 15.9 && p.y > 8.1 && p.y < 15.9);
+            let outside = p.x < 0.9 || p.x > 19.1 || p.y < 0.9 || p.y > 19.1;
+            if in_hole || outside {
+                assert_eq!(
+                    rgb(&masked, x, y),
+                    rgb(&pixels, x, y),
+                    "zone label escaped its stencil at {x},{y}"
+                );
+            } else if p.x > 1.1
+                && p.x < 18.9
+                && p.y > 1.1
+                && p.y < 18.9
+                && rgb(&unmasked, x, y)[0] > 100
+                && rgb(&masked, x, y) != rgb(&pixels, x, y)
+            {
+                shown += 1;
+            }
+        }
+    }
+    assert!(
+        shown > 50,
+        "visible MSDF label must survive outside the holes: {shown}"
+    );
+    assert_eq!(rgb(&masked, 64, 64), [255, 0, 0]);
     let copper_before_highlight = telemetry.snapshot();
     frame.highlighted_net = Some((NetId(1), [1.0, 0.0, 1.0, 1.0]));
     target.bind(&context);
@@ -318,6 +930,10 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         Arc::clone(&composite_text_stats),
     );
     let mut board_frame = crate::backend::d3d11::BoardFrame {
+        curves: None,
+        glyphs: None,
+        labels: None,
+        zone_outlines: None,
         drawings: None,
         texts: None,
         traces: frame,
@@ -371,10 +987,12 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         assert_eq!(copper_stats.snapshot().cache_builds, 1);
     }
     let original_order = Arc::clone(&board_frame.layer_order);
+    let original_display = Arc::clone(&board_frame.display);
     let mut display_order = (*board_frame.display).clone();
     assert!(display_order.move_layer_to_edge(LayerId(3), true, &original_order));
     board_frame.layer_order =
         Arc::new(display_order.ordered_layers(original_order.iter().copied()));
+    board_frame.display = Arc::new(display_order);
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     let reordered = rgb(&target.read(&context), 64, 64);
@@ -388,6 +1006,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     assert_eq!(trace_stats.snapshot().cache_builds, 1);
     assert_eq!(copper_stats.snapshot().cache_builds, 1);
     board_frame.layer_order = original_order;
+    board_frame.display = original_display;
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     assert_eq!(target.read(&context), composed);
@@ -445,6 +1064,11 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         PreparedTracks::build_drawings(&[dimension], TraceLimits::default(), &cancellation)
             .unwrap(),
     );
+    Arc::make_mut(&mut board_frame.display).priorities =
+        vec![pomelo_core::display::LayerPriority {
+            layer: LayerId(99),
+            category: pomelo_core::display::DisplayCategory::Text,
+        }];
     let original_colors = Arc::clone(&board_frame.traces.colors);
     let mut drawing_colors = (*original_colors).clone();
     drawing_colors.insert(LayerId(99), [0.0, 0.0, 1.0, 1.0]);
@@ -467,13 +1091,32 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     );
     let drawing_uploaded = composite_drawing_stats.snapshot();
     let drawing_pixels = target.read(&context);
+    board_frame.traces.color_mode = pomelo_core::display::ColorMode::Net;
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let net_pixels = target.read(&context);
+    let mut solid_drawing_pixels = 0;
+    for (before, after) in drawing_pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(net_pixels.as_chunks::<4>().0)
+    {
+        if before[..3] == [0, 0, 255] {
+            assert_eq!(before, after, "drawing ink ignores network material mode");
+            solid_drawing_pixels += 1;
+        }
+    }
+    assert!(solid_drawing_pixels > 10);
+    board_frame.traces.color_mode = pomelo_core::display::ColorMode::Layer;
+    let visible_drawing_display = Arc::clone(&board_frame.display);
     let mut hidden_drawings = (*board_frame.display).clone();
     hidden_drawings.show_drawings = false;
     board_frame.display = Arc::new(hidden_drawings);
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     assert_eq!(rgb(&target.read(&context), 64, 64), without_dimension);
-    board_frame.display = Arc::new(pomelo_core::display::BoardDisplay::default());
+    board_frame.display = visible_drawing_display;
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     assert_eq!(target.read(&context), drawing_pixels);
@@ -601,6 +1244,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     assert_eq!(text_warnings[0].object, Some(ObjectId(999)));
     assert_eq!(prepared_text.batches.len(), 1);
     assert_eq!(prepared_text.batches[0].object, ObjectId(1));
+    Arc::make_mut(&mut board_frame.display).show_texts = true;
     board_frame.texts = Some(Arc::new(
         crate::text_instances::PreparedTextInstances::build(
             &[missing_text, text],
@@ -626,6 +1270,28 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         "bundled glyph must retain its layer color despite overlapping PCB IDs"
     );
     let uploaded_text = composite_text_stats.snapshot();
+    board_frame.traces.color_mode = pomelo_core::display::ColorMode::Net;
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let net_pixels = target.read(&context);
+    let mut solid_text_pixels = 0;
+    for (before, after) in text_pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(net_pixels.as_chunks::<4>().0)
+    {
+        if before[..3] == [0, 0, 255] {
+            assert_eq!(
+                before, after,
+                "board text ink ignores network material mode"
+            );
+            solid_text_pixels += 1;
+        }
+    }
+    assert!(solid_text_pixels > 0);
+    board_frame.traces.color_mode = pomelo_core::display::ColorMode::Layer;
+    let visible_text_display = Arc::clone(&board_frame.display);
     let mut text_hidden = (*board_frame.display).clone();
     text_hidden.show_texts = false;
     board_frame.display = Arc::new(text_hidden);
@@ -639,7 +1305,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
             .iter()
             .any(|pixel| pixel[..3] == [0, 0, 255])
     );
-    board_frame.display = Arc::new(pomelo_core::display::BoardDisplay::default());
+    board_frame.display = Arc::clone(&visible_text_display);
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     assert_eq!(target.read(&context), text_pixels);
@@ -661,7 +1327,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
             .iter()
             .any(|pixel| pixel[..3] == [0, 0, 255])
     );
-    board_frame.display = Arc::new(pomelo_core::display::BoardDisplay::default());
+    board_frame.display = Arc::clone(&visible_text_display);
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     assert_eq!(target.read(&context), text_pixels);
@@ -1171,6 +1837,10 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     board_frame.pads = Some(Arc::clone(&pads));
     let uploaded_before = copper_stats.snapshot().lifetime_uploaded_bytes;
     board_frame.layer_order = Arc::new(vec![LayerId(1), LayerId(2), LayerId(3), LayerId(3)]);
+    board_frame.display = Arc::new(pomelo_core::display::BoardDisplay {
+        layer_order: vec![LayerId(1), LayerId(2), LayerId(3)],
+        ..Default::default()
+    });
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     let reordered = target.read(&context);
@@ -1290,16 +1960,23 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         custom_probe_stats.snapshot().lifetime_uploaded_bytes
     );
     board_frame.drills = Some(drill_geometry);
-    target.bind(&context);
-    board.draw(&gpu, &board_frame).unwrap();
+    // A replacement pad source uploads its immutable edges before drilling resources.
+    for _ in 0..4 {
+        target.bind(&context);
+        board.draw(&gpu, &board_frame).unwrap();
+        if composite_drill_stats.snapshot().uploaded_instances == 1 {
+            break;
+        }
+    }
     let drill_pixels = target.read(&context);
+    let visible_drill_display = Arc::clone(&board_frame.display);
     assert_eq!(
         rgb(&drill_pixels, 93, 35),
-        [255, 255, 255],
+        [117, 125, 130],
         "drill display must fill its center independently of the copper opening"
     );
     assert!(
-        rgb(&drill_pixels, 93, 30)[1] > 200,
+        rgb(&drill_pixels, 93, 30)[1] > 120,
         "rotated slot must extend along its rotated axis"
     );
     assert_eq!(
@@ -1334,7 +2011,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         [0, 0, 0],
         "disabled drills must not cover hidden pad layers"
     );
-    board_frame.display = Arc::new(pomelo_core::display::BoardDisplay::default());
+    board_frame.display = Arc::clone(&visible_drill_display);
     target.bind(&context);
     board.draw(&gpu, &board_frame).unwrap();
     assert_eq!(
@@ -1374,7 +2051,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     board.draw(&gpu, &board_frame).unwrap();
     assert_eq!(
         rgb(&target.read(&context), 93, 35),
-        [255, 255, 255],
+        [117, 125, 130],
         "one visible pad layer must restore the via drill"
     );
     assert_eq!(
@@ -1382,6 +2059,353 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         before_drill_bytes
     );
     assert_eq!(composite_drill_stats.snapshot().cache_builds, 1);
+    // Per-layer categories use the production composite renderer and retained GPU data.
+    use pomelo_core::display::LayerPrimitive;
+    board_frame.display = Arc::clone(&visible_drill_display);
+    let pad_upload = composite_pad_stats.snapshot().uploaded_bytes;
+    let custom_upload = composite_custom_stats.snapshot().lifetime_uploaded_bytes;
+    let trace_upload = trace_stats.snapshot().uploaded_bytes;
+    let mut categories = (*visible_drill_display).clone();
+    categories.set_primitive(LayerId(2), LayerPrimitive::Pads, false);
+    board_frame.display = Arc::new(categories.clone());
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let without_disk = target.read(&context);
+    assert_eq!(
+        rgb(&without_disk, 35, 93),
+        [0; 3],
+        "pin pad filter removes its analytic disk"
+    );
+    assert_eq!(
+        rgb(&without_disk, 73, 64),
+        [0, 0, 255],
+        "another layer's custom pad remains"
+    );
+    assert_eq!(
+        rgb(&without_disk, 93, 35),
+        [117, 125, 130],
+        "pad filter does not hide a via drill"
+    );
+    assert_eq!(
+        copper_stats.snapshot().visible_zones,
+        2,
+        "pad filter must preserve zones on the same layer"
+    );
+    categories.set_primitive(LayerId(3), LayerPrimitive::Pads, false);
+    board_frame.display = Arc::new(categories);
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    assert_eq!(
+        rgb(&target.read(&context), 73, 64),
+        rgb(&reordered, 73, 64),
+        "custom pad filter restores the underlying composition"
+    );
+    let mut categories = (*visible_drill_display).clone();
+    categories.set_primitive(LayerId(1), LayerPrimitive::Traces, false);
+    board_frame.display = Arc::new(categories);
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let no_trace = rgb(&target.read(&context), 64, 64);
+    assert!(
+        no_trace[0] == 0 && no_trace[1] == 0 && (126..=129).contains(&no_trace[2]),
+        "trace filter leaves upper copper intact: {no_trace:?}"
+    );
+    board_frame.display = Arc::clone(&visible_drill_display);
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    assert_eq!(target.read(&context), drill_pixels);
+    assert_eq!(composite_pad_stats.snapshot().uploaded_bytes, pad_upload);
+    assert_eq!(
+        composite_custom_stats.snapshot().lifetime_uploaded_bytes,
+        custom_upload
+    );
+    assert_eq!(trace_stats.snapshot().uploaded_bytes, trace_upload);
+
+    // Identical geometry with via ownership proves pads/vias are separate categories.
+    board_frame.pads = Some(via_pads);
+    for _ in 0..3 {
+        target.bind(&context);
+        board.draw(&gpu, &board_frame).unwrap();
+    }
+    let all_vias = target.read(&context);
+    assert_eq!(all_vias, drill_pixels);
+    let via_upload = composite_pad_stats.snapshot().uploaded_bytes;
+    let custom_via_upload = composite_custom_stats.snapshot().lifetime_uploaded_bytes;
+    let mut categories = (*visible_drill_display).clone();
+    for layer in [LayerId(2), LayerId(3)] {
+        categories.set_primitive(layer, LayerPrimitive::Pads, false);
+    }
+    board_frame.display = Arc::new(categories.clone());
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    assert_eq!(
+        target.read(&context),
+        all_vias,
+        "pad switches cannot remove via copper"
+    );
+    for layer in [LayerId(2), LayerId(3)] {
+        categories.set_primitive(layer, LayerPrimitive::Vias, false);
+    }
+    board_frame.display = Arc::new(categories);
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let hidden_vias = target.read(&context);
+    assert_eq!(rgb(&hidden_vias, 35, 93), [0; 3]);
+    assert_eq!(
+        rgb(&hidden_vias, 93, 35),
+        [0; 3],
+        "via drill disappears when all occupied layers disable vias"
+    );
+    assert_eq!(rgb(&hidden_vias, 73, 64), rgb(&reordered, 73, 64));
+    board_frame.display = Arc::clone(&visible_drill_display);
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    assert_eq!(target.read(&context), all_vias);
+    assert_eq!(composite_pad_stats.snapshot().uploaded_bytes, via_upload);
+    assert_eq!(
+        composite_custom_stats.snapshot().lifetime_uploaded_bytes,
+        custom_via_upload
+    );
+    assert_eq!(
+        composite_drill_stats.snapshot().uploaded_bytes,
+        before_drill_bytes
+    );
+    println!("LAYER_PRIMITIVE_FILTERS_PIXELS_VERIFIED uploads_unchanged=true");
+
+    // The same net must tint trace, zone, analytic/custom via copper consistently.
+    use pomelo_core::display::ColorMode;
+    board_frame.traces.color_mode = ColorMode::Net;
+    Arc::make_mut(&mut board_frame.display).color_mode = ColorMode::Net;
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let net_pixels = target.read(&context);
+    for (x, y) in [(35, 93), (73, 64), (103, 35), (64, 64)] {
+        assert_eq!(rgb(&net_pixels, x, y), [26, 58, 95]);
+    }
+    assert_eq!(
+        rgb(&net_pixels, 93, 35),
+        [117, 125, 130],
+        "physical drills retain their material"
+    );
+    let zone = rgb(&net_pixels, 23, 105);
+    for (actual, expected) in zone.into_iter().zip([13i16, 29, 48]) {
+        assert!(
+            (i16::from(actual) - expected).abs() <= 1,
+            "zone opacity: {zone:?}"
+        );
+    }
+    board_frame.traces.highlighted_net = Some((NetId(1), [0.0, 1.0, 1.0, 1.0]));
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let selected_network = target.read(&context);
+    assert_ne!(
+        selected_network, net_pixels,
+        "selection must add visible overlays"
+    );
+    assert!(
+        selected_network
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[..3].iter().all(|channel| *channel > 220)),
+        "selection contains white Web overlay pixels"
+    );
+    for (x, y) in [(35, 93), (103, 35)] {
+        assert_eq!(
+            rgb(&selected_network, x, y),
+            rgb(&net_pixels, x, y),
+            "analytic pad interiors preserve net color"
+        );
+    }
+    board_frame.traces.highlighted_net = None;
+    board_frame.traces.hovered_object = Some((
+        pomelo_core::selection::SelectedObject::Via(pin.id),
+        [1.0, 0.0, 1.0, 1.0],
+    ));
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let hovered_via = target.read(&context);
+    assert_ne!(hovered_via, net_pixels, "hover adds a visible mint overlay");
+    assert_eq!(
+        rgb(&hovered_via, 35, 93),
+        rgb(&net_pixels, 35, 93),
+        "hover outline preserves the analytic pad interior"
+    );
+    assert_eq!(
+        rgb(&hovered_via, 103, 35),
+        rgb(&net_pixels, 103, 35),
+        "hover identity does not affect another via"
+    );
+    board_frame.traces.highlighted_object = Some((
+        pomelo_core::selection::SelectedObject::Via(pin.id),
+        [0.0, 1.0, 1.0, 1.0],
+    ));
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    let selected_via = target.read(&context);
+    assert_ne!(
+        selected_via, hovered_via,
+        "selection and hover have distinct overlays"
+    );
+    assert_eq!(rgb(&selected_via, 35, 93), rgb(&net_pixels, 35, 93));
+    assert_eq!(rgb(&selected_via, 103, 35), rgb(&net_pixels, 103, 35));
+    board_frame.traces.highlighted_object = None;
+    board_frame.traces.hovered_object = Some((
+        pomelo_core::selection::SelectedObject::Segment(ObjectId(1)),
+        [1.0, 0.0, 1.0, 1.0],
+    ));
+    target.bind(&context);
+    traces.draw(&gpu, &board_frame.traces).unwrap();
+    assert_eq!(rgb(&target.read(&context), 64, 64), [255, 0, 255]);
+    board_frame.traces.highlighted_trace = Some((
+        crate::backend::d3d11::TraceSelection::Segment(ObjectId(1)),
+        [0.0, 1.0, 1.0, 1.0],
+    ));
+    target.bind(&context);
+    traces.draw(&gpu, &board_frame.traces).unwrap();
+    assert_eq!(rgb(&target.read(&context), 64, 64), [0, 255, 255]);
+    board_frame.traces.highlighted_trace = None;
+    board_frame.traces.hovered_object = None;
+    board_frame.traces.color_mode = ColorMode::Layer;
+    Arc::make_mut(&mut board_frame.display).color_mode = ColorMode::Layer;
+    target.bind(&context);
+    board.draw(&gpu, &board_frame).unwrap();
+    assert_eq!(
+        target.read(&context),
+        all_vias,
+        "returning to layer colors restores all pixels"
+    );
+    assert_eq!(trace_stats.snapshot().uploaded_bytes, trace_upload);
+    assert_eq!(
+        copper_stats.snapshot().lifetime_uploaded_bytes,
+        uploaded_before
+    );
+    assert_eq!(composite_pad_stats.snapshot().uploaded_bytes, via_upload);
+    assert_eq!(
+        composite_custom_stats.snapshot().lifetime_uploaded_bytes,
+        custom_via_upload
+    );
+    assert_eq!(
+        composite_drill_stats.snapshot().uploaded_bytes,
+        before_drill_bytes
+    );
+    println!("NETWORK_COMPOSITE_PIXELS_VERIFIED highlights_preserved=true uploads_unchanged=true");
+
+    // Exercise every Web palette index and a high-bit NetId in both instanced shaders.
+    // Grid samples lie well inside each trace/disk, independent of antialiasing.
+    let network_ids: Vec<_> = (0..=203).chain([u32::MAX]).collect();
+    let mut palette_segments = Vec::new();
+    let mut palette_pins = Vec::new();
+    for (index, net) in network_ids.iter().enumerate() {
+        let at = Point::new((index % 16) as f64 + 0.5, (index / 16) as f64 + 0.5);
+        palette_segments.push(Segment {
+            id: ObjectId(index as u32 + 1),
+            track_id: ObjectId(index as u32 + 1),
+            layer: LayerId(1),
+            net: NetId(*net),
+            a: Point::new(at.x - 0.35, at.y),
+            b: Point::new(at.x + 0.35, at.y),
+            width: 0.4,
+            arc: None,
+            bond_wire: None,
+        });
+        let mut value = pin.clone();
+        value.id = ObjectId(index as u32 + 1);
+        value.net = NetId(*net);
+        value.at = at;
+        value.pads = vec![Pad::circle(LayerId(1), 0.6)];
+        palette_pins.push(value);
+    }
+    let mut palette_frame = TraceFrame {
+        pass: crate::backend::d3d11::OverlayPass::Base,
+        filled: true,
+        hover_selection: None,
+        color_mode: ColorMode::Net,
+        tracks: Arc::new(
+            PreparedTracks::build(&palette_segments, TraceLimits::default(), &cancellation)
+                .unwrap(),
+        ),
+        bounds: Bounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(16.0, 16.0),
+        },
+        camera: Some(pomelo_core::interaction::Camera {
+            center: Point::new(8.0, 8.0),
+            pixels_per_mm: 8.0,
+            flipped: false,
+        }),
+        scale_factor: 1.0,
+        colors: Arc::new(BTreeMap::from([(LayerId(1), [1.0, 0.0, 0.0, 1.0])])),
+        fallback_color: [1.0, 0.0, 0.0, 1.0],
+        highlighted_objects: None,
+        highlighted_net: None,
+        highlighted_trace: None,
+        highlighted_object: None,
+        hovered_object: None,
+        highlighted_related_objects: None,
+    };
+    let palette_pad_source = Arc::new(
+        crate::pads::PreparedPads::build(
+            &palette_pins,
+            &[],
+            crate::pads::PadLimits::default(),
+            &cancellation,
+        )
+        .unwrap(),
+    );
+    let palette_trace_stats = Arc::new(TraceTelemetry::default());
+    let palette_pad_stats = Arc::new(TraceTelemetry::default());
+    let mut palette_traces = TraceRenderer::<PreparedTracks>::new(Arc::clone(&palette_trace_stats));
+    let mut palette_pads = crate::backend::d3d11::PadRenderer::new(Arc::clone(&palette_pad_stats));
+    palette_pads.prepare(&gpu, &palette_pad_source).unwrap();
+    for analytic_pads in [false, true] {
+        target.bind(&context);
+        if analytic_pads {
+            palette_pads
+                .draw_prepared(&gpu, &palette_frame, None)
+                .unwrap();
+        } else {
+            palette_traces.draw(&gpu, &palette_frame).unwrap();
+        }
+        let pixels = target.read(&context);
+        for (index, net) in network_ids.iter().enumerate() {
+            let expected =
+                crate::scene::colors::net_color(NetId(*net)).unwrap_or([1.0, 0.0, 0.0, 1.0]);
+            let expected = [expected[0], expected[1], expected[2]]
+                .map(|channel| (channel * 255.0).round() as u8);
+            assert_eq!(
+                rgb(&pixels, index % 16 * 8 + 4, 123 - index / 16 * 8),
+                expected,
+                "net {net}, pads={analytic_pads}"
+            );
+        }
+    }
+    let trace_upload = palette_trace_stats.snapshot().uploaded_bytes;
+    let pad_upload = palette_pad_stats.snapshot().uploaded_bytes;
+    palette_frame.color_mode = ColorMode::Layer;
+    for analytic_pads in [false, true] {
+        target.bind(&context);
+        if analytic_pads {
+            palette_pads
+                .draw_prepared(&gpu, &palette_frame, None)
+                .unwrap();
+        } else {
+            palette_traces.draw(&gpu, &palette_frame).unwrap();
+        }
+        let pixels = target.read(&context);
+        for index in 0..network_ids.len() {
+            assert_eq!(
+                rgb(&pixels, index % 16 * 8 + 4, 123 - index / 16 * 8),
+                [255, 0, 0]
+            );
+        }
+    }
+    assert_eq!(palette_trace_stats.snapshot().uploaded_bytes, trace_upload);
+    assert_eq!(palette_pad_stats.snapshot().uploaded_bytes, pad_upload);
+    println!(
+        "NETWORK_PALETTE_PIXELS_VERIFIED samples={} trace_and_pad=true net_zero_fallback=true",
+        network_ids.len()
+    );
 }
 
 struct Target {
@@ -1582,6 +2606,10 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
         (LayerId(3), [0.0, 0.0, 1.0, 1.0]),
     ]));
     let mut frame = TraceFrame {
+        pass: crate::backend::d3d11::OverlayPass::Base,
+        filled: true,
+        hover_selection: None,
+        color_mode: pomelo_core::display::ColorMode::Layer,
         tracks: Arc::clone(&tracks),
         bounds: Bounds {
             min: Point::new(0.0, 0.0),
@@ -1786,10 +2814,19 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
     frame.scale_factor = 2.0;
     target.bind(&context);
     renderer.draw(&gpu, &frame).unwrap();
-    assert_eq!(
-        pixels,
-        target.read(&context),
-        "DPI conversion must preserve physical geometry"
+    let dpi_pixels = target.read(&context);
+    // Web AA and minimum stroke widths are measured in CSS/logical pixels.
+    // Doubling DPI keeps the camera's physical centerline but widens its AA band.
+    for (x, y) in [(32, 93), (64, 93), (96, 93), (64, 64), (12, 12)] {
+        assert_eq!(
+            rgb(&pixels, x, y),
+            rgb(&dpi_pixels, x, y),
+            "DPI preserves solid interiors and empty holes"
+        );
+    }
+    assert_ne!(
+        pixels, dpi_pixels,
+        "logical-pixel AA changes the physical edge coverage"
     );
     let stats = telemetry.snapshot();
     assert_eq!(
@@ -1936,6 +2973,10 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
     )
     .unwrap();
     let mut text_frame = TraceFrame {
+        pass: crate::backend::d3d11::OverlayPass::Base,
+        filled: true,
+        hover_selection: None,
+        color_mode: pomelo_core::display::ColorMode::Layer,
         tracks: Arc::new(
             PreparedTracks::build_texts(&prepared_text, TraceLimits::default(), &cancellation)
                 .unwrap(),
@@ -2276,7 +3317,7 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
     renderer.draw(&gpu, &frame).unwrap();
     let translated = target.read(&context);
     assert!(
-        pixels
+        dpi_pixels
             .iter()
             .zip(&translated)
             .all(|(a, b)| a.abs_diff(*b) <= 1),
@@ -2305,23 +3346,33 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
     assert!(navigation.resize(frame.bounds, f64::from(SIDE), f64::from(SIDE)));
     frame.tracks = Arc::clone(&tracks);
     frame.scale_factor = 1.0;
+    // The legacy renderer fallback uses pixel padding; the desktop uses Web's
+    // 86% occupancy. Compare against an independently specified camera instead.
+    frame.camera = Some(pomelo_core::interaction::Camera {
+        center: Point::new(10.0, 10.0),
+        pixels_per_mm: 5.504,
+        flipped: false,
+    });
+    target.bind(&context);
+    renderer.draw(&gpu, &frame).unwrap();
+    let navigation_expected = target.read(&context);
     frame.camera = Some(navigation.camera());
     target.bind(&context);
     renderer.draw(&gpu, &frame).unwrap();
-    assert_eq!(target.read(&context), pixels);
+    assert!(target.read(&context) == navigation_expected);
     let navigation_baseline = telemetry.snapshot();
-    assert!(navigation.zoom_at(Point::new(64.0, 93.0), 2.0));
+    assert!(navigation.zoom_at(Point::new(64.0, 92.0), 2.0));
     frame.camera = Some(navigation.camera());
     target.bind(&context);
     renderer.draw(&gpu, &frame).unwrap();
-    assert!(rgb(&target.read(&context), 64, 93)[0] > 240);
+    assert!(rgb(&target.read(&context), 64, 92)[0] > 240);
     assert!(navigation.pan(Point::new(0.0, -20.0)));
     frame.camera = Some(navigation.camera());
     target.bind(&context);
     renderer.draw(&gpu, &frame).unwrap();
     let moved = target.read(&context);
-    assert!(rgb(&moved, 64, 73)[0] > 240);
-    assert_eq!(rgb(&moved, 64, 93), [0; 3]);
+    assert!(rgb(&moved, 64, 72)[0] > 240);
+    assert_eq!(rgb(&moved, 64, 92), [0; 3]);
     let navigation_stats = telemetry.snapshot();
     assert_eq!(
         navigation_stats.uploaded_bytes,
@@ -2368,7 +3419,7 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
     target.bind(&context);
     renderer.draw(&gpu, &frame).unwrap();
     let outline_pixels = target.read(&context);
-    let outline_pixel = rgb(&outline_pixels, 11, 64);
+    let outline_pixel = rgb(&outline_pixels, 14, 64);
     assert!(
         outline_pixel.into_iter().all(|channel| channel > 90),
         "outline uses neutral color, not the red trace layer color"
@@ -2482,6 +3533,10 @@ fn hardware_real_board_compact_text_upload_draw_and_reset() {
         content_mask: ContentMask { bounds },
     };
     let mut frame = TraceFrame {
+        pass: crate::backend::d3d11::OverlayPass::Base,
+        filled: true,
+        hover_selection: None,
+        color_mode: pomelo_core::display::ColorMode::Layer,
         tracks: Arc::clone(&texts),
         bounds: board.scene.bounds,
         camera: None,

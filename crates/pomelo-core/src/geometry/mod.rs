@@ -1,5 +1,6 @@
 //! CPU geometry shared by rendering and inspection.
 pub mod copper;
+pub mod curve;
 pub mod pad;
 pub mod units;
 
@@ -9,6 +10,105 @@ use crate::{
 };
 
 pub const COPPER_CHORD_TOLERANCE_MM: f64 = 0.00025;
+
+/// Scaled two-coordinate norm with the evaluation order of Web Math.hypot.
+/// The order matters for coincident boundaries competing in nearest-hit picking.
+pub fn web_hypot(x: f64, y: f64) -> f64 {
+    if x.is_infinite() || y.is_infinite() {
+        return f64::INFINITY;
+    }
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    let maximum = x.abs().max(y.abs());
+    if maximum == 0.0 {
+        return 0.0;
+    }
+    let a = x.abs() / maximum;
+    let b = y.abs() / maximum;
+    (a * a + b * b).sqrt() * maximum
+}
+
+/// Analytic even/odd contour coverage, including stored endpoint connectors.
+/// Matches Web PathShape; each circular interval is split at cardinal angles.
+pub fn path_contains(
+    path: &[Segment],
+    point: Point,
+    cancel: &CancellationToken,
+) -> Result<bool, PathError> {
+    let Some(first) = path.first() else {
+        return Ok(false);
+    };
+    let mut hit = false;
+    let line = |hit: &mut bool, a: Point, b: Point| {
+        if (a.y > point.y) != (b.y > point.y)
+            && point.x < a.x + (b.x - a.x) * ((point.y - a.y) / (b.y - a.y))
+        {
+            *hit = !*hit;
+        }
+    };
+    let mut previous = first.a;
+    for edge in path {
+        if cancel.is_cancelled() {
+            return Err(PathError::Cancelled);
+        }
+        if edge.centreline_bounds().is_none() {
+            return Err(PathError::Invalid(edge.id));
+        }
+        line(&mut hit, previous, edge.a);
+        if let Some(arc) = edge.arc {
+            let at = |angle: f64| {
+                Point::new(
+                    arc.center.x + arc.radius * angle.cos(),
+                    arc.center.y + arc.radius * angle.sin(),
+                )
+            };
+            let mut angle = arc.start;
+            let end = arc.start + arc.sweep;
+            let mut a = at(angle);
+            line(&mut hit, edge.a, a);
+            let step = std::f64::consts::FRAC_PI_2;
+            let direction = arc.sweep.signum();
+            let mut k = if direction > 0.0 {
+                (angle / step).floor() + 1.0
+            } else {
+                (angle / step).ceil() - 1.0
+            };
+            if arc.sweep.abs() > std::f64::consts::TAU + 1e-9 {
+                return Err(PathError::Invalid(edge.id));
+            }
+            loop {
+                let next = if direction > 0.0 {
+                    (k * step).min(end)
+                } else {
+                    (k * step).max(end)
+                };
+                let b = at(next);
+                if (a.y > point.y) != (b.y > point.y) {
+                    let dy = point.y - arc.center.y;
+                    let x = arc.center.x
+                        + ((angle + next) * 0.5).cos().signum()
+                            * ((arc.radius - dy) * (arc.radius + dy)).max(0.0).sqrt();
+                    if point.x < x {
+                        hit = !hit;
+                    }
+                }
+                a = b;
+                angle = next;
+                if next == end {
+                    break;
+                }
+                k += direction;
+            }
+            line(&mut hit, a, edge.b);
+        } else {
+            line(&mut hit, edge.a, edge.b);
+        }
+        previous = edge.b;
+    }
+    line(&mut hit, previous, first.a);
+    Ok(hit)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathError {
@@ -221,7 +321,9 @@ pub fn distance_to_line(point: Point, a: Point, b: Point) -> f64 {
         return point.distance(a);
     }
     let t = (((point.x - a.x) * dx + (point.y - a.y) * dy) / denominator).clamp(0.0, 1.0);
-    point.distance(Point::new(a.x + t * dx, a.y + t * dy))
+    // Keep subtraction order aligned with Web LineShape. Adding a far-away
+    // projected point first loses low bits and can reverse nearby hit ordering.
+    web_hypot(point.x - a.x - dx * t, point.y - a.y - dy * t)
 }
 
 #[cfg(test)]

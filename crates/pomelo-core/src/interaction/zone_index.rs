@@ -12,6 +12,7 @@ use crate::{
 
 pub(crate) struct ZoneFillIndex {
     rings: Vec<Vec<Bounds>>,
+    pub(crate) bytes: usize,
 }
 
 impl ZoneFillIndex {
@@ -79,7 +80,7 @@ impl ZoneFillIndex {
         if cancel.is_cancelled() {
             return Err(PathError::Cancelled.into());
         }
-        Ok(Self { rings })
+        Ok(Self { rings, bytes })
     }
 
     pub(crate) fn query<'a>(

@@ -10,10 +10,14 @@ pub use pad_renderer::PadRenderer;
 mod copper_d3d11;
 mod copper_renderer;
 #[allow(unsafe_code)]
+mod msdf_d3d11;
+#[allow(unsafe_code)]
 mod pipeline;
 #[allow(unsafe_code)]
 mod trace_d3d11;
-pub use board::{TraceFrame, TraceRenderer, TraceSelection, TraceStatistics, TraceTelemetry};
+pub use board::{
+    OverlayPass, TraceFrame, TraceRenderer, TraceSelection, TraceStatistics, TraceTelemetry,
+};
 pub use copper_renderer::{
     BoardFrame, BoardRenderer, CopperRenderer, CopperStatistics, CopperTelemetry,
 };

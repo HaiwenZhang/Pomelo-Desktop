@@ -7,7 +7,10 @@ use pomelo_core::{
 };
 
 use crate::{
-    actions::{CloseDocument, OpenFile, OpenSettings, Quit, ReloadDocument},
+    actions::{
+        CloseDocument, FitActiveBoard, NextDocument, OpenFile, OpenSettings, PreviousDocument,
+        Quit, ReloadDocument, ToggleLeftPanel, ToggleRightPanel,
+    },
     prefs::LanguageStore,
 };
 
@@ -33,17 +36,20 @@ pub struct LanguageState {
 }
 impl Global for LanguageState {}
 
-#[derive(Default)]
-struct DocumentMenuState {
-    reload_available: bool,
+#[derive(Default, PartialEq, Eq)]
+pub struct DocumentMenuState {
+    pub reload_available: bool,
+    pub fit_available: bool,
+    pub has_document: bool,
+    pub can_cycle: bool,
 }
 impl Global for DocumentMenuState {}
 
-pub fn set_reload_available(available: bool, cx: &mut App) -> bool {
-    if cx.global::<DocumentMenuState>().reload_available == available {
+pub fn set_document_commands(state: DocumentMenuState, cx: &mut App) -> bool {
+    if *cx.global::<DocumentMenuState>() == state {
         return false;
     }
-    cx.global_mut::<DocumentMenuState>().reload_available = available;
+    *cx.global_mut::<DocumentMenuState>() = state;
     rebuild_menus(cx);
     true
 }
@@ -109,6 +115,7 @@ pub fn select(preference: LanguagePreference, cx: &mut App) {
         return;
     }
     gpui_kit::component::set_locale(locale.tag());
+    crate::theme::apply_ui_font(cx);
     rebuild_menus(cx);
     cx.refresh_windows();
     let task = cx.spawn(async move |cx| {
@@ -170,13 +177,35 @@ fn rebuild_menus(cx: &mut App) {
             MenuItem::action(text(locale, MessageKey::OpenFile), OpenFile),
             MenuItem::action(text(locale, MessageKey::ReloadDocument), ReloadDocument)
                 .disabled(!cx.global::<DocumentMenuState>().reload_available),
-            MenuItem::action(text(locale, MessageKey::CloseDocument), CloseDocument),
+            MenuItem::action(text(locale, MessageKey::CloseDocument), CloseDocument)
+                .disabled(!cx.global::<DocumentMenuState>().has_document),
             MenuItem::separator(),
             MenuItem::action(text(locale, MessageKey::SettingsMenu), OpenSettings),
             MenuItem::separator(),
             MenuItem::action(text(locale, MessageKey::Quit), Quit),
         ]),
-        Menu::new(text(locale, MessageKey::LanguageMenu)).items(languages),
+        Menu::new(text(locale, MessageKey::ViewMenu)).items([
+            MenuItem::action(text(locale, MessageKey::NextDocument), NextDocument)
+                .disabled(!cx.global::<DocumentMenuState>().can_cycle),
+            MenuItem::action(text(locale, MessageKey::PreviousDocument), PreviousDocument)
+                .disabled(!cx.global::<DocumentMenuState>().can_cycle),
+            MenuItem::separator(),
+            MenuItem::action(text(locale, MessageKey::FitBoard), FitActiveBoard)
+                .disabled(!cx.global::<DocumentMenuState>().fit_available),
+            MenuItem::separator(),
+            MenuItem::action(text(locale, MessageKey::ToggleLeftPanel), ToggleLeftPanel)
+                .disabled(!cx.global::<DocumentMenuState>().fit_available),
+            MenuItem::action(text(locale, MessageKey::ToggleRightPanel), ToggleRightPanel)
+                .disabled(!cx.global::<DocumentMenuState>().fit_available),
+        ]),
+        Menu::new(text(locale, MessageKey::ToolsMenu)).items([
+            MenuItem::action(text(locale, MessageKey::SettingsMenu), OpenSettings),
+            MenuItem::submenu(Menu::new(text(locale, MessageKey::LanguageMenu)).items(languages)),
+        ]),
+        Menu::new(text(locale, MessageKey::HelpMenu)).items([MenuItem::action(
+            text(locale, MessageKey::AboutPomelo),
+            crate::actions::AboutPomelo,
+        )]),
     ];
     cx.set_menus(menus);
     let owned = cx.get_menus().unwrap_or_default();

@@ -42,6 +42,73 @@ struct ThemeFile {
 #[derive(Clone)]
 pub struct ThemeStore(LanguageStore);
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelPreferences {
+    pub left_collapsed: bool,
+    pub right_collapsed: bool,
+    pub left_width: f32,
+    pub right_width: f32,
+}
+impl Default for PanelPreferences {
+    fn default() -> Self {
+        Self {
+            left_collapsed: false,
+            right_collapsed: false,
+            left_width: 256.0,
+            right_width: 288.0,
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelFile {
+    schema_version: u32,
+    panels: PanelPreferences,
+}
+#[derive(Clone)]
+pub struct PanelStore(LanguageStore);
+impl PanelStore {
+    pub fn platform_default() -> Option<Self> {
+        LanguageStore::platform_default().map(|mut store| {
+            store.path.set_file_name("panels.json");
+            Self(store)
+        })
+    }
+    pub fn load(&self) -> Result<PanelPreferences, Diagnostic> {
+        let Some(parsed) = self.0.load_file::<PanelFile>()? else {
+            return Ok(PanelPreferences::default());
+        };
+        self.validate(parsed.panels)?;
+        if parsed.schema_version != 1 {
+            return Err(self
+                .0
+                .failure(MessageKey::ConfigInvalid, "CONFIG_SCHEMA_UNSUPPORTED"));
+        }
+        Ok(parsed.panels)
+    }
+    fn validate(&self, panels: PanelPreferences) -> Result<(), Diagnostic> {
+        if !panels.left_width.is_finite()
+            || !panels.right_width.is_finite()
+            || !(200.0..=440.0).contains(&panels.left_width)
+            || !(240.0..=440.0).contains(&panels.right_width)
+        {
+            return Err(self
+                .0
+                .failure(MessageKey::ConfigInvalid, "PANEL_LAYOUT_INVALID"));
+        }
+        Ok(())
+    }
+    pub fn save(&self, panels: PanelPreferences) -> Result<(), Diagnostic> {
+        self.validate(panels)?;
+        self.0.preserve_invalid(self.load().is_err())?;
+        self.0.save_file(&PanelFile {
+            schema_version: 1,
+            panels,
+        })
+    }
+}
+
 impl ThemeStore {
     pub fn platform_default() -> Option<Self> {
         LanguageStore::platform_default().map(|mut store| {
@@ -73,11 +140,9 @@ impl ThemeStore {
 
 impl LanguageStore {
     pub fn platform_default() -> Option<Self> {
-        dirs::config_dir()
-            .filter(|path| path.is_absolute())
-            .map(|root| Self {
-                path: root.join("Pomelo").join("language.json"),
-            })
+        configuration_directory().map(|root| Self {
+            path: root.join("language.json"),
+        })
     }
 
     pub fn load(&self) -> Result<LanguagePreference, Diagnostic> {
@@ -191,6 +256,23 @@ impl LanguageStore {
     }
 }
 
+/// An explicit profile must never fall back to another profile's writable files.
+pub(crate) fn configuration_directory() -> Option<PathBuf> {
+    configuration_root(
+        std::env::var_os("POMELO_CONFIG_DIR").map(PathBuf::from),
+        dirs::config_dir(),
+    )
+}
+
+fn configuration_root(
+    override_directory: Option<PathBuf>,
+    platform_directory: Option<PathBuf>,
+) -> Option<PathBuf> {
+    override_directory
+        .or_else(|| platform_directory.map(|root| root.join("Pomelo")))
+        .filter(|root| root.is_absolute())
+}
+
 pub const RECENT_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +282,17 @@ pub struct RecentEntry {
     pub format: String,
     pub opened_unix_seconds: u64,
     pub encoding: pomelo_import::TextEncoding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<RecentPresentation>,
+}
+
+/// Last successful import information, independent of an open document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecentPresentation {
+    pub layer_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail_png: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -247,6 +340,11 @@ impl RecentStore {
             || entries.iter().enumerate().any(|(index, entry)| {
                 !entry.path.is_absolute()
                     || entry.format != "allegro"
+                    || entry
+                        .presentation
+                        .as_ref()
+                        .and_then(|value| value.thumbnail_png.as_ref())
+                        .is_some_and(|png| png.len() > crate::services::preview::MAX_ENCODED_BYTES)
                     || entries[..index]
                         .iter()
                         .any(|other| other.path == entry.path)
@@ -385,7 +483,93 @@ pub fn remember_relocated(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn panel_layout_restores_each_side_and_remembered_expanded_width() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = PanelStore(LanguageStore {
+            path: directory.path().join("panels.json"),
+        });
+        let panels = PanelPreferences {
+            left_collapsed: true,
+            right_collapsed: false,
+            left_width: 312.0,
+            right_width: 360.0,
+        };
+        store.save(panels).unwrap();
+        let reloaded = PanelStore(LanguageStore {
+            path: store.0.path.clone(),
+        });
+        assert_eq!(reloaded.load().unwrap(), panels);
+    }
+    #[test]
+    fn invalid_panel_width_preserves_the_previous_usable_layout() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = PanelStore(LanguageStore {
+            path: directory.path().join("panels.json"),
+        });
+        store.save(PanelPreferences::default()).unwrap();
+        let original = fs::read(&store.0.path).unwrap();
+        for width in [f32::NAN, f32::INFINITY, 0.0, 441.0] {
+            let panels = PanelPreferences {
+                left_width: width,
+                ..PanelPreferences::default()
+            };
+            let error = store.save(panels).unwrap_err();
+            for locale in pomelo_core::i18n::Locale::ALL {
+                assert!(error.message.render(locale).is_ok());
+            }
+        }
+        assert_eq!(fs::read(&store.0.path).unwrap(), original);
+    }
+    #[test]
+    fn corrupt_panel_file_is_recoverable_without_discarding_the_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = PanelStore(LanguageStore {
+            path: directory.path().join("panels.json"),
+        });
+        let original = b"{\"schema_version\":99,\"panels\":{}}";
+        fs::write(&store.0.path, original).unwrap();
+        assert!(store.load().is_err());
+        store.save(PanelPreferences::default()).unwrap();
+        let recovery = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("panels.json.recovery-")
+            })
+            .unwrap();
+        assert_eq!(fs::read(recovery.path()).unwrap(), original);
+    }
     use pomelo_core::i18n::Locale;
+
+    #[test]
+    fn explicit_configuration_root_is_used_without_the_platform_subdirectory() {
+        let directory = tempfile::tempdir().unwrap();
+        let explicit = directory.path().join("isolated-profile");
+        assert_eq!(
+            configuration_root(Some(explicit.clone()), Some(directory.path().into())),
+            Some(explicit)
+        );
+        assert_eq!(
+            configuration_root(None, Some(directory.path().into())),
+            Some(directory.path().join("Pomelo"))
+        );
+    }
+
+    #[test]
+    fn invalid_explicit_configuration_root_cannot_write_the_platform_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        for invalid in [PathBuf::new(), PathBuf::from("relative-profile")] {
+            assert_eq!(
+                configuration_root(Some(invalid), Some(directory.path().into())),
+                None
+            );
+        }
+        assert_eq!(configuration_root(None, None), None);
+    }
 
     fn view_entry(path: PathBuf) -> ViewEntry {
         ViewEntry {
@@ -404,6 +588,7 @@ mod tests {
                 selection: Some(pomelo_core::selection::SelectionTarget::Net(
                     pomelo_core::model::NetId(7),
                 )),
+                selection_anchor: None,
             },
         }
     }
@@ -428,6 +613,12 @@ mod tests {
         second.state.display.show_texts = false;
         second.state.display.show_drawings = false;
         second.state.display.copper_opacity = 0.75;
+        second.state.display.color_mode = pomelo_core::display::ColorMode::Net;
+        second.state.display.set_primitive(
+            pomelo_core::model::LayerId(3),
+            pomelo_core::display::LayerPrimitive::Vias,
+            false,
+        );
         store.save_updates(vec![second.clone()]).unwrap();
         let saved = store.load().unwrap();
         assert_eq!(saved.len(), 2);
@@ -445,6 +636,19 @@ mod tests {
         assert!(!restored.display.show_texts);
         assert!(!restored.display.show_drawings);
         assert_eq!(restored.display.copper_opacity, 0.75);
+        assert_eq!(
+            restored.display.color_mode,
+            pomelo_core::display::ColorMode::Net
+        );
+        assert_eq!(
+            saved[1].state.display.color_mode,
+            pomelo_core::display::ColorMode::Layer
+        );
+        assert_eq!(
+            restored.display.layer_primitives,
+            second.state.display.layer_primitives
+        );
+        assert!(saved[1].state.display.layer_primitives.is_empty());
         assert_eq!(
             restored.display.length_unit,
             pomelo_core::units::LengthUnit::Mils
@@ -568,7 +772,7 @@ mod tests {
         store.save(vec![entry.clone()]).unwrap();
         let mut file: serde_json::Value =
             serde_json::from_slice(&fs::read(&store.0.path).unwrap()).unwrap();
-        file["entries"][0]["state"]["pick_filter"] = serde_json::json!(16);
+        file["entries"][0]["state"]["pick_filter"] = serde_json::json!(32);
         let original = serde_json::to_vec(&file).unwrap();
         fs::write(&store.0.path, &original).unwrap();
         let error = store
@@ -702,6 +906,7 @@ mod tests {
             opened_unix_seconds,
             format: "allegro".into(),
             encoding: pomelo_import::TextEncoding::Windows1252,
+            presentation: None,
         }
     }
 
@@ -747,6 +952,95 @@ mod tests {
         assert!(!source.exists());
         store.save(Vec::new()).unwrap();
         assert!(store.load().unwrap().is_empty());
+    }
+
+    #[test]
+    fn legacy_history_accepts_new_metadata_without_rewriting_on_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = RecentStore(LanguageStore {
+            path: directory.path().join("recent.json"),
+        });
+        let legacy = recent_entry(directory.path().join("legacy.brd"), 123);
+        store.save(vec![legacy]).unwrap();
+        let bytes = fs::read(&store.0.path).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("presentation"));
+        assert!(store.load().unwrap()[0].presentation.is_none());
+        assert_eq!(fs::read(&store.0.path).unwrap(), bytes);
+
+        // A damaged optional image remains an ordinary, openable history entry.
+        let mut enriched = recent_entry(directory.path().join("board.brd"), 124);
+        enriched.presentation = Some(RecentPresentation {
+            layer_count: 4,
+            thumbnail_png: Some("invalid preview".into()),
+        });
+        let mut entries = store.load().unwrap();
+        remember_recent(&mut entries, enriched.clone());
+        store.save(entries).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].presentation, enriched.presentation);
+        assert!(
+            crate::services::preview::decode(
+                loaded[0]
+                    .presentation
+                    .as_ref()
+                    .unwrap()
+                    .thumbnail_png
+                    .as_ref()
+                    .unwrap()
+            )
+            .is_err()
+        );
+        assert!(loaded[1].presentation.is_none());
+        let original = fs::read(&store.0.path).unwrap();
+        enriched.presentation.as_mut().unwrap().thumbnail_png =
+            Some("A".repeat(crate::services::preview::MAX_ENCODED_BYTES + 1));
+        assert!(store.save(vec![enriched]).is_err());
+        assert_eq!(fs::read(&store.0.path).unwrap(), original);
+    }
+
+    #[test]
+    fn bounded_preview_history_fits_the_load_limit_and_roundtrips_pixels() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use image::ImageEncoder as _;
+        let directory = tempfile::tempdir().unwrap();
+        let store = RecentStore(LanguageStore {
+            path: directory.path().join("recent.json"),
+        });
+        let mut png = Vec::new();
+        let pixels = image::RgbaImage::from_pixel(192, 128, image::Rgba([13, 27, 181, 255]));
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(pixels.as_raw(), 192, 128, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let encoded = STANDARD.encode(png);
+        let mut entries: Vec<_> = (0..RECENT_LIMIT)
+            .map(|index| {
+                let mut entry =
+                    recent_entry(directory.path().join(format!("{index}.brd")), index as u64);
+                entry.presentation = Some(RecentPresentation {
+                    layer_count: 4,
+                    thumbnail_png: Some("A".repeat(crate::services::preview::MAX_ENCODED_BYTES)),
+                });
+                entry
+            })
+            .collect();
+        entries[0].presentation.as_mut().unwrap().thumbnail_png = Some(encoded.clone());
+        store.save(entries).unwrap();
+        assert!(fs::metadata(&store.0.path).unwrap().len() < 4 * 1024 * 1024);
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.len(), RECENT_LIMIT);
+        assert_eq!(
+            loaded[0]
+                .presentation
+                .as_ref()
+                .unwrap()
+                .thumbnail_png
+                .as_ref()
+                .unwrap(),
+            &encoded
+        );
+        let image = crate::services::preview::decode(&encoded).unwrap();
+        assert_eq!(&image.as_bytes(0).unwrap()[..4], &[181, 27, 13, 255]);
     }
 
     #[test]

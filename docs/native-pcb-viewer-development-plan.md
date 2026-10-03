@@ -1,12 +1,16 @@
 # Pomelo 原生桌面 PCB Viewer 研发计划
 
-> 编制日期：2026-10-01；最近修订：2026-10-02（确认 earcut 0.4.11、代码组织及 Windows 渲染目录）。本文基于本地 Wake、Pomelo Web 源码、三张桌面 UI 设计稿及 `E:\brd_cases` 案例目录编制。目标是建立可执行、可验收的研发路线；本文中的工期和性能指标为拟定目标，实现及验证状态以单独的证据记录为准。
+> 编制日期：2026-10-01；最近修订：2026-10-04（面板收缩、锚点应用接入与五语搜索排序；保留已确认的依赖和平台边界）。本文基于本地 Wake、Pomelo Web 源码、三张桌面 UI 设计稿及 `E:\brd_cases` 案例目录编制。目标是建立可执行、可验收的研发路线；本文中的工期和性能指标为拟定目标，实现及验证状态以单独的证据记录为准。
 
 > 开发证据单独维护于 [development-progress.md](development-progress.md)，i18n 实施契约见 [i18n.md](i18n.md)。下文调研现状保留编制时点，不能据此推断最新实现状态。
 
 > 最新 Windows GPU 进展：真实走线/圆弧已接入 `pomelo-render` D3D11/HLSL 与 GPUI 同窗口入口。硬件像素测试及小型 FPC 上传/呈现记录见 [gpu-trace-validation.md](gpu-trace-validation.md)；这不代表全部 PCB 图元、实窗视觉或大板验收完成。
 
 > 板框与铜皮进展：板框和铜皮已接入同设备绘制，铜皮重叠孔洞硬件像素测试及真实 FPC 上传/呈现通过，见 [gpu-copper-validation.md](gpu-copper-validation.md)。逐层合成、曲边抗锯齿及大板铜皮验收仍待完成；此前 FPC/AGILEX 板框提交和铜皮准备记录见 [outline-copper-preparation-validation.md](outline-copper-preparation-validation.md)。
+
+> 当前开发优先级：按用户要求先落实 `docs/ui-design` 的原生 UI。欢迎页、工作区及可调侧栏已接入真实数据，实窗证据和未完成的可见差异见 [UI 设计验证记录](ui-design-validation.md)。五语 i18n 和现有 D3D11/HLSL 业务边界继续作为约束。
+
+> 图层/网络着色已接入正式 Windows 管线：沿用 Web 调色板，同源网络跨图元一致，模式按文档恢复且切换不重上传几何。硬件及实窗证据见 [网络着色验证](network-colors-validation.md)；完整五语工作区、DPI、大板性能和发布验收仍按原范围进行。
 
 ## 1. 项目目标与交付边界
 
@@ -16,7 +20,7 @@
 
 **核心技术约束：当前只开发 Windows，PCB GPU 渲染采用复用 GPUI 同一设备与窗口呈现的 D3D11/HLSL 路线。GPUI 补丁只提供通用注册、绘制及生命周期入口；PCB 几何、shader、业务管线与 GPU 缓存全部在 `pomelo-render` 实现。国际化采用 [`longbridge/rust-i18n`](https://github.com/longbridge/rust-i18n)，从 M0 起按 i18n 优先开发。英文、简体中文、繁体中文、日文、韩语是首版核心支持项，覆盖界面、导入与解析诊断、后台任务、GPU 和系统错误，不作为后期补译功能。**
 
-2026-10-01 路线修订：用户接受各平台原生 shader 实现，取消此前对 `wgpu + WGSL` 的强制要求。Windows 已选定 D3D11/HLSL 接入 GPUI 自身渲染器，三角形及三种 PCB 图元小场景已实窗验证；已经完成的 wgpu 三角形仍作为独立实验保留。决策与待验证项见 [ADR 0001](adr/0001-native-gpu-rendering.md)。
+2026-10-01 路线修订：用户接受各平台原生 shader 实现，取消此前对 `wgpu + WGSL` 的强制要求。Windows 已选定 D3D11/HLSL 接入 GPUI 自身渲染器，三角形及三种 PCB 图元小场景已实窗验证；已经完成的 wgpu 三角形仅保留历史验证记录，实验源码与直接依赖已于 2026-10-03 按用户要求移除。决策与待验证项见 [ADR 0001](adr/0001-native-gpu-rendering.md)。
 
 2026-10-02 平台范围确认：**当前只开发、验证和交付 Windows。** 三端架构采用“统一 GPU 注册/绘制入口 + `pomelo-render` 三套平台后端”，macOS/Metal/MSL 与 Linux/wgpu/WGSL 仅记录后续方案，待单独启动平台移植阶段。架构见 6.3，当前 Windows 实施计划见 6.4。
 
@@ -73,7 +77,7 @@ GPUI Kit 当前官方安装说明采用统一 `gpui-kit` 入口并配套 GPUI �
 
 M0 交付 `rust-toolchain.toml`、`Cargo.lock`、平台构建要求和依赖决策记录。具体 Rust、Kit、图形库版本以可复现的编译与运行验证为准，不将浮动 Git HEAD 作为发布基线。
 
-根工作区统一声明 `rust-i18n` 与实际使用的图形依赖，锁定经验证的版本。现有 `wgpu` 用于三角形实验，不构成正式 PCB 后端约束；若复用 GPUI 的 wgpu 后端，必须对齐框架版本与设备，不能混用不同版本的 GPU 类型。`rust-i18n` 与 GPUI Kit 所用组件的依赖组合一起验证，避免多个不兼容版本造成 locale 状态不同步。Wake 的语言偏好、启动初始化与菜单重建流程可参考；其自制翻译引擎不移植，使用指定的 `rust-i18n`。
+根工作区统一声明 `rust-i18n` 与实际使用的图形依赖，锁定经验证的版本。禁止在 Windows D3D11 后端及其测试中使用 wgpu。项目不声明独立 `wgpu 30.0.1` 依赖，共享场景、字体布局与交互算法保持平台无关；若复用 GPUI 的 wgpu 后端，必须对齐框架版本与设备，不能混用不同版本的 GPU 类型。`rust-i18n` 与 GPUI Kit 所用组件的依赖组合一起验证，避免多个不兼容版本造成 locale 状态不同步。Wake 的语言偏好、启动初始化与菜单重建流程可参考；其自制翻译引擎不移植，使用指定的 `rust-i18n`。
 
 ## 3. Web 能力迁移矩阵
 
@@ -91,7 +95,7 @@ M0 交付 `rust-toolchain.toml`、`Cargo.lock`、平台构建要求和依赖决�
 | `components/layers-panel.tsx`、`display-controls.tsx`、`display-order-panel.tsx` | 可见性、着色、透明度、标签与显示顺序 | 用 Kit 组件重建，P0/P1 |
 | `components/object-inspector.tsx` | 对象/走线/网络/元件检查，长度和连接信息 | UI 只消费查询结果，P0 |
 | `src/lib/viewer-store.ts`、`app/useBoardSurface.ts` | 导入、取消、错误、场景准备、渲染生命周期 | 拆成每文档会话和任务状态机，P0 |
-| `src/lib/text/`、`public/fonts/stroke/` | 板中文字和笔画字体 | 几何及授权逐项检查，区别于界面字体，P1 |
+| `src/lib/text/`、`public/fonts/source-han-sans/` | 最新 MSDF 板文字与标签 | 同步度量、JSON/PNG、布局与采样；保留 OFL-1.1，UI 字体保持原状 |
 | `src/lib/{kicad,altium,pads,odb,hfss}/` | 后续多格式导入 | 通过相同导入契约接入，P2 |
 | `tests/`、`scripts/check-cases.ts`、`bench-parser.ts`、`scene-fingerprint.ts` | 正确性、案例回归、性能和结构指纹 | 转化为跨语言对照工具，不要求桌面运行时携带 JS，P0 |
 
@@ -312,7 +316,29 @@ PCB 使用独立视口渲染抽象，不为每个焊盘或线段创建 GPUI 控�
 
 平移缩放优先更新相机参数，不重建整板几何；保持 Web 的高低位/残差精度思路，避免大坐标下微小走线抖动。可见性与颜色变化不触发重新解析。静止窗口按需重绘；预处理和 GPU 上传按 revision 缓存；设备丢失后保留 CPU 场景用于重建。
 
+2026-10-03 按最新 Web 更新板文字与自动标签为 Source Han Sans SC MSDF，Windows 使用 `label.hlsl`；共享字形布局与拾取边界保持平台无关。UI 界面字体保持当前原生方案，Web 源码仅作只读参考。结果与未完成门槛见 [画布对照验证](canvas-web-parity-validation.md)，不以局部差分通过代替整板视觉与性能验收。
+
+2026-10-03 精度补验：Windows `trace.hlsl` 已采用最新 Web 的长直线补偿法向坐标与端帽投影。960 组硬件像素及真实 FPC 高倍率边界拾取、翻板和平移通过；几何 ABI、缓存和 UI 字体保持现状。证据见 [长直线精度验证](long-line-precision-validation.md)。曲线铜皮、特殊对象及整板/性能/发布门槛仍按原范围验收。
+
+2026-10-03 背钻补验：共享层保留切除范围与原层焊盘，Windows HLSL 每过孔绘制一个独立交叉网纹；背钻/普通孔独立开关及 base 恢复与画布拾取一致。128 组 D3D11 像素、AGILEX 实窗拾取/键盘开关/重开恢复通过，五语资源与旧配置默认开启已验证，UI 字体保持原状。552 个背钻的 52,992 次 Web 拾取首选及四模式对照全部匹配，0 差异；整板/性能/发布门槛未完成，见[背钻专项验证](backdrill-rendering-validation.md)。
+
+2026-10-03 die pad 分类修正：BOND TOP 的解析焊盘、自定义填充与非填充边界在 D3D11 中按铜线类别提交，显示开关与提升顺序和 Web 一致，保留 pin 选择身份与 UI 字体。120 组硬件场景及真实案例全部 29 个 die pad 的 3,480 次拾取/四模式对照通过；401 项工作区测试、Clippy、debug/Release 构建通过。实窗截图/交互与完整发布仍待验收，见[die pad 专项](die-pad-rendering-validation.md)。
+
+2026-10-03 曲边铜皮补验：平台无关的 f64 细分与视口缓存、Windows D3D11 奇偶填充已接入，静态三角化继续使用 earcut 0.4.11，UI 字体保持不变。7,181 次 Web 几何对照及 216 组硬件像素验证通过；修正动态准备状态改变画布高度的缓存循环。新版完整实窗交互、整板视觉和性能/发布仍待验收，见[曲边铜皮验证](curve-fill-rendering-validation.md)。
+
+2026-10-03 相机补验：共享导航采用最新 Web 的整板 86% 适应、定位比例与上限、缩放范围及相对适应百分比；resize 保留视角。完整板框范围及首次上传期间画布尺寸已修正，UI 界面字体保持不变。924 个状态和三块实际原生导入边界对照通过；最终 Release 的 FPC 100%/120%、翻板与适应按钮实窗通过。滚轮 delta 映射、完整场景视觉及性能/发布仍待验收，见[相机导航验证](camera-navigation-validation.md)。
+
+2026-10-03 元件交互补验：pin/finger 按最新 Web 的精确 reference 分组，共享搜索、成员、选择及悬停语义，D3D11 使用完整组高亮；独立源 placement 不合并，UI 界面字体保持不变。三块真实 PCB 的 3,842 个组/17,178 个成员及专用合成 fixture 零差异，真实 U2 搜索/finger 拾取/悬停验证 57 成员；432 项工作区测试、Clippy、格式和 debug/Release 构建通过。当前定位仍按源几何 bounds；显示相关定位、多语排序、新组退出恢复与完整验收待完成，见[元件分组验证](component-reference-validation.md)。
+
+2026-10-03 定位与 TOP 列表补验：应用定位改用共享索引几何 bounds，按最新 Web 包含隐藏条目，不附加源原点或近似文本矩形；8,840 个真实/合成查询通过，合成场景区分并修正 18 个旧源范围差异。按用户确认，左侧图层列表默认 TOP 首行，绘制/拾取策略不变；置顶动作、J1 组选择及相机/排序重开恢复实窗通过。439 项工作区测试、Clippy、格式、debug/Release 构建通过，UI 字体保持原状。Web 搜索可见锚点和多语排序仍待补齐，详见[定位验证](selection-navigation-bounds-validation.md)和[TOP 列表验证](top-layer-order-validation.md)。
+
+2026-10-03 搜索锚点核心补验：`selection_anchor` 已按 Web 的可见优先/全隐藏回退及提交顺序实现，9,158 个真实/合成查询零差异，17 项新增回归通过。此为共享核心基础，**应用检查器、命中层及实际鼠标 hit 接入仍待完成**，不关闭 M4 验收项。搜索多语排序、整板验收和发布继续保留待办，见[锚点验证](search-anchor-validation.md)。
+
+2026-10-04 应用接入补验：检查器及实际 canvas hit 的对象/层/类别已接通，选择全组与实际锚点分离，模式转换、清除及保存恢复处理完成。125,136 个真实拾取查询与最新 Web 的首选、四模式和锚点零差异，FPC 的 J1 搜索/实际点击及重开恢复实窗通过。473 项工作区测试、Clippy、格式与 debug/Release 构建通过；多语排序、全部隐藏/显示工作流、finger-only、性能及完整发布仍待验，见[锚点应用记录](search-anchor-app-validation.md)。
+
 ### 6.3 三端架构方案与当前 Windows 开发范围
+
+2026-10-04 搜索排序补验：平台无关核心已使用 ICU4X 和编译时嵌入的 Unihan 五语数据，保留最新 Web 的完全匹配/前缀优先、默认数字顺序和源身份；运行排序语言与 UI 语言分开。合成名称及三块真实板共 26,730 组五语查询零差异，完整条目顺序和计数一致；478 项工作区测试与 Clippy 通过。已修复默认内置 implicit 汉字顺序的真实差异，证据、数据来源及尚未通过的门槛见[搜索排序验证](search-order-validation.md)。
 
 **确定路线：统一应用绘制入口，分别复用 GPUI 的原生后端。当前只实施 Windows，macOS 与 Linux 为后续移植方案。** 不复制领域模型、解析器和交互逻辑；三种平台 shader 实现相同的几何及着色语义。
 
@@ -334,7 +360,7 @@ Rust 接入方式是由 `pomelo-render` 的 renderer **实现项目补丁提供�
 | macOS | Metal / 与当前框架一致的 `metal 0.33` | MSL `.metal` | 后续方案，未实现、未实机验证 |
 | Linux | GPUI wgpu / 与当前框架一致的 `wgpu 29.0.4` | WGSL | 后续方案，未实现、未实机验证；X11 与 Wayland 分别验收 |
 
-上述版本来自锁定的 GPUI pre 0.3.7 源码；移植时重新核对依赖基线，不采用浮动最新版本。独立三角形实验的 `wgpu 30.0.1` 与 Linux 框架类型分开管理。
+上述版本来自锁定的 GPUI pre 0.3.7 源码；移植时重新核对依赖基线，不采用浮动最新版本。独立三角形实验的 `wgpu 30.0.1` 依赖已移除；Cargo.lock 中框架的 Linux 传递依赖按目标平台保留，不进入 Windows 渲染路径。
 
 **当前执行边界：只编写和构建 Windows 应用、D3D11 后端及 HLSL，只做 Windows GPU、DPI、驱动和发布包验收。** macOS/Linux 本阶段只记录接口需求和后续任务，不新增平台实现、shader 或占位后端；Windows 发布不等待这两端。已有共享核心代码的多平台无窗口测试可以保留。
 
@@ -350,7 +376,7 @@ crates/pomelo-render/src/
 │   ├── d3d11/             # 当前 Windows：分拆管线、缓存、合成与硬件诊断
 │   ├── metal.rs           # 后续 macOS：Metal 资源与编码绘制
 │   └── wgpu.rs            # 后续 Linux：wgpu 资源与编码绘制
-├── text/                  # 共享板文字布局、字体与笔画实例
+├── text/                  # 共享 MSDF 板文字布局、字体、标签与字形实例
 └── shaders/
     ├── pcb.hlsl           # 当前 Windows
     ├── trace.hlsl / copper.hlsl / pad.hlsl / text.hlsl
@@ -358,7 +384,7 @@ crates/pomelo-render/src/
     └── pcb.wgsl           # 后续 Linux
 ```
 
-`pcb.hlsl` 保留三种图元实验；正式业务管线按走线、铜皮、焊盘及文字拆分 HLSL，统一放在 `shaders/`。目录约定不要求把所有业务塞进单个 `d3d11.rs` 或 `pcb.hlsl`。已有 `triangle.rs` 与 `shaders/triangle.wgsl` 是独立 wgpu 验证，不代表 Linux 产品后端已实现。相机数学与选择语义仍由 `pomelo-core/interaction` 提供，`scene/` 消费这些契约并准备绘制数据。
+`pcb.hlsl` 保留三种图元实验；正式业务管线按走线、铜皮、焊盘及文字拆分 HLSL，统一放在 `shaders/`。目录约定不要求把所有业务塞进单个 `d3d11.rs` 或 `pcb.hlsl`。独立 `triangle.rs`、`shaders/triangle.wgsl` 和回读模式已移除；历史三角形记录不代表 Linux 产品后端已实现。相机数学与选择语义仍由 `pomelo-core/interaction` 提供，`scene/` 消费这些契约并准备绘制数据。
 
 职责与接口约束：
 
@@ -456,6 +482,8 @@ Windows 产品渲染沿用这条同设备调用链。资源准备、批次缓存
 布局初始建议：默认窗口约 `100rem × 64rem`，最低可用窗口约 `72rem × 48rem`；左面板最小/默认/最大 `14rem / 18rem / 26rem`，右面板 `18rem / 21rem / 30rem`，中央视口优先保证约 `32rem` 宽。以上是待实机验证的 token 初值，不是截图像素硬编码。
 
 窗口变窄时先折叠右检查器，再压缩左面板与工具栏标签；所有功能保留菜单或快捷键入口。分隔条可调整并持久化，恢复值按当前窗口和字体缩放夹取。各面板独立滚动，画布不随侧栏滚动。
+
+2026-10-04 按新增需求实现左右独立手动收缩：标题靠画布处放标准图标按钮，收起后保留 `2.5rem` 窄栏与展开入口；Ctrl+B / Ctrl+Shift+B 和视图菜单提供同一命令。Workbench 拥有共享 `PanelLayout`，各文档保留独立内容状态；版本 1 `panels.json` 保存收起状态和展开宽度，搜索命令先展开左栏再聚焦输入。当前 Windows 默认窗口 1440×920、最低 1000×650；左栏 200/256/440、右栏 240/288/440 逻辑像素，恢复按窗口夹取并至少保留 360 像素画布。实窗验证包括双侧收起、宽度/选择重开恢复、多标签、五语名称、深浅主题、键盘及最终 Release 最低尺寸最大宽度恢复，见[面板验证](panel-collapse-validation.md)。前述 rem 数值保留为设计初值；进一步自动响应布局、多 DPI 与多显示器仍单独待验，不以手动收缩替代整个桌面体验验收。
 
 Windows 原生标题栏、拖拽、最大化和系统窗口行为优先。设计稿自绘标题栏须经过系统交互验证；若所锁定框架不能可靠支持，允许使用系统标题栏并记录视觉差异。不要为了像素相似破坏窗口基本操作。
 

@@ -19,15 +19,18 @@ pomelo-core = { path = "crates/pomelo-core" }
 pomelo-import = { path = "crates/pomelo-import" }
 pomelo-render = { path = "crates/pomelo-render" }
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 thiserror = "2.0"
 anyhow = "1.0"
 encoding_rs = "0.8"
 earcut = "=0.4.11"
+libm = "=0.2.16"
+icu_collator = { version = "=2.1.1", default-features = false, features = ["serde"] }
+icu_locale_core = "=2.3.0"
+icu_provider_blob = { version = "=2.1.1", features = ["alloc"] }
+icu_provider = { version = "=2.3.1", default-features = false, features = ["sync"] }
 sha2 = "0.10"
 gpui-kit = "=0.7.0"
-wgpu = "=30.0.1"
-pollster = "0.4"
 rust-i18n = "=4.2.4"
 sys-locale = "0.3"
 dirs = "6"
@@ -35,6 +38,9 @@ tempfile = "3"
 serde-saphyr = "1.3"
 syn = { version = "2", features = ["full", "visit"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+base64 = "=0.22.1"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+futures = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

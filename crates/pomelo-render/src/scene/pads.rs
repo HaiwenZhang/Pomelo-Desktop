@@ -1,6 +1,7 @@
 //! Immutable pad placement data; custom contours retain their own geometry contract.
 
 use crate::{split_position, tracks::PrepareError};
+mod outlines;
 use pomelo_core::{
     model::{Bounds, NetId, ObjectId, Pad, Pin, Point, Via},
     pad::PadPlacement,
@@ -45,8 +46,12 @@ pub struct PreparedPads {
     pub custom: Vec<CustomPadInstance>,
     pub batches: Vec<PadBatch>,
     pub custom_mesh: Option<std::sync::Arc<crate::copper::PreparedCopper>>,
+    /// Exact custom boundaries; shared by non-filled and selection/hover passes.
+    pub custom_outlines: Option<std::sync::Arc<crate::tracks::PreparedTracks>>,
     /// Via owner index -> sorted source pad layers, populated only for drill geometry.
     pub drill_scopes: Option<std::sync::Arc<Vec<Vec<pomelo_core::model::LayerId>>>>,
+    /// Via owner index -> cut layers, populated only for independent backdrill patterns.
+    pub backdrill_scopes: Option<std::sync::Arc<Vec<Vec<pomelo_core::model::LayerId>>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -204,11 +209,10 @@ impl PreparedPads {
         }
         let mut analytic_count = 0usize;
         let mut custom_count = 0usize;
-        for pad in pins
-            .iter()
-            .flat_map(|pin| &pin.pads)
-            .chain(vias.iter().flat_map(|via| via.pads.iter()))
-        {
+        for pad in pins.iter().flat_map(|pin| &pin.pads).chain(
+            vias.iter()
+                .flat_map(|via| via.pads.iter().filter(|pad| !pad.backdrill)),
+        ) {
             if cancellation.is_cancelled() {
                 return Err(PrepareError::Cancelled);
             }
@@ -254,7 +258,9 @@ impl PreparedPads {
             custom: Vec::new(),
             batches: Vec::new(),
             custom_mesh: None,
+            custom_outlines: None,
             drill_scopes: None,
+            backdrill_scopes: None,
         };
         output
             .analytic
@@ -305,6 +311,10 @@ impl PreparedPads {
             for (pad_index, pad) in pads.iter().enumerate() {
                 if cancellation.is_cancelled() {
                     return Err(PrepareError::Cancelled);
+                }
+                // The display marker is submitted once in the global drill pass.
+                if category == 1 && pad.backdrill {
+                    continue;
                 }
                 if let Some(custom) = &pad.custom {
                     if custom.contours.is_empty()
@@ -411,6 +421,15 @@ impl PreparedPads {
                     count: 1,
                 });
             }
+        }
+        if !output.custom.is_empty() {
+            output.custom_outlines = Some(std::sync::Arc::new(output.build_custom_outlines(
+                crate::tracks::TraceLimits {
+                    max_bytes: limits.max_bytes.saturating_sub(bytes),
+                    ..crate::tracks::TraceLimits::default()
+                },
+                cancellation,
+            )?));
         }
         Ok(output)
     }

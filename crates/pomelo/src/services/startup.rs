@@ -16,7 +16,7 @@ pub struct Startup {
 
 impl Startup {
     /// Resolve an explicit locale even when another argument prevents startup.
-    pub fn diagnostic_locale(args: &[OsString]) -> Locale {
+    pub fn diagnostic_locale(args: &[OsString], fallback: Locale) -> Locale {
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             if arg == "--" {
@@ -33,7 +33,7 @@ impl Startup {
                 return locale;
             }
         }
-        Locale::English
+        fallback
     }
 
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, Diagnostic> {
@@ -111,7 +111,7 @@ mod tests {
     fn startup_error_locale_respects_option_values_and_separator() {
         for locale in Locale::ALL {
             let args = ["--unknown", "--locale", locale.tag()].map(OsString::from);
-            assert_eq!(Startup::diagnostic_locale(&args), locale);
+            assert_eq!(Startup::diagnostic_locale(&args, Locale::English), locale);
         }
         for args in [
             vec!["--", "--locale", "ja"],
@@ -120,10 +120,24 @@ mod tests {
         ] {
             assert_eq!(
                 Startup::diagnostic_locale(
-                    &args.into_iter().map(OsString::from).collect::<Vec<_>>()
+                    &args.into_iter().map(OsString::from).collect::<Vec<_>>(),
+                    Locale::English,
                 ),
                 Locale::English
             );
+        }
+    }
+    #[test]
+    fn startup_error_uses_saved_or_system_locale_without_valid_override() {
+        for fallback in Locale::ALL {
+            for args in [
+                vec!["--unknown"],
+                vec!["--locale", "unknown"],
+                vec!["--", "--locale", "ja"],
+            ] {
+                let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+                assert_eq!(Startup::diagnostic_locale(&args, fallback), fallback);
+            }
         }
     }
     #[test]

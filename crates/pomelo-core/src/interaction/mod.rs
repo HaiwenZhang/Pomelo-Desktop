@@ -1,8 +1,10 @@
 //! Board camera uses viewport-local logical pixels. DPI belongs to the host.
+pub mod component_reference;
 pub mod picking;
 pub mod picking_index;
 pub mod selection;
 pub(crate) mod selection_bounds;
+pub(crate) mod spatial;
 pub(crate) mod zone_index;
 
 use crate::model::{Bounds, Point};
@@ -104,6 +106,30 @@ impl Camera {
         true
     }
 
+    /// Fit the board in its logical canvas, with the Web viewer's 86% occupancy.
+    /// Desktop panels sit outside this canvas, so no overlay insets are needed.
+    pub fn fit_board(&mut self, bounds: Bounds, width: f64, height: f64) -> bool {
+        if !bounds.is_valid()
+            || ![width, height]
+                .into_iter()
+                .all(|n| n.is_finite() && n > 0.0)
+        {
+            return false;
+        }
+        let next = Self {
+            center: bounds.center(),
+            pixels_per_mm: (width.max(1.0) / (bounds.max.x - bounds.min.x).max(0.001))
+                .min(height.max(1.0) / (bounds.max.y - bounds.min.y).max(0.001))
+                * 0.86,
+            flipped: self.flipped,
+        };
+        if !next.is_renderable() {
+            return false;
+        }
+        *self = next;
+        true
+    }
+
     pub fn board_to_view(self, point: Point, width: f64, height: f64) -> Point {
         let sign = if self.flipped { -1.0 } else { 1.0 };
         Point::new(
@@ -136,7 +162,7 @@ impl Camera {
         }
         let before = self.view_to_board(anchor, width, height);
         let mut next = *self;
-        next.pixels_per_mm = (self.pixels_per_mm * factor).clamp(1e-3, 1e7);
+        next.pixels_per_mm = (self.pixels_per_mm * factor).clamp(0.01, 1e7);
         let after = next.view_to_board(anchor, width, height);
         next.center.x += before.x - after.x;
         next.center.y += before.y - after.y;
@@ -174,7 +200,8 @@ impl Camera {
 pub struct ViewportNavigation {
     camera: Camera,
     size: Point,
-    manual: bool,
+    initialized: bool,
+    fit_scale: f64,
 }
 
 impl ViewportNavigation {
@@ -184,7 +211,7 @@ impl ViewportNavigation {
             return false;
         }
         self.camera = camera;
-        self.manual = true;
+        self.initialized = true;
         true
     }
 
@@ -193,63 +220,71 @@ impl ViewportNavigation {
     }
     /// A restored/manual camera is meaningful even before its first layout.
     pub fn has_view(&self) -> bool {
-        self.manual || (self.size.x > 0.0 && self.size.y > 0.0)
+        self.initialized || (self.size.x > 0.0 && self.size.y > 0.0)
     }
     pub fn size(&self) -> Point {
         self.size
     }
 
-    /// Fit on initial layout and resize until the user navigates manually.
+    /// Zoom relative to the latest explicit fit; view changes do not reset it.
+    pub fn zoom_percent(&self) -> f64 {
+        self.camera.pixels_per_mm
+            / if self.fit_scale > 0.0 {
+                self.fit_scale
+            } else {
+                10.0
+            }
+            * 100.0
+    }
+
+    /// Fit only on first layout. Resizing preserves the current camera, as on Web.
     pub fn resize(&mut self, bounds: Bounds, width: f64, height: f64) -> bool {
         if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
             return false;
         }
-        if !self.manual
-            && !self
-                .camera
-                .fit(bounds, width, height, width.min(height) * 0.04)
-        {
-            return false;
+        if !self.initialized || self.fit_scale == 0.0 {
+            let mut fitted = self.camera;
+            if !fitted.fit_board(bounds, width, height) {
+                return false;
+            }
+            if !self.initialized {
+                self.camera = fitted;
+            }
+            self.fit_scale = fitted.pixels_per_mm;
+            self.initialized = true;
         }
         self.size = Point::new(width, height);
         true
     }
 
     pub fn fit(&mut self, bounds: Bounds) -> bool {
-        if !self.camera.fit(
-            bounds,
-            self.size.x,
-            self.size.y,
-            self.size.x.min(self.size.y) * 0.04,
-        ) {
+        if !self.camera.fit_board(bounds, self.size.x, self.size.y) {
             return false;
         }
-        self.manual = false;
+        self.fit_scale = self.camera.pixels_per_mm;
+        self.initialized = true;
         true
     }
 
-    /// Locate a query result without enabling resize-to-board auto-fit.
-    /// A minimum source-space span keeps point-like results at a useful scale.
-    pub fn locate(&mut self, bounds: Bounds, minimum_span_mm: f64) -> bool {
-        if !bounds.is_valid() || !minimum_span_mm.is_finite() || minimum_span_mm <= 0.0 {
+    /// Locate a query result with the Web focus rule: 3 mm minimum span,
+    /// 72% occupancy and at most 288 logical pixels/mm. Keep the fit baseline.
+    pub fn locate(&mut self, bounds: Bounds) -> bool {
+        if !bounds.is_valid() || self.size.x <= 0.0 || self.size.y <= 0.0 {
             return false;
         }
-        let center = bounds.center();
-        let half_width = ((bounds.max.x - bounds.min.x) * 0.5).max(minimum_span_mm * 0.5);
-        let half_height = ((bounds.max.y - bounds.min.y) * 0.5).max(minimum_span_mm * 0.5);
-        let target = Bounds {
-            min: Point::new(center.x - half_width, center.y - half_height),
-            max: Point::new(center.x + half_width, center.y + half_height),
+        let next = Camera {
+            center: bounds.center(),
+            pixels_per_mm: 400_f64
+                .min(self.size.x.max(1.0) / (bounds.max.x - bounds.min.x).max(3.0))
+                .min(self.size.y.max(1.0) / (bounds.max.y - bounds.min.y).max(3.0))
+                * 0.72,
+            flipped: self.camera.flipped,
         };
-        if !self.camera.fit(
-            target,
-            self.size.x,
-            self.size.y,
-            self.size.x.min(self.size.y) * 0.08,
-        ) {
+        if !next.is_renderable() {
             return false;
         }
-        self.manual = true;
+        self.camera = next;
+        self.initialized = true;
         true
     }
 
@@ -260,7 +295,7 @@ impl ViewportNavigation {
         {
             return false;
         }
-        self.manual = true;
+        self.initialized = true;
         true
     }
 
@@ -268,7 +303,7 @@ impl ViewportNavigation {
         if self.size.x <= 0.0 || self.size.y <= 0.0 || !self.camera.pan(delta) {
             return false;
         }
-        self.manual = true;
+        self.initialized = true;
         true
     }
 
@@ -391,15 +426,18 @@ mod tests {
         let mut nav = ViewportNavigation::default();
         assert!(nav.resize(board, 800.0, 600.0));
         nav.flip();
-        assert!(nav.locate(target, 2.0));
+        assert!(nav.locate(target));
         let camera = nav.camera();
         assert_eq!(camera.center, target.center());
         assert!(camera.flipped);
-        assert!((camera.pixels_per_mm - 252.0).abs() < 1e-12);
+        assert!((camera.pixels_per_mm - 144.0).abs() < 1e-12);
         assert!(nav.resize(board, 400.0, 300.0));
         assert_eq!(nav.camera().center, camera.center);
         assert_eq!(nav.camera().pixels_per_mm, camera.pixels_per_mm);
-        assert!(!nav.locate(target, f64::NAN));
+        assert!(!nav.locate(Bounds {
+            min: Point::new(f64::NAN, 0.0),
+            ..target
+        }));
         assert_eq!(nav.camera().center, camera.center);
         assert!(nav.fit(board));
         assert_eq!(nav.camera().center, board.center());
@@ -453,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_preserves_manual_view_on_resize_and_fit_restores_auto_fit() {
+    fn navigation_preserves_view_on_resize_and_only_explicit_fit_changes_scale() {
         let bounds = Bounds {
             min: Point::default(),
             max: Point::new(20.0, 10.0),
@@ -470,7 +508,9 @@ mod tests {
         assert_eq!(nav.camera().center, bounds.center());
         assert!(nav.camera().flipped);
         assert!(nav.resize(bounds, 800.0, 600.0));
-        assert!((nav.camera().pixels_per_mm - 37.6).abs() < 1e-12);
+        assert!((nav.camera().pixels_per_mm - 17.2).abs() < 1e-12);
+        assert!(nav.fit(bounds));
+        assert!((nav.camera().pixels_per_mm - 34.4).abs() < 1e-12);
     }
 
     #[test]

@@ -33,10 +33,25 @@ struct Chunk {
 // Implementations below expose only padding-free, initialized GPU ABI structs.
 pub trait InstanceSource: Send + Sync + 'static {
     const COMPACT_TEXT: bool;
+    const MSDF: bool = false;
     type Instance: Send + Sync;
     fn instances(&self) -> &[Self::Instance];
     fn batches(&self) -> &[crate::tracks::TraceBatch];
     fn selection_ids(&self, index: usize) -> [u32; 4];
+    fn font(&self) -> Option<&crate::text::msdf::MsdfFont> {
+        None
+    }
+    fn atlas_page(&self, _: usize) -> u16 {
+        0
+    }
+    fn label_category(&self, _: usize) -> u32 {
+        u32::MAX
+    }
+    fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
+        pomelo_core::selection::SelectedObject::Segment(pomelo_core::model::ObjectId(
+            self.selection_ids(index)[0],
+        ))
+    }
 }
 impl InstanceSource for PreparedTracks {
     const COMPACT_TEXT: bool = false;
@@ -49,6 +64,21 @@ impl InstanceSource for PreparedTracks {
     }
     fn selection_ids(&self, index: usize) -> [u32; 4] {
         self.instances[index].ids
+    }
+    fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
+        let instance = &self.instances[index];
+        let id = pomelo_core::model::ObjectId(instance.ids[0]);
+        if instance.flags[3] & 64 != 0 {
+            pomelo_core::selection::SelectedObject::Drawing(id)
+        } else if instance.flags[3] & 8 != 0 {
+            pomelo_core::selection::SelectedObject::Zone(id)
+        } else if instance.flags[3] & 16 != 0 {
+            pomelo_core::selection::SelectedObject::Pin(id)
+        } else if instance.flags[3] & 32 != 0 {
+            pomelo_core::selection::SelectedObject::Via(id)
+        } else {
+            pomelo_core::selection::SelectedObject::Segment(id)
+        }
     }
 }
 impl InstanceSource for crate::text_instances::PreparedTextInstances {
@@ -67,6 +97,40 @@ impl InstanceSource for crate::text_instances::PreparedTextInstances {
             self.instances[index].ids[1],
             0,
         ]
+    }
+}
+
+impl InstanceSource for crate::text::msdf::PreparedGlyphs {
+    const COMPACT_TEXT: bool = false;
+    const MSDF: bool = true;
+    type Instance = crate::text::msdf::GlyphInstance;
+    fn instances(&self) -> &[Self::Instance] {
+        &self.instances
+    }
+    fn batches(&self) -> &[crate::tracks::TraceBatch] {
+        &self.batches
+    }
+    fn selection_ids(&self, index: usize) -> [u32; 4] {
+        let ids = self.instances[index].ids;
+        [ids[0], 0, ids[2], ids[3]]
+    }
+    fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
+        pomelo_core::selection::SelectedObject::Drawing(pomelo_core::model::ObjectId(
+            if self.instances[index].low[2] == 1.0 {
+                self.instances[index].ids[0]
+            } else {
+                u32::MAX
+            },
+        ))
+    }
+    fn font(&self) -> Option<&crate::text::msdf::MsdfFont> {
+        Some(&self.font)
+    }
+    fn atlas_page(&self, index: usize) -> u16 {
+        self.instances[index].page()
+    }
+    fn label_category(&self, index: usize) -> u32 {
+        self.instances[index].ids[1]
     }
 }
 
@@ -188,9 +252,22 @@ pub(super) struct Pipeline {
     uniforms: ID3D11Buffer,
     blend: ID3D11BlendState,
     rasterizer: ID3D11RasterizerState,
+    atlas: Option<super::msdf_d3d11::AtlasResources>,
 }
 
 impl Pipeline {
+    pub fn new_msdf(
+        device: &ID3D11Device,
+        font: &crate::text::msdf::MsdfFont,
+    ) -> anyhow::Result<Self> {
+        let mut pipeline = Self::new_with_source(
+            device,
+            include_str!("../../shaders/label.hlsl"),
+            s!("pomelo-render/label.hlsl"),
+        )?;
+        pipeline.atlas = Some(super::msdf_d3d11::AtlasResources::new(device, font)?);
+        Ok(pipeline)
+    }
     pub fn new(device: &ID3D11Device) -> anyhow::Result<Self> {
         Self::new_with_source(
             device,
@@ -270,6 +347,7 @@ impl Pipeline {
             )?;
         }
         Ok(Self {
+            atlas: None,
             vertex: vertex.context("GPU_TRACE_VERTEX_MISSING")?,
             fragment: fragment.context("GPU_TRACE_FRAGMENT_MISSING")?,
             uniforms: uniforms.context("GPU_TRACE_UNIFORMS_MISSING")?,
@@ -343,7 +421,12 @@ impl Pipeline {
                 }),
         };
         let mut uniforms = Uniforms {
-            viewport: [context.viewport[0], context.viewport[1], 0.0, 0.0],
+            viewport: [
+                context.viewport[0],
+                context.viewport[1],
+                frame.scale_factor,
+                f32::from(u8::from(frame.filled)),
+            ],
             canvas: [bounds.origin.x.0, bounds.origin.y.0, width, height],
             clip: [
                 clip.origin.x.0,
@@ -356,7 +439,7 @@ impl Pipeline {
                 camera.pixels_per_mm as f32,
                 if camera.flipped { -1.0 } else { 1.0 },
                 0.0,
-                0.0,
+                frame.pass as u8 as f32,
             ],
             color: frame.fallback_color,
             batch: [0, selection_id, selection_kind, 0],
@@ -384,6 +467,8 @@ impl Pipeline {
                         !batch.outline && batch.layer == layer
                     }
                     super::board::TraceScope::Outline => batch.outline,
+                    super::board::TraceScope::Labels(layer, _, _) => batch.layer == layer,
+                    super::board::TraceScope::Pads(layer, _) => batch.layer == layer,
                 };
                 if !selected {
                     continue;
@@ -407,16 +492,29 @@ impl Pipeline {
                     let mut cursor = start;
                     while cursor < end {
                         let span_start = cursor;
+                        let accepted = |index: usize| match scope {
+                            super::board::TraceScope::Pads(_, pin) => {
+                                matches!(
+                                    cache.source.selected_object(index),
+                                    pomelo_core::selection::SelectedObject::Pin(_)
+                                ) == pin
+                            }
+                            super::board::TraceScope::Labels(_, category, owner) => {
+                                cache.source.label_category(index) == category as u32
+                                    && owner.is_none_or(|id| {
+                                        cache.source.selection_ids(index)[0] == id.0
+                                    })
+                            }
+                            _ => true,
+                        };
+                        let accept = accepted(cursor);
+                        let page = cache.source.atlas_page(cursor);
                         let selected = |index: usize| {
                             if batch.outline {
                                 return None;
                             }
                             frame.object_highlight(
-                                pomelo_core::selection::SelectedObject::Segment(
-                                    pomelo_core::model::ObjectId(
-                                        cache.source.selection_ids(index)[0],
-                                    ),
-                                ),
+                                cache.source.selected_object(index),
                                 pomelo_core::model::NetId(cache.source.selection_ids(index)[3]),
                                 Some(pomelo_core::model::ObjectId(
                                     cache.source.selection_ids(index)[1],
@@ -425,17 +523,38 @@ impl Pipeline {
                         };
                         let color = selected(cursor);
                         cursor += 1;
-                        if frame.highlighted_related_objects.is_none()
+                        if frame.pass == super::board::OverlayPass::Base
+                            && !S::MSDF
+                            && !matches!(scope, super::board::TraceScope::Pads(_, _))
+                            && frame.highlighted_related_objects.is_none()
                             && frame.highlighted_object.is_none()
                             && frame.hovered_object.is_none()
                         {
                             cursor = end;
                         } else {
-                            while cursor < end && selected(cursor) == color {
+                            while cursor < end
+                                && selected(cursor) == color
+                                && accepted(cursor) == accept
+                                && cache.source.atlas_page(cursor) == page
+                            {
                                 cursor += 1;
                             }
                         }
+                        if !accept {
+                            continue;
+                        }
+                        if frame.pass != super::board::OverlayPass::Base && color.is_none() {
+                            continue;
+                        }
                         uniforms.color = color.unwrap_or(base_color);
+                        // Network colors are computed per instance; object overrides still win.
+                        uniforms.view[2] = f32::from(u8::from(
+                            frame.color_mode == pomelo_core::display::ColorMode::Net
+                                && !batch.outline
+                                && !S::COMPACT_TEXT
+                                && !S::MSDF
+                                && color.is_none(),
+                        ));
                         uniforms.batch[2] = if color.is_some() { 0 } else { selection_kind };
                         uniforms.batch[0] = (span_start - chunk.start) as u32;
                         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
@@ -453,6 +572,12 @@ impl Pipeline {
                         );
                         ctx.Unmap(&self.uniforms, 0);
                         ctx.VSSetShaderResources(0, Some(&[Some(chunk.view.clone())]));
+                        if let Some(atlas) = &self.atlas {
+                            let resource =
+                                atlas.pages.get(&page).context("GPU_MSDF_PAGE_MISSING")?;
+                            ctx.PSSetShaderResources(0, Some(&[Some(resource.clone())]));
+                            ctx.PSSetSamplers(0, Some(&[Some(atlas.sampler.clone())]));
+                        }
                         // Explicit shader offset avoids relying on StartInstanceLocation for an SRV.
                         ctx.DrawInstanced(4, (cursor - span_start) as u32, 0, 0);
                         draws += 1;
@@ -460,6 +585,10 @@ impl Pipeline {
                 }
             }
             ctx.VSSetShaderResources(0, Some(&[None]));
+            if self.atlas.is_some() {
+                ctx.PSSetShaderResources(0, Some(&[None]));
+                ctx.PSSetSamplers(0, Some(&[None]));
+            }
         }
         Ok(draws)
     }
@@ -481,6 +610,12 @@ mod tests {
         let source = include_str!("../../shaders/trace.hlsl");
         compile_shader(source, s!("trace.hlsl"), s!("trace_vertex"), s!("vs_5_0")).unwrap();
         compile_shader(source, s!("trace.hlsl"), s!("trace_fragment"), s!("ps_5_0")).unwrap();
+    }
+    #[test]
+    fn web_msdf_label_shader_compiles_for_both_d3d11_stages() {
+        let source = include_str!("../../shaders/label.hlsl");
+        compile_shader(source, s!("label.hlsl"), s!("trace_vertex"), s!("vs_5_0")).unwrap();
+        compile_shader(source, s!("label.hlsl"), s!("trace_fragment"), s!("ps_5_0")).unwrap();
     }
 }
 

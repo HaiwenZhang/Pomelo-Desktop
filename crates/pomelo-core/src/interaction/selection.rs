@@ -1,5 +1,6 @@
 //! Domain selection predicates shared by picking, search and GPU overlays.
 
+use crate::interaction::component_reference::ComponentAnchor;
 use crate::model::{BoardScene, NetId, ObjectId, Pin, Segment, Via, Zone};
 use crate::{geometry::PathError, task::CancellationToken};
 use std::collections::BTreeSet;
@@ -10,6 +11,7 @@ pub struct SelectionSummary {
     pub pins: usize,
     pub vias: usize,
     pub zones: usize,
+    pub drawings: usize,
     /// Sum of selected 2D centerlines; excludes drill depth and electrical delay.
     pub centerline_length_mm: f64,
 }
@@ -30,6 +32,7 @@ pub enum SelectedObject {
     Pin(ObjectId),
     Via(ObjectId),
     Zone(ObjectId),
+    Drawing(ObjectId),
 }
 
 impl SelectedObject {
@@ -63,6 +66,10 @@ impl SelectedObject {
             }
         }
         let (net, track, pin) = match self {
+            Self::Drawing(id) => {
+                find(&scene.drawings, id, |value| value.id, cancel)?;
+                (NetId(0), None, None)
+            }
             Self::Segment(id) => {
                 let value = find(&scene.segments, id, |value| value.id, cancel)?;
                 (
@@ -131,6 +138,8 @@ pub enum SelectionTarget {
     Track(ObjectId),
     Net(NetId),
     Component(ObjectId),
+    /// UI reference grouping; original footprint placement IDs remain independent.
+    ComponentGroup(ComponentAnchor),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -169,6 +178,7 @@ pub fn resolve_candidates(
                 | SelectedObject::Pin(id)
                 | SelectedObject::Via(id)
                 | SelectedObject::Zone(id) => id,
+                SelectedObject::Drawing(id) => id,
             };
             return Err(PathError::Invalid(id));
         }
@@ -199,11 +209,165 @@ impl From<crate::search::SearchTarget> for SelectionTarget {
         match value {
             crate::search::SearchTarget::Net(id) => Self::Net(id),
             crate::search::SearchTarget::Component(id) => Self::Component(id),
+            crate::search::SearchTarget::ComponentGroup(anchor) => Self::ComponentGroup(anchor),
         }
     }
 }
 
+/// Canvas mode expansion follows the Web viewer: unsupported track/component
+/// relationships and unconnected nets retain the picked object as the anchor.
+pub fn resolve_canvas_candidates(
+    scene: &BoardScene,
+    hits: &[crate::picking::ObjectHit],
+    mode: crate::interaction::SelectionMode,
+    limit: usize,
+    cancel: &CancellationToken,
+) -> Result<Vec<SelectionCandidate>, PathError> {
+    let mut candidates = Vec::new();
+    for hit in hits {
+        if cancel.is_cancelled() {
+            return Err(PathError::Cancelled);
+        }
+        if candidates.len() >= limit.min(64) {
+            break;
+        }
+        let mut target = if mode == crate::interaction::SelectionMode::Component {
+            ComponentAnchor::from_object(hit.object, scene, cancel)?
+                .map(SelectionTarget::ComponentGroup)
+                .unwrap_or(SelectionTarget::Object(hit.object))
+        } else {
+            hit.object
+                .resolve(scene, mode, cancel)?
+                .unwrap_or(SelectionTarget::Object(hit.object))
+        };
+        if let SelectionTarget::Component(id) = target
+            && scene
+                .components
+                .iter()
+                .any(|component| component.id == id && component.reference.is_empty())
+        {
+            target = SelectionTarget::Object(hit.object);
+        }
+        if !candidates
+            .iter()
+            .any(|candidate: &SelectionCandidate| candidate.target == target)
+        {
+            candidates.push(SelectionCandidate {
+                target,
+                object: hit.object,
+                distance_mm: hit.distance_mm,
+            });
+        }
+    }
+    if cancel.is_cancelled() {
+        return Err(PathError::Cancelled);
+    }
+    Ok(candidates)
+}
+
 impl SelectionTarget {
+    /// Upgrade a retained placement selection to the current interactive reference
+    /// group without changing source placement IDs or the persisted file format.
+    pub fn canonical_reference(
+        self,
+        scene: &BoardScene,
+        cancel: &CancellationToken,
+    ) -> Result<Self, PathError> {
+        if cancel.is_cancelled() {
+            return Err(PathError::Cancelled);
+        }
+        let anchor = match self {
+            Self::ComponentGroup(anchor) => {
+                ComponentAnchor::from_object(anchor.object(), scene, cancel)?
+            }
+            Self::Component(id) => {
+                let mut reference = None;
+                for component in &scene.components {
+                    if cancel.is_cancelled() {
+                        return Err(PathError::Cancelled);
+                    }
+                    if component.id == id {
+                        reference = Some(component.reference.as_str());
+                        break;
+                    }
+                }
+                match reference {
+                    Some(reference) => ComponentAnchor::for_reference(reference, scene, cancel)?,
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        Ok(anchor.map(Self::ComponentGroup).unwrap_or(self))
+    }
+
+    /// Full pin selection for GPU overlays; paging never limits highlighted pins.
+    pub fn pin_ids(
+        self,
+        scene: &BoardScene,
+        cancel: &CancellationToken,
+    ) -> Result<BTreeSet<ObjectId>, PathError> {
+        let mut pins = BTreeSet::new();
+        match self {
+            Self::ComponentGroup(anchor) => anchor.visit_members(scene, cancel, |object| {
+                if let SelectedObject::Pin(id) = object {
+                    pins.insert(id);
+                }
+            })?,
+            Self::Component(id) => {
+                for component in &scene.components {
+                    if cancel.is_cancelled() {
+                        return Err(PathError::Cancelled);
+                    }
+                    if component.id == id {
+                        for &pin in &component.pins {
+                            if cancel.is_cancelled() {
+                                return Err(PathError::Cancelled);
+                            }
+                            pins.insert(pin);
+                        }
+                        break;
+                    }
+                }
+            }
+            Self::Object(SelectedObject::Pin(id)) => {
+                pins.insert(id);
+            }
+            _ => {}
+        }
+        if cancel.is_cancelled() {
+            Err(PathError::Cancelled)
+        } else {
+            Ok(pins)
+        }
+    }
+
+    /// Full reference group for hover. Legacy placement links remain available.
+    pub fn component_objects(
+        self,
+        scene: &BoardScene,
+        cancel: &CancellationToken,
+    ) -> Result<BTreeSet<SelectedObject>, PathError> {
+        let mut objects = BTreeSet::new();
+        if let Self::ComponentGroup(anchor) = self {
+            anchor.visit_members(scene, cancel, |object| {
+                objects.insert(object);
+            })?;
+        } else if matches!(self, Self::Component(_)) {
+            objects.extend(
+                self.pin_ids(scene, cancel)?
+                    .into_iter()
+                    .map(SelectedObject::Pin),
+            );
+            objects.extend(self.related_bond_objects(scene, cancel)?);
+        }
+        if cancel.is_cancelled() {
+            Err(PathError::Cancelled)
+        } else {
+            Ok(objects)
+        }
+    }
+
     /// Revalidate persisted typed identity before restoring selection work.
     pub fn exists(self, scene: &BoardScene, cancel: &CancellationToken) -> Result<bool, PathError> {
         fn contains(
@@ -225,6 +389,9 @@ impl SelectionTarget {
             return Err(PathError::Cancelled);
         }
         let exists = match self {
+            Self::Object(SelectedObject::Drawing(id)) => {
+                contains(scene.drawings.iter().map(|item| item.id), id, cancel)?
+            }
             Self::Object(SelectedObject::Segment(id)) => {
                 contains(scene.segments.iter().map(|item| item.id), id, cancel)?
             }
@@ -243,6 +410,7 @@ impl SelectionTarget {
             Self::Component(id) => {
                 contains(scene.components.iter().map(|item| item.id), id, cancel)?
             }
+            Self::ComponentGroup(anchor) => anchor.reference(scene, cancel)?.is_some(),
             Self::Net(id) => scene.nets.contains_key(&id),
         };
         if cancel.is_cancelled() {
@@ -252,13 +420,23 @@ impl SelectionTarget {
         }
     }
 
-    /// Explicit bond-wire/finger links through the component's source pins.
+    /// Reference groups return their fingers; source placements use explicit
+    /// bond-wire/finger links through their source pins.
     /// This does not infer physical connectivity or add ordinary net members.
     pub fn related_bond_objects(
         self,
         scene: &BoardScene,
         cancel: &CancellationToken,
     ) -> Result<Vec<SelectedObject>, PathError> {
+        if let Self::ComponentGroup(anchor) = self {
+            let mut fingers = Vec::new();
+            anchor.visit_members(scene, cancel, |object| {
+                if matches!(object, SelectedObject::Via(_)) {
+                    fingers.push(object);
+                }
+            })?;
+            return Ok(fingers);
+        }
         self.members(scene, 0, cancel)?;
         let Self::Component(id) = self else {
             return Ok(Vec::new());
@@ -334,6 +512,20 @@ impl SelectionTarget {
     ) -> Result<SelectionMembers, PathError> {
         if cancel.is_cancelled() {
             return Err(PathError::Cancelled);
+        }
+        if let Self::ComponentGroup(anchor) = self {
+            let mut result = SelectionMembers {
+                objects: Vec::new(),
+                total: 0,
+            };
+            anchor.visit_members(scene, cancel, |object| {
+                let position = result.total;
+                result.total += 1;
+                if position >= offset && result.objects.len() < limit.min(256) {
+                    result.objects.push(object);
+                }
+            })?;
+            return Ok(result);
         }
         let mut component_pins = if let Self::Component(id) = self {
             let mut pins = BTreeSet::new();
@@ -414,6 +606,14 @@ impl SelectionTarget {
                 append(SelectedObject::Zone(zone.id));
             }
         }
+        for drawing in &scene.drawings {
+            if cancel.is_cancelled() {
+                return Err(PathError::Cancelled);
+            }
+            if self == Self::Object(SelectedObject::Drawing(drawing.id)) {
+                append(SelectedObject::Drawing(drawing.id));
+            }
+        }
         if cancel.is_cancelled() {
             Err(PathError::Cancelled)
         } else {
@@ -428,6 +628,15 @@ impl SelectionTarget {
     ) -> Result<SelectionSummary, PathError> {
         if cancel.is_cancelled() {
             return Err(PathError::Cancelled);
+        }
+        if let Self::ComponentGroup(anchor) = self {
+            let mut summary = SelectionSummary::default();
+            anchor.visit_members(scene, cancel, |object| match object {
+                SelectedObject::Pin(_) => summary.pins += 1,
+                SelectedObject::Via(_) => summary.vias += 1,
+                _ => {}
+            })?;
+            return Ok(summary);
         }
         let mut component_pins = if let Self::Component(id) = self {
             let mut pins = BTreeSet::new();
@@ -499,6 +708,13 @@ impl SelectionTarget {
             }
             summary.zones += usize::from(self.matches_zone(zone));
         }
+        for drawing in &scene.drawings {
+            if cancel.is_cancelled() {
+                return Err(PathError::Cancelled);
+            }
+            summary.drawings +=
+                usize::from(self == Self::Object(SelectedObject::Drawing(drawing.id)));
+        }
         if cancel.is_cancelled() {
             Err(PathError::Cancelled)
         } else {
@@ -524,6 +740,11 @@ impl SelectionTarget {
                 .iter()
                 .find(|value| value.id == id)
                 .is_some_and(|component| component.pins.contains(&pin.id)),
+            Self::ComponentGroup(anchor) => anchor
+                .reference(scene, &CancellationToken::default())
+                .ok()
+                .flatten()
+                .is_some_and(|reference| pin.reference == reference),
             _ => false,
         }
     }

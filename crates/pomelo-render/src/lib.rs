@@ -3,7 +3,6 @@
 pub mod backend;
 pub mod scene;
 pub mod text;
-pub mod triangle;
 // Retain the crate's existing public API while implementations live in their
 // architectural modules. New code may use scene::* and text::instances directly.
 pub use scene::{copper, coverage, drills, pads, tracks};

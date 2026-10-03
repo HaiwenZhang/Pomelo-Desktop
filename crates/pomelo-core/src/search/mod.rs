@@ -1,9 +1,15 @@
-//! Locale-independent matching of source names; results retain domain identity.
+//! Source-name matching with explicit Unicode ordering; results retain domain identity.
 
+use icu_collator::Collator;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod collation;
+pub use collation::CollationError;
 
 use crate::{
     geometry::PathError,
+    i18n::Locale,
+    interaction::component_reference::ComponentAnchor,
     model::{BoardScene, Bounds, NetId, ObjectId},
     pad::PadPlacement,
     task::CancellationToken,
@@ -13,6 +19,7 @@ use crate::{
 pub enum SearchTarget {
     Net(NetId),
     Component(ObjectId),
+    ComponentGroup(ComponentAnchor),
 }
 
 impl SearchTarget {
@@ -23,6 +30,9 @@ impl SearchTarget {
         scene: &BoardScene,
         cancel: &CancellationToken,
     ) -> Result<Option<Bounds>, PathError> {
+        if let Self::ComponentGroup(anchor) = self {
+            return crate::selection::SelectionTarget::ComponentGroup(anchor).bounds(scene, cancel);
+        }
         if cancel.is_cancelled() {
             return Err(PathError::Cancelled);
         }
@@ -47,7 +57,7 @@ impl SearchTarget {
         };
         let component = match self {
             Self::Component(id) => scene.components.iter().find(|value| value.id == id),
-            Self::Net(_) => None,
+            Self::Net(_) | Self::ComponentGroup(_) => None,
         };
         if let Some(component) = component {
             include(Bounds::from_points([component.at]), component.id)?;
@@ -77,7 +87,7 @@ impl SearchTarget {
             }
             let selected = match self {
                 Self::Net(net) => pin.net == net,
-                Self::Component(_) => remaining_pins.remove(&pin.id),
+                Self::Component(_) | Self::ComponentGroup(_) => remaining_pins.remove(&pin.id),
             };
             if !selected {
                 continue;
@@ -164,9 +174,11 @@ impl SearchEntry {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SearchIndex {
     entries: Vec<SearchEntry>,
+    collator: Collator,
+    locale: Locale,
 }
 
 impl SearchIndex {
@@ -174,7 +186,10 @@ impl SearchIndex {
         &self.entries
     }
     /// Build before publishing a document; cancellation never publishes a partial index.
-    pub fn build(scene: &BoardScene, cancel: &CancellationToken) -> Option<Self> {
+    pub fn build(
+        scene: &BoardScene,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Self>, CollationError> {
         let mut counts = BTreeMap::new();
         let mut order = Vec::new();
         for net in scene
@@ -186,7 +201,7 @@ impl SearchIndex {
             .chain(scene.zones.iter().map(|value| value.net))
         {
             if cancel.is_cancelled() {
-                return None;
+                return Ok(None);
             }
             if net.0 == 0 {
                 continue;
@@ -200,44 +215,85 @@ impl SearchIndex {
         let mut entries = Vec::new();
         for net in order {
             if cancel.is_cancelled() {
-                return None;
+                return Ok(None);
             }
             entries.push(SearchEntry::new(
                 SearchTarget::Net(net),
                 scene
                     .nets
                     .get(&net)
-                    .filter(|name| !name.trim().is_empty())
                     .cloned()
                     .unwrap_or_else(|| net.0.to_string()),
                 counts[&net],
             ));
         }
-        for component in &scene.components {
+        // UI groups come from actual pins and fingers. Placements retain their
+        // separate source identities even when their references are duplicated.
+        let mut groups = BTreeMap::new();
+        let mut component_entries: Vec<SearchEntry> = Vec::new();
+        for (reference, anchor) in scene
+            .pins
+            .iter()
+            .map(|pin| (pin.reference.as_str(), ComponentAnchor::Pin(pin.id)))
+            .chain(scene.vias.iter().filter_map(|via| {
+                via.finger
+                    .as_ref()
+                    .map(|finger| (finger.reference.as_str(), ComponentAnchor::Finger(via.id)))
+            }))
+        {
             if cancel.is_cancelled() {
-                return None;
+                return Ok(None);
             }
-            if !component.reference.is_empty() {
-                entries.push(SearchEntry::new(
-                    SearchTarget::Component(component.id),
-                    component.reference.clone(),
-                    component.pins.len(),
+            if reference.is_empty() {
+                continue;
+            }
+            let index = *groups.entry(reference).or_insert_with(|| {
+                let index = component_entries.len();
+                component_entries.push(SearchEntry::new(
+                    SearchTarget::ComponentGroup(anchor),
+                    reference.to_owned(),
+                    0,
                 ));
+                index
+            });
+            component_entries[index].count += 1;
+        }
+        for entry in component_entries {
+            if cancel.is_cancelled() {
+                return Ok(None);
             }
+            entries.push(entry);
         }
         if cancel.is_cancelled() {
-            None
+            Ok(None)
         } else {
-            Some(Self::new(entries))
+            Self::new(entries).map(Some)
         }
     }
 
-    pub fn new(entries: Vec<SearchEntry>) -> Self {
-        Self { entries }
+    pub fn new(entries: Vec<SearchEntry>) -> Result<Self, CollationError> {
+        Ok(Self {
+            entries,
+            collator: collation::for_locale(Locale::English)?,
+            locale: Locale::English,
+        })
     }
 
-    /// Exact names precede prefixes, then substring matches. Ties keep source order.
-    /// Unicode lowercase is deterministic across UI locales; source text is unchanged.
+    /// Set the runtime language used for name ordering, independently of UI language.
+    /// Source names and typed targets are preserved; unavailable data is an error.
+    pub fn with_locale(mut self, locale: Locale) -> Result<Self, CollationError> {
+        self.collator = collation::for_locale(locale)?;
+        self.locale = locale;
+        Ok(self)
+    }
+
+    /// The ordering language, frozen when this document index is prepared.
+    pub fn collation_locale(&self) -> Locale {
+        self.locale
+    }
+
+    /// Exact names precede prefixes, then substrings, with Unicode name ordering.
+    /// Collation ties keep source order. Names and matching never use UI translations.
     pub fn find(&self, query: &str, limit: usize) -> Vec<&SearchEntry> {
         self.find_cancellable(query, limit, &CancellationToken::default())
             .unwrap_or_default()
@@ -253,7 +309,7 @@ impl SearchIndex {
         if cancel.is_cancelled() {
             return None;
         }
-        let query = query.trim().to_lowercase();
+        let query = collation::query(query);
         if query.is_empty() || limit == 0 {
             return Some(Vec::new());
         }
@@ -269,7 +325,7 @@ impl SearchIndex {
         let compare = |a: &SearchEntry, b: &SearchEntry| {
             rank(&a.folded)
                 .cmp(&rank(&b.folded))
-                .then_with(|| a.folded.cmp(&b.folded))
+                .then_with(|| self.collator.as_borrowed().compare(&a.folded, &b.folded))
         };
         let mut matches: Vec<&SearchEntry> = Vec::new();
         for entry in &self.entries {
@@ -316,7 +372,8 @@ mod tests {
                     )
                 })
                 .collect(),
-        );
+        )
+        .unwrap();
         let result = index.find("power", 3);
         assert_eq!(
             result.iter().map(|entry| entry.target).collect::<Vec<_>>(),
@@ -339,7 +396,8 @@ mod tests {
             SearchEntry::new(SearchTarget::Component(ObjectId(8)), "vcc".into(), 2),
             SearchEntry::new(SearchTarget::Component(ObjectId(9)), "vcc".into(), 4),
             SearchEntry::new(SearchTarget::Net(NetId(2)), "AVCC".into(), 1),
-        ]);
+        ])
+        .unwrap();
         let targets: Vec<_> = index
             .find(" VcC ", 3)
             .iter()
@@ -363,7 +421,8 @@ mod tests {
             SearchTarget::Net(NetId(4)),
             "電源_전원_A".into(),
             1,
-        )]);
+        )])
+        .unwrap();
         assert_eq!(index.find("전원_a", 20)[0].name, "電源_전원_A");
         assert_eq!(
             index.find("電源", 20)[0].target,

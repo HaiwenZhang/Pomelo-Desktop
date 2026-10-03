@@ -54,6 +54,256 @@ fn scene() -> BoardScene {
 }
 
 #[test]
+fn canvas_backdrill_picking_uses_cut_scope_and_independent_switch_with_base_fallback() {
+    use pomelo_core::{
+        display::{BoardDisplay, LayerPrimitives},
+        model::{Backdrill, BackdrillDefinition, BackdrillSpan, DrillShape, Pad, Via},
+        picking::{PickFilter, PickQuery},
+        picking_index::SegmentIndex,
+        selection::SelectedObject,
+    };
+    let mut board = scene();
+    board.segments.clear();
+    let mut base = Pad::circle(LayerId(1), 8.0);
+    base.backdrill_base = true;
+    let mut marker = base.clone();
+    marker.backdrill_base = false;
+    marker.backdrill = true;
+    board.vias.push(Via {
+        id: ObjectId(42),
+        net: NetId(7),
+        at: Point::default(),
+        drill: 2.0,
+        drill_shape: DrillShape {
+            width: 2.0,
+            height: 2.0,
+            plated: true,
+        },
+        padstack: ObjectId(43),
+        padstack_name: String::new(),
+        start_layer: Some(LayerId(0)),
+        end_layer: Some(LayerId(1)),
+        pads: std::sync::Arc::from([Pad::circle(LayerId(0), 6.0), base, marker]),
+        backdrill: Some(Backdrill {
+            definition: BackdrillDefinition {
+                spans: vec![BackdrillSpan {
+                    start_layer: LayerId(1),
+                    stop_layer: LayerId(1),
+                    protected_layer: LayerId(0),
+                }],
+                display_diameter: 8.0,
+                start_pad_diameter: 8.0,
+                label_diameter: 8.0,
+            },
+            source_reference: ObjectId(44),
+            rotation_degrees: 330.0,
+            mirrored: false,
+        }),
+        stackup_region: None,
+        angle: 0.0,
+        mirrored: false,
+        finger: None,
+    });
+    let cancel = CancellationToken::default();
+    let index = SegmentIndex::build(std::sync::Arc::new(board), 0, &cancel).unwrap();
+    for (back, drill, filled, layer, radius, expected) in [
+        (true, false, true, 1, 0.0, true),
+        (true, false, false, 1, 0.0, true),
+        (true, false, true, 1, 3.5, true),
+        (true, false, false, 1, 3.5, true),
+        (true, false, true, 0, 3.5, false),
+        (true, true, false, 0, 0.0, true),
+        (false, false, true, 1, 3.5, true),
+        (false, false, false, 1, 3.5, false),
+        (false, false, false, 1, 0.0, false),
+        (false, true, false, 1, 0.0, true),
+    ] {
+        let mut display = BoardDisplay {
+            show_backdrills: back,
+            show_drills: drill,
+            filled,
+            ..BoardDisplay::default()
+        };
+        display.hidden_layers.insert(LayerId(1 - layer));
+        let hits = index
+            .query_visible_objects(
+                PickQuery::new(Point::new(radius, 0.0), 0.0).unwrap(),
+                100.0,
+                PickFilter::all(),
+                &display,
+                64,
+                &cancel,
+            )
+            .unwrap();
+        assert_eq!(
+            hits.first().map(|hit| hit.object),
+            expected.then_some(SelectedObject::Via(ObjectId(42))),
+            "back={back} drill={drill} filled={filled} layer={layer} radius={radius}"
+        );
+    }
+    let mut display = BoardDisplay::default();
+    display.hidden_layers.insert(LayerId(0));
+    display.layer_primitives.insert(
+        LayerId(1),
+        LayerPrimitives {
+            vias: false,
+            ..LayerPrimitives::default()
+        },
+    );
+    assert!(
+        index
+            .query_visible_objects(
+                PickQuery::new(Point::default(), 0.0).unwrap(),
+                100.0,
+                PickFilter::all(),
+                &display,
+                64,
+                &cancel
+            )
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn rotated_text_quads_pick_last_source_owner_and_respect_text_visibility() {
+    use pomelo_core::{
+        display::BoardDisplay,
+        interaction::SelectionMode,
+        model::{BoardDrawing, BoardText, TextAlignment},
+        picking::{PickCategory, PickFilter, PickQuery},
+        picking_index::{SegmentIndex, TextPickQuad},
+        selection::{SelectedObject, resolve_canvas_candidates},
+    };
+    let mut board = scene();
+    board.segments.clear();
+    // Owner order deliberately differs from global text submission order.
+    for (owner, text_id) in [(78, 11), (77, 10)] {
+        board.drawings.push(BoardDrawing {
+            id: ObjectId(owner),
+            owner_id: None,
+            layer: LayerId(1),
+            net: NetId(0),
+            graphic_ids: vec![],
+            segments: vec![],
+            text_ids: vec![ObjectId(text_id)],
+        });
+    }
+    for id in [10, 11] {
+        board.texts.push(BoardText {
+            id: ObjectId(id),
+            owner_id: None,
+            layer: LayerId(1),
+            class_id: 0,
+            subclass: 0,
+            text: "G".into(),
+            at: Point::new(4.0, 1.0),
+            angle: 0.7,
+            mirrored: true,
+            align: TextAlignment::Center,
+            font_index: 0,
+            width: 1.0,
+            height: 1.0,
+            spacing: 0.0,
+            line_spacing: 1.0,
+            stroke_width: 0.0,
+        });
+    }
+    let corners = [
+        Point::new(4.0, 0.0),
+        Point::new(5.0, 1.0),
+        Point::new(4.0, 2.0),
+        Point::new(3.0, 1.0),
+    ];
+    let quads = [
+        TextPickQuad {
+            text: ObjectId(10),
+            corners,
+        },
+        TextPickQuad {
+            text: ObjectId(11),
+            corners,
+        },
+        TextPickQuad {
+            text: ObjectId(10),
+            corners: [
+                Point::new(20.0, 20.0),
+                Point::new(21.0, 20.0),
+                Point::new(21.0, 21.0),
+                Point::new(20.0, 21.0),
+            ],
+        },
+    ];
+    let cancel = CancellationToken::default();
+    let board = std::sync::Arc::new(board);
+    let index = SegmentIndex::build(board.clone(), 10, &cancel)
+        .unwrap()
+        .with_text_quads(&quads, &cancel)
+        .unwrap();
+    let query = PickQuery::new(Point::new(4.0, 1.0), 0.05).unwrap();
+    let mut display = BoardDisplay::default();
+    assert!(
+        index
+            .query_visible_objects(query, 100.0, PickFilter::all(), &display, 64, &cancel)
+            .unwrap()
+            .is_empty()
+    );
+    display.show_texts = true;
+    display.show_drawings = false;
+    let hits = index
+        .query_visible_objects(query, 100.0, PickFilter::all(), &display, 64, &cancel)
+        .unwrap();
+    assert_eq!(
+        hits.iter().map(|hit| hit.object).collect::<Vec<_>>(),
+        [
+            SelectedObject::Drawing(ObjectId(78)),
+            SelectedObject::Drawing(ObjectId(77))
+        ]
+    );
+    for mode in [
+        SelectionMode::Object,
+        SelectionMode::Track,
+        SelectionMode::Net,
+        SelectionMode::Component,
+    ] {
+        let resolved = resolve_canvas_candidates(&board, &hits, mode, 1, &cancel).unwrap();
+        assert_eq!(
+            resolved[0].target,
+            pomelo_core::selection::SelectionTarget::Object(SelectedObject::Drawing(ObjectId(78)))
+        );
+    }
+    let gap_edge = PickQuery::new(Point::new(5.052, 1.0), 0.05).unwrap();
+    let edge_hits = index
+        .query_visible_objects(gap_edge, 100.0, PickFilter::all(), &display, 64, &cancel)
+        .unwrap();
+    assert_eq!(
+        edge_hits[0].object,
+        SelectedObject::Drawing(ObjectId(77)),
+        "whole-string bounds retain the half-pixel glyph edge in whitespace between separated glyphs"
+    );
+    let mut filter = PickFilter::all();
+    filter.set(PickCategory::Drawing, false);
+    assert!(
+        index
+            .query_visible_objects(query, 100.0, filter, &display, 64, &cancel)
+            .unwrap()
+            .is_empty()
+    );
+    display.hidden_layers.insert(LayerId(1));
+    assert!(
+        index
+            .query_visible_objects(query, 100.0, PickFilter::all(), &display, 64, &cancel)
+            .unwrap()
+            .is_empty()
+    );
+    cancel.cancel();
+    assert!(matches!(
+        index.query_visible_objects(query, 100.0, PickFilter::all(), &display, 64, &cancel),
+        Err(pomelo_core::geometry::PathError::Cancelled)
+    ));
+}
+
+#[test]
 fn member_pages_cover_large_network_without_duplicates_or_unconnected_rows() {
     use pomelo_core::selection::{SelectedObject, SelectionTarget};
     let mut board = scene();
@@ -184,6 +434,62 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
         interaction::SelectionMode,
         selection::{SelectionTarget, resolve_candidates},
     };
+    // Display switches must remove hidden categories before candidate truncation,
+    // while zones and same-ID objects from another category remain eligible.
+    for mask in 0..8 {
+        use pomelo_core::display::LayerPrimitive;
+        let mut filtered = display.clone();
+        for (bit, kind) in [
+            LayerPrimitive::Traces,
+            LayerPrimitive::Vias,
+            LayerPrimitive::Pads,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            filtered.set_primitive(LayerId(1), kind, mask & (1 << bit) != 0);
+        }
+        let expected: Vec<_> = hits
+            .iter()
+            .filter(|hit| match hit.object {
+                SelectedObject::Segment(_) => mask & 1 != 0,
+                SelectedObject::Via(_) => mask & 2 != 0,
+                SelectedObject::Pin(_) => mask & 4 != 0,
+                SelectedObject::Zone(_) | SelectedObject::Drawing(_) => true,
+            })
+            .map(|hit| hit.object)
+            .collect();
+        for limit in [1, 64] {
+            let actual = index
+                .query_objects(query, PickFilter::all(), &filtered, limit, &cancel, false)
+                .unwrap();
+            assert_eq!(
+                actual.iter().map(|hit| hit.object).collect::<Vec<_>>(),
+                expected.iter().copied().take(limit).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(
+            query
+                .pins(&board, PickFilter::all(), &filtered, 64, &cancel)
+                .unwrap()
+                .len(),
+            usize::from(mask & 4 != 0)
+        );
+        assert_eq!(
+            query
+                .vias_where(&board, PickFilter::all(), &filtered, 64, &cancel, |_| true)
+                .unwrap()
+                .len(),
+            usize::from(mask & 2 != 0)
+        );
+        assert_eq!(
+            query
+                .segments(&board.segments, PickFilter::all(), &filtered, 64, &cancel)
+                .unwrap()
+                .len(),
+            if mask & 1 != 0 { 4 } else { 0 }
+        );
+    }
     let nets = resolve_candidates(&board, &hits, SelectionMode::Net, 64, &cancel).unwrap();
     assert_eq!(
         nets.iter().map(|c| c.target).collect::<Vec<_>>(),
@@ -831,9 +1137,11 @@ fn track_bounds_index_matches_reference_candidates_and_rejects_partial_builds() 
 }
 
 #[test]
-fn scene_index_counts_used_nets_and_keeps_source_order_and_duplicate_placements() {
+fn scene_index_counts_used_nets_and_does_not_invent_search_groups_without_pins() {
     let scene = scene();
-    let index = SearchIndex::build(&scene, &CancellationToken::default()).unwrap();
+    let index = SearchIndex::build(&scene, &CancellationToken::default())
+        .unwrap()
+        .unwrap();
     let actual: Vec<_> = index
         .entries()
         .iter()
@@ -844,8 +1152,6 @@ fn scene_index_counts_used_nets_and_keeps_source_order_and_duplicate_placements(
         vec![
             (SearchTarget::Net(NetId(7)), "電源_A", 2),
             (SearchTarget::Net(NetId(8)), "8", 1),
-            (SearchTarget::Component(ObjectId(30)), "U1", 1),
-            (SearchTarget::Component(ObjectId(31)), "U1", 1),
         ]
     );
     assert!(index.find("unused", 20).is_empty());
@@ -899,11 +1205,11 @@ fn hit_resolution_keeps_object_track_and_network_identities_distinct() {
 fn cancelled_scene_build_returns_no_index_including_for_an_empty_scene() {
     let cancel = CancellationToken::default();
     cancel.cancel();
-    assert!(SearchIndex::build(&scene(), &cancel).is_none());
+    assert!(SearchIndex::build(&scene(), &cancel).unwrap().is_none());
     let mut empty = scene();
     empty.segments.clear();
     empty.components.clear();
-    assert!(SearchIndex::build(&empty, &cancel).is_none());
+    assert!(SearchIndex::build(&empty, &cancel).unwrap().is_none());
 }
 
 #[test]
@@ -972,14 +1278,23 @@ fn component_summary_rejects_missing_and_duplicate_pin_references() {
 }
 
 #[test]
-fn unnamed_networks_use_stable_ids_and_unconnected_objects_are_not_a_network() {
+fn source_network_names_preserve_blank_values_and_missing_names_use_stable_ids() {
     let mut scene = scene();
     scene.nets.insert(NetId(7), " \t ".into());
-    scene.nets.insert(NetId(8), String::new());
+    scene.nets.remove(&NetId(8));
     let cancel = CancellationToken::default();
-    let index = SearchIndex::build(&scene, &cancel).unwrap();
-    assert_eq!(index.find("7", 20)[0].target, SearchTarget::Net(NetId(7)));
+    let index = SearchIndex::build(&scene, &cancel).unwrap().unwrap();
+    assert_eq!(index.entries()[0].name, " \t ");
     assert_eq!(index.find("8", 20)[0].target, SearchTarget::Net(NetId(8)));
+    scene.nets.insert(NetId(8), String::new());
+    assert_eq!(
+        SearchIndex::build(&scene, &cancel)
+            .unwrap()
+            .unwrap()
+            .entries()[1]
+            .name,
+        ""
+    );
     assert!(
         SearchTarget::Net(NetId(0))
             .bounds(&scene, &cancel)

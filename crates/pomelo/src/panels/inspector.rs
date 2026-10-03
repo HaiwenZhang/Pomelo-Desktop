@@ -7,6 +7,48 @@ use pomelo_core::{
 };
 use std::collections::BTreeSet;
 
+pub(crate) fn property_row(
+    label: String,
+    value: String,
+    cx: &gpui_kit::App,
+) -> gpui_kit::AnyElement {
+    use gpui_kit::{component::ActiveTheme, *};
+    div()
+        .flex()
+        .items_start()
+        .min_w_0()
+        .gap_3()
+        .py_0p5()
+        .text_sm()
+        .child(
+            div()
+                .w(relative(0.46))
+                .flex_shrink_0()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(div().flex_1().min_w_0().child(value))
+        .into_any_element()
+}
+
+/// Split only known typed fields; other source diagnostics retain their full message.
+pub(crate) fn source_property(
+    message: &Message,
+    locale: pomelo_core::i18n::Locale,
+) -> Option<(String, String)> {
+    let label = match message.key {
+        Key::SourceNetName => Key::PropertyNet,
+        Key::SourceReference => Key::PropertyReference,
+        Key::SourcePinName => Key::PropertyPinName,
+        Key::SourcePadstackName => Key::PropertyPadstack,
+        _ => return None,
+    };
+    Some((
+        pomelo_core::i18n::text(locale, label),
+        message.args.get("name")?.to_string(),
+    ))
+}
+
 /// Format retained millimeter fields at render time so background results stay unit-neutral.
 pub(crate) fn display_source_field(
     message: &Message,
@@ -53,17 +95,31 @@ pub(crate) struct PreparedInspection {
 
 pub(crate) fn prepare_inspection(
     target: pomelo_core::selection::SelectionTarget,
+    anchor: Option<pomelo_core::picking_index::SelectionAnchor>,
     scene: &BoardScene,
     cancel: &pomelo_core::task::CancellationToken,
 ) -> Result<PreparedInspection, pomelo_core::geometry::PathError> {
     if cancel.is_cancelled() {
         return Err(pomelo_core::geometry::PathError::Cancelled);
     }
+    let mut labels = selection_source_labels(target, scene, cancel);
+    if let Some(anchor) = anchor {
+        for field in selection_source_labels(
+            pomelo_core::selection::SelectionTarget::Object(anchor.object),
+            scene,
+            cancel,
+        ) {
+            if !labels.contains(&field) {
+                labels.push(field);
+            }
+        }
+    }
     let prepared = PreparedInspection {
         bonds: std::sync::Arc::new(
             if matches!(
                 target,
                 pomelo_core::selection::SelectionTarget::Component(_)
+                    | pomelo_core::selection::SelectionTarget::ComponentGroup(_)
             ) {
                 target
                     .related_bond_objects(scene, cancel)?
@@ -73,7 +129,7 @@ pub(crate) fn prepare_inspection(
                 BTreeSet::new()
             },
         ),
-        labels: selection_source_labels(target, scene, cancel),
+        labels,
         net: related_net(target, scene, cancel),
         component: related_component(target, scene, cancel)?,
     };
@@ -82,6 +138,28 @@ pub(crate) fn prepare_inspection(
     } else {
         Ok(prepared)
     }
+}
+
+pub(crate) fn hit_layer_name(
+    layer: pomelo_core::model::LayerId,
+    scene: &BoardScene,
+    locale: pomelo_core::i18n::Locale,
+) -> String {
+    if layer == pomelo_core::model::LayerId::UNASSIGNED {
+        return pomelo_core::i18n::text(locale, Key::DrillLayer);
+    }
+    if let Some(value) = scene.layers.iter().find(|value| value.id == layer) {
+        return value.display_name(locale);
+    }
+    if let Some(value) = scene.drawing_layers.iter().find(|value| value.id == layer) {
+        return value.display_name(locale);
+    }
+    if let Some(value) = scene.special_layers.iter().find(|value| value.id == layer) {
+        return value.display_name(locale);
+    }
+    Message::new(Key::SourceLayerId)
+        .arg("id", layer.0)
+        .display(locale)
 }
 
 pub(crate) fn related_component(
@@ -148,9 +226,11 @@ pub(crate) fn selection_identity(target: pomelo_core::selection::SelectionTarget
         SelectionTarget::Object(SelectedObject::Pin(id)) => (Key::SourcePin, id.0),
         SelectionTarget::Object(SelectedObject::Via(id)) => (Key::SourceVia, id.0),
         SelectionTarget::Object(SelectedObject::Zone(id)) => (Key::SourceZone, id.0),
+        SelectionTarget::Object(SelectedObject::Drawing(id)) => (Key::SourceDrawing, id.0),
         SelectionTarget::Track(id) => (Key::ModeTrack, id.0),
         SelectionTarget::Net(id) => (Key::ModeNet, id.0),
         SelectionTarget::Component(id) => (Key::ModeComponent, id.0),
+        SelectionTarget::ComponentGroup(anchor) => (Key::ModeComponent, anchor.id().0),
     }
 }
 
@@ -167,6 +247,11 @@ pub(crate) fn selection_source_labels(
         }
     };
     match target {
+        SelectionTarget::ComponentGroup(anchor) => {
+            if let Ok(Some(reference)) = anchor.reference(scene, cancel) {
+                add(Key::SourceReference, reference);
+            }
+        }
         SelectionTarget::Net(id) => {
             if let Some(name) = scene.nets.get(&id) {
                 add(Key::SourceNetName, name);
@@ -229,6 +314,24 @@ pub(crate) fn selection_source_labels(
                 && let Some(name) = scene.nets.get(&zone.net)
             {
                 add(Key::SourceNetName, name);
+            }
+        }
+        SelectionTarget::Object(SelectedObject::Drawing(id)) => {
+            if let Some(drawing) = scene
+                .drawings
+                .iter()
+                .take_while(|_| !cancel.is_cancelled())
+                .find(|drawing| drawing.id == id)
+            {
+                for source in scene
+                    .texts
+                    .iter()
+                    .take_while(|_| !cancel.is_cancelled())
+                    .filter(|text| drawing.text_ids.contains(&text.id))
+                    .take(16)
+                {
+                    add(Key::SourceText, &source.text);
+                }
             }
         }
         SelectionTarget::Track(_) => {}
@@ -401,6 +504,14 @@ pub(crate) fn selection_source_labels(
             .map(|value| value.layer)
             .into_iter()
             .collect(),
+        SelectionTarget::Object(SelectedObject::Drawing(id)) => scene
+            .drawings
+            .iter()
+            .take_while(|_| !cancel.is_cancelled())
+            .find(|d| d.id == id)
+            .map(|d| d.layer)
+            .into_iter()
+            .collect(),
         _ => BTreeSet::new(),
     };
     for layer in layers {
@@ -503,6 +614,83 @@ pub(crate) fn selection_source_labels(
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    #[test]
+    fn group_inspection_keeps_reference_and_adds_actual_source_properties_once() {
+        use pomelo_core::{
+            display::DisplayCategory,
+            interaction::component_reference::ComponentAnchor,
+            model::{LayerId, ObjectId},
+            picking_index::SelectionAnchor,
+            selection::{SelectedObject, SelectionTarget},
+            task::CancellationToken,
+        };
+        let scene: BoardScene = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/selection-navigation-anchor.json"
+        ))
+        .unwrap();
+        let prepared = prepare_inspection(
+            SelectionTarget::ComponentGroup(ComponentAnchor::Pin(ObjectId(30))),
+            Some(SelectionAnchor {
+                object: SelectedObject::Pin(ObjectId(31)),
+                layer: LayerId(0),
+                category: DisplayCategory::Pin,
+            }),
+            &scene,
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared
+                .labels
+                .iter()
+                .filter(|message| message.key == Key::SourceReference)
+                .collect::<Vec<_>>(),
+            vec![&Message::new(Key::SourceReference).arg("name", "CUSTOM")]
+        );
+        assert!(
+            prepared
+                .labels
+                .iter()
+                .any(|message| message.key == Key::SourcePosition)
+        );
+        assert!(
+            prepared
+                .labels
+                .iter()
+                .any(|message| message.key == Key::SourcePinName)
+        );
+    }
+    #[test]
+    fn drill_hit_layer_name_uses_the_shared_locale_resources() {
+        let scene: BoardScene = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/selection-navigation-anchor.json"
+        ))
+        .unwrap();
+        for locale in pomelo_core::i18n::Locale::ALL {
+            assert_eq!(
+                hit_layer_name(pomelo_core::model::LayerId::UNASSIGNED, &scene, locale),
+                pomelo_core::i18n::text(locale, Key::DrillLayer)
+            );
+        }
+    }
+    #[test]
+    fn cancelled_inspection_does_not_publish_partial_source_fields() {
+        let scene: BoardScene = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/selection-navigation-anchor.json"
+        ))
+        .unwrap();
+        let cancel = pomelo_core::task::CancellationToken::default();
+        cancel.cancel();
+        assert!(matches!(
+            prepare_inspection(
+                pomelo_core::selection::SelectionTarget::Net(pomelo_core::model::NetId(9)),
+                None,
+                &scene,
+                &cancel
+            ),
+            Err(pomelo_core::geometry::PathError::Cancelled)
+        ));
+    }
     #[test]
     fn dimensions_round_only_after_unit_conversion() {
         use pomelo_core::{i18n::Locale, units::LengthUnit};

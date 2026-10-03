@@ -2,13 +2,11 @@
 
 Rust + GPUI Kit 原生 PCB Viewer，当前只开发 Windows，PCB 渲染使用 GPUI 原生 GPU 入口与 pomelo-render 自有 HLSL，国际化使用 rust-i18n，支持英/简中/繁中/日/韩。
 
-目前可在桌面后台串行导入 Allegro BRD，构建共享完整 CPU `BoardScene`，并在 Windows GPU 视口显示走线、圆弧和板框。基础几何/padstack、网络、放置、走线/过孔及键合对象有 156 案例的分层证据；六代表板完整文字/尺寸字段、场景统计/对象顺序/边界通过对照。打开流程包含排队、取消与阶段进度；铜皮已准备上传数据，GPU 合成、其他 PCB 图元、交互和完整验收仍在开发。范围见 [文字与场景验证](docs/brd-annotation-scene-validation.md) 和 [板框与铜皮准备验证](docs/outline-copper-preparation-validation.md)。
+目前已接入 Allegro BRD 后台导入、原生 D3D11 视口、走线/圆弧、焊盘/过孔、铜皮孔洞、绘图和 MSDF 板文字，并提供图层控制、网络/元件搜索、选择检查、多文档、最近文件及视图恢复。156 案例的分层解析和部分代表板/交互已有差分与实窗证据，不能等同于完整 MVP 验收。搜索锚点的应用接入、多语排序、全案例整板、DPI/输入法、性能/长期运行和正式发布仍待完成，具体范围见 [开发进展](docs/development-progress.md) 与 [研发计划](docs/native-pcb-viewer-development-plan.md)。
 
 ```powershell
 python scripts/cargo.py run -p pomelo --locked
 python scripts/cargo.py run -p pomelo --locked -- --locale ja --encoding windows-1252 E:\brd_cases\AGILEX_I_SERIES.brd
-python scripts/cargo.py run -p pomelo --locked -- --native-gpu-demo
-python scripts/cargo.py run -p pomelo --locked -- --gpu-demo
 python scripts/cargo.py test --workspace --locked
 python scripts/cargo.py clippy --workspace --all-targets --locked -- -D warnings
 python scripts/cargo.py run -p pomelo-import --bin pcb_inspect --locked -- --locale ja --help
@@ -38,3 +36,17 @@ python scripts/cargo.py run -p pomelo-import --bin pcb_inspect --locked -- --loc
 - [原生 GPU 渲染路线决策](docs/adr/0001-native-gpu-rendering.md)
 
 `E:\brd_cases` 等外部样本与 `.cache/` 报告不随仓库分发。正常桌面运行不需要 Web 仓库或 Node；跨语言差分脚本仅用于研发验证。
+
+## Windows 安装包
+
+安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)、Python 3.12+ 和项目要求的 Rust/MSVC 构建工具后，在仓库目录执行：
+
+```powershell
+python scripts/build-windows.py
+# 指定编译器位置或使用本机 stable 工具链：
+python scripts/build-windows.py --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" --toolchain stable
+```
+
+脚本通过现有 GPUI 包装器编译 Windows x64 release，版本读取工作区 Cargo.toml，输出 `dist/Pomelo-<版本>-windows-x64-setup.exe`。支持 `--offline` 和 `--output-dir`。安装到当前用户的 Programs/Pomelo，无需管理员权限，创建开始菜单快捷方式，并提供可选桌面快捷方式和卸载功能。
+
+`crates/pomelo/build.rs` 从 `assets/pomelo.svg` 自动生成 16/24/32/48/64/128/256 像素 ICO 并嵌入 exe；安装包、卸载程序、快捷方式和应用卸载列表共用项目图标。修改 SVG 后重新构建即可，无需手动同步 ICO。普通 Cargo 构建也会嵌入图标。安装包尚未配置代码签名。

@@ -59,9 +59,17 @@ impl<'ast> Visit<'ast> for MessageAudit {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if ["child", "label", "tooltip", "title", "menu"]
-            .iter()
-            .any(|name| call.method == *name)
+        if [
+            "child",
+            "label",
+            "tooltip",
+            "title",
+            "menu",
+            "set_title",
+            "set_description",
+        ]
+        .iter()
+        .any(|name| call.method == *name)
             && let Some(expression) = call.args.first()
         {
             self.user_expression(expression, &call.method.to_string());
@@ -87,10 +95,21 @@ impl<'ast> Visit<'ast> for MessageAudit {
                 .map(|segment| segment.ident.to_string())
                 .collect::<Vec<_>>()
                 .join("::");
-            if ["MenuItem::action", "Menu::new", "PopupMenuItem::new"].contains(&name.as_str())
+            if [
+                "MenuItem::action",
+                "Menu::new",
+                "PopupMenuItem::new",
+                "rfd::MessageButtons::OkCustom",
+            ]
+            .contains(&name.as_str())
                 && let Some(expression) = call.args.first()
             {
                 self.user_expression(expression, &name);
+            }
+            if name == "rfd::MessageButtons::OkCancelCustom" {
+                for expression in &call.args {
+                    self.user_expression(expression, &name);
+                }
             }
         }
         visit::visit_expr_call(self, call);
@@ -164,4 +183,12 @@ fn syntax_gate_detects_literal_labels_and_premature_error_stringification() {
     let mut audit = MessageAudit::default();
     audit.visit_file(&file);
     assert_eq!(audit.violations.len(), 4);
+}
+
+#[test]
+fn syntax_gate_covers_native_startup_dialog_copy() {
+    let file = syn::parse_file(r#"fn example() { dialog.set_title("Failure").set_description("Bad argument").set_buttons(rfd::MessageButtons::OkCustom("Close")); dialog.set_buttons(rfd::MessageButtons::OkCancelCustom("Close", "Open log folder")); }"#).unwrap();
+    let mut audit = MessageAudit::default();
+    audit.visit_file(&file);
+    assert_eq!(audit.violations.len(), 5);
 }

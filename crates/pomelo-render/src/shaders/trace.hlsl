@@ -1,5 +1,5 @@
 // Real analytic tracks; the 128-byte ABI matches tracks::TraceInstance.
-// Compensated arc distances follow Pomelo Web arc.wgsl.
+// Compensated distances follow Pomelo Web arc.wgsl and line-frame.wgsl.
 struct Trace {
     float4 a; float4 b; float4 center; float4 arc;
     float4 bounds_min; float4 bounds_max;
@@ -63,8 +63,8 @@ Out trace_vertex(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID)
     float2 hi = relative(trace.bounds_max).xy + relative(trace.bounds_max).zw;
     // Clamp raster bounds in camera-relative space to preserve deep-zoom precision.
     float2 limit = canvas.zw * 0.5 / view.x;
-    lo = clamp(lo - 2.0 / view.x, -limit, limit);
-    hi = clamp(hi + 2.0 / view.x, -limit, limit);
+    lo = clamp(lo - 2.0 * viewport.z / view.x, -limit, limit);
+    hi = clamp(hi + 2.0 * viewport.z / view.x, -limit, limit);
     float2 corner = float2(vertex_id & 1u, (vertex_id >> 1u) & 1u);
     float2 screen = canvas.xy + canvas.zw * 0.5 + lerp(lo, hi, corner) * float2(view.y, -1) * view.x;
     Out output;
@@ -74,7 +74,28 @@ Out trace_vertex(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID)
     bool selected = (batch.z == 1u && trace.ids.w == batch.y)
         || (batch.z == 2u && trace.ids.x == batch.y)
         || (batch.z == 3u && trace.ids.y == batch.y);
-    output.tint = selected && (trace.flags.w & 4u) == 0u ? highlight : color;
+    float4 material = color;
+    if (view.z != 0 && trace.ids.w != 0u && (trace.flags.w & 4u) == 0u)
+        material.rgb = pcb_net_color(trace.ids.w);
+    output.tint = selected && (trace.flags.w & 4u) == 0u ? highlight : material;
+    // Test with ordinary coordinates first; short/offscreen lines keep the cheap path.
+    if (trace.flags.x == 0u && !any(lo >= hi)
+        && length((output.b.xy + output.b.zw) - (output.a.xy + output.a.zw)) * view.x / viewport.z > 16384.0) {
+        float2 dx = ds_add(output.b.xz, -output.a.xz);
+        float2 dy = ds_add(output.b.yw, -output.a.yw);
+        float4 d = float4(dx.x, dy.x, dx.y, dy.y);
+        float magnitude = length(d.xy + d.zw);
+        // A distant endpoint loses subpixel precision in ap - ab*t.
+        // Keep the signed normal offset and cap projections instead;
+        // this is the Web primitive.wgsl long-line frame, in world mm.
+        float2 cross = ds_add(ds_mul(output.a.xz, d.yw), -ds_mul(output.a.yw, d.xz));
+        float start = precise_dot(output.a, d) / magnitude;
+        float end = precise_dot(output.b, d) / magnitude;
+        output.a = float4((d.xy + d.zw) / magnitude, (cross.x + cross.y) / magnitude, start);
+        output.b.x = end;
+        // Vertex-local tag only; the immutable 128-byte instance ABI is unchanged.
+        output.flags.x = 2u;
+    }
     return output;
 }
 float4 trace_fragment(Out input) : SV_Target {
@@ -85,7 +106,12 @@ float4 trace_fragment(Out input) : SV_Target {
     float4 a = delta(screen, input.a);
     float4 b = delta(screen, input.b);
     float distance;
-    if (input.flags.x == 0u) {
+    if (input.flags.x == 2u) {
+        float along = dot(screen, input.a.xy);
+        float normal = dot(screen, float2(-input.a.y, input.a.x)) + input.a.z;
+        float cap = max(max(input.a.w - along, along - input.b.x), 0.0);
+        distance = length(float2(cap, normal));
+    } else if (input.flags.x == 0u) {
         float2 ab = (a.xy + a.zw) - (b.xy + b.zw);
         float2 ap = a.xy + a.zw;
         float t = saturate(dot(ap, ab) / max(dot(ab, ab), 1e-30));
@@ -103,9 +129,18 @@ float4 trace_fragment(Out input) : SV_Target {
         bool inside = full || (direction != 0 && (long_arc ? after || before : after && before));
         distance = inside ? abs(radial) : min(length(a.xy + a.zw), length(b.xy + b.zw));
     }
-    float pixel_mm = 1.0 / view.x;
-    distance -= max(asfloat(input.flags.z) * 0.5, pixel_mm * 0.5);
+    float pixel_mm = viewport.z / view.x;
+    float width = (input.flags.w & 4u) != 0u ? 0.0 : asfloat(input.flags.z);
+    distance -= (input.flags.w & 8u) != 0u ? pixel_mm * 0.65 : max(width * 0.5, pixel_mm * 0.5);
     float alpha = 1.0 - smoothstep(-pixel_mm * 0.65, pixel_mm * 0.65, distance);
+    if (view.w > 0.5) {
+        float edge = 1.0 - smoothstep(pixel_mm * 0.6, pixel_mm * 1.6, abs(distance));
+        float2 screen = input.position.xy / viewport.z;
+        float2 cell = screen - floor(screen / 5.0) * 5.0 - 2.5;
+        float dots = 1.0 - smoothstep(0.65, 1.25, length(cell));
+        float coverage = max(edge, view.w > 1.5 && view.w < 2.5 ? 0.0 : dots * alpha);
+        return float4(view.w > 1.5 ? float3(0.63, 1.0, 0.85) : float3(1,1,1), coverage * 0.9);
+    }
     clip(alpha - 0.001);
     return float4(input.tint.rgb, input.tint.a * alpha);
 }

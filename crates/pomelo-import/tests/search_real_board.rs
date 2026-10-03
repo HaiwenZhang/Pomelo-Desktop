@@ -29,7 +29,7 @@ fn real_board_search_counts_and_all_target_bounds() {
         )
         .unwrap();
     let started = Instant::now();
-    let index = SearchIndex::build(&board.scene, &cancel).unwrap();
+    let index = SearchIndex::build(&board.scene, &cancel).unwrap().unwrap();
     let build_ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut counts = BTreeMap::new();
     for net in board

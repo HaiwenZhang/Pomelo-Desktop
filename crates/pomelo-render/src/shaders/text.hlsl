@@ -48,7 +48,7 @@ TextOut trace_vertex(uint vertex_id : SV_VertexID, uint instance_id : SV_Instanc
     output.width = asfloat(stroke.ids.w);
     float2 a = output.a.xy + output.a.zw;
     float2 b = output.b.xy + output.b.zw;
-    float padding = output.width * 0.5 + 2.0 / view.x;
+    float padding = output.width * 0.5 + 2.0 * viewport.z / view.x;
     float2 limit = canvas.zw * 0.5 / view.x;
     float2 lo = clamp(min(a, b) - padding, -limit, limit);
     float2 hi = clamp(max(a, b) + padding, -limit, limit);
@@ -68,7 +68,7 @@ float4 trace_fragment(TextOut input) : SV_Target {
     float2 ap = a.xy + a.zw;
     float t = saturate(dot(ap, ab) / max(dot(ab, ab), 1e-30));
     float distance = length(ap - ab * t);
-    float pixel_mm = 1.0 / view.x;
+    float pixel_mm = viewport.z / view.x;
     distance -= max(input.width * 0.5, pixel_mm * 0.5);
     float alpha = 1.0 - smoothstep(-pixel_mm * 0.65, pixel_mm * 0.65, distance);
     clip(alpha - 0.001);

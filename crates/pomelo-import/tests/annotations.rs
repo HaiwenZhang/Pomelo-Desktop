@@ -20,6 +20,33 @@ use pomelo_import::{
 };
 
 #[test]
+fn diagnostic_ui_fixture_imports_all_forty_warnings_in_source_order() {
+    let source = include_bytes!("../../../tests/fixtures/diagnostics-40.brd");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("diagnostics-40.brd");
+    std::fs::write(&path, source).unwrap();
+    let board = pomelo_import::allegro::AllegroImporter
+        .import(
+            &path,
+            &ImportOptions::default(),
+            &context(&CancellationToken::default()),
+        )
+        .unwrap();
+    assert_eq!(board.scene.segments.len(), 1);
+    assert_eq!(board.scene.diagnostics.len(), 40);
+    for (index, diagnostic) in board.scene.diagnostics.iter().enumerate() {
+        assert_eq!(diagnostic.code.as_ref(), "BRD_TEXT_CONTENT_MISSING");
+        assert_eq!(diagnostic.object, Some(ObjectId(index as u32 + 10)));
+        assert_eq!(diagnostic.offset, Some(4824 + index as u64 * 60));
+        assert_eq!(diagnostic.path.as_deref(), Some(path.as_path()));
+        for locale in Locale::ALL {
+            assert!(diagnostic.message.render(locale).is_ok());
+        }
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), source);
+}
+
+#[test]
 fn importer_reads_real_file_to_shared_scene_and_attaches_source_paths_to_warnings() {
     let db = db(
         vec![
@@ -298,6 +325,33 @@ fn annotation_only_board_returns_localized_no_geometry_error() {
     for locale in Locale::ALL {
         assert!(diagnostic.message.render(locale).is_ok());
     }
+}
+
+#[test]
+fn graphic_board_outline_alone_supplies_fit_bounds_including_stroke_width() {
+    let mut outline = graphic(30, 888, 888, 31);
+    outline[2..4].copy_from_slice(&0xea01u16.to_le_bytes());
+    let db = db(vec![outline, edge(31, 30)], 0, 30);
+    let scene = SceneBuilder::new(&db, SceneLimits::default())
+        .build(&context(&CancellationToken::default()))
+        .unwrap();
+    assert_eq!(scene.outline.len(), 1);
+    assert_eq!(scene.bounds.min, Point::new(0.95, 1.95));
+    assert_eq!(scene.bounds.max, Point::new(3.05, 4.05));
+}
+
+#[test]
+fn stored_board_outline_supplies_fit_bounds_including_stroke_width() {
+    let mut outline = record(0x28, 30, 76);
+    outline[2..4].copy_from_slice(&0xfd01u16.to_le_bytes());
+    put(&mut outline, 40, 31);
+    let db = db(vec![outline, edge(31, 30)], 0, 0);
+    let scene = SceneBuilder::new(&db, SceneLimits::default())
+        .build(&context(&CancellationToken::default()))
+        .unwrap();
+    assert_eq!(scene.outline.len(), 1);
+    assert_eq!(scene.bounds.min, Point::new(0.95, 1.95));
+    assert_eq!(scene.bounds.max, Point::new(3.05, 4.05));
 }
 
 #[test]

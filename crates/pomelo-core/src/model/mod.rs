@@ -49,7 +49,7 @@ impl Point {
     }
 
     pub fn distance(self, other: Self) -> f64 {
-        (self.x - other.x).hypot(self.y - other.y)
+        crate::geometry::web_hypot(self.x - other.x, self.y - other.y)
     }
 }
 

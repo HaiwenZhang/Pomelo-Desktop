@@ -28,5 +28,11 @@ float4 clear_vertex(uint id : SV_VertexID) : SV_Position {
 float4 copper_fragment(float4 position : SV_Position) : SV_Target {
     clip(position.xy - clip_bounds.xy);
     clip(clip_bounds.xy + clip_bounds.zw - position.xy);
+    if (view.w > 1.5) return float4(0.63,1,0.85,0.18);
+    if (view.w > 0.5) {
+        float2 screen = position.xy / viewport.z;
+        float2 cell = screen - floor(screen / 5.0) * 5.0 - 2.5;
+        return float4(1,1,1,(1.0 - smoothstep(0.65,1.25,length(cell))) * 0.8);
+    }
     return color;
 }

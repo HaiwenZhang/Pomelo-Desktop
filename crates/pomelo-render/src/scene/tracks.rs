@@ -23,7 +23,9 @@ pub struct TraceInstance {
     pub bounds_max: [f32; 4],
     /// [object, track, layer, net].
     pub ids: [u32; 4],
-    /// [kind (0 line / 1 arc), combined source index, width bits, flags (bit 0 full, bit 1 long, bit 2 outline)].
+    /// [kind (0 line / 1 arc), combined source index, width bits, flags].
+    /// Flags: full arc=1, long arc=2, board outline=4, zone=8,
+    /// custom pin/via edge=16/32, drawing=64.
     pub flags: [u32; 4],
 }
 
@@ -107,6 +109,81 @@ fn split_point(point: Point) -> [f32; 4] {
 }
 
 impl PreparedTracks {
+    /// Exact zone boundaries, including holes, retain their owning zone identity.
+    /// Compact polygon rings are used only when no analytic paths are retained.
+    pub fn build_zone_outlines(
+        zones: &[pomelo_core::model::Zone],
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        let count = zones.iter().fold(0usize, |count, zone| {
+            count.saturating_add(if zone.paths.is_empty() {
+                zone.mesh.vertices.len()
+            } else {
+                zone.paths.iter().map(Vec::len).sum()
+            })
+        });
+        if count > limits.max_instances
+            || count.saturating_mul(size_of::<TraceInstance>() + size_of::<Segment>())
+                > limits.max_bytes
+        {
+            return Err(PrepareError::Limit {
+                actual: count,
+                limit: limits
+                    .max_instances
+                    .min(limits.max_bytes / (size_of::<TraceInstance>() + size_of::<Segment>())),
+            });
+        }
+        let mut edges = Vec::new();
+        edges
+            .try_reserve_exact(count)
+            .map_err(|_| PrepareError::Allocation)?;
+        for zone in zones {
+            if zone.paths.is_empty() {
+                for range in zone.mesh.ring_offsets.windows(2) {
+                    let ring = &zone.mesh.vertices[range[0] as usize..range[1] as usize];
+                    for (index, &a) in ring.iter().enumerate() {
+                        if cancellation.is_cancelled() {
+                            return Err(PrepareError::Cancelled);
+                        }
+                        edges.push(Segment {
+                            id: zone.id,
+                            track_id: ObjectId(0),
+                            layer: zone.layer,
+                            net: zone.net,
+                            a,
+                            b: ring[(index + 1) % ring.len()],
+                            width: 0.0,
+                            arc: None,
+                            bond_wire: None,
+                        });
+                    }
+                }
+            } else {
+                for edge in zone.paths.iter().flatten() {
+                    if cancellation.is_cancelled() {
+                        return Err(PrepareError::Cancelled);
+                    }
+                    edges.push(Segment {
+                        id: zone.id,
+                        track_id: ObjectId(0),
+                        layer: zone.layer,
+                        net: zone.net,
+                        a: edge.a,
+                        b: edge.b,
+                        width: 0.0,
+                        arc: edge.arc,
+                        bond_wire: None,
+                    });
+                }
+            }
+        }
+        let mut prepared = Self::build(&edges, limits, cancellation)?;
+        for instance in &mut prepared.instances {
+            instance.flags[3] |= 8;
+        }
+        Ok(prepared)
+    }
     /// Bounds include round caps and directed arc extrema. Stable source order
     /// is preserved within each layer, including multiple segments of one track.
     pub fn build(
@@ -152,13 +229,54 @@ impl PreparedTracks {
                     limit: limits.max_instances,
                 })?;
         }
-        Self::build_segments(
+        let mut prepared = Self::build_segments(
             drawings.iter().flat_map(|drawing| drawing.segments.iter()),
             count,
             usize::MAX,
             limits,
             cancellation,
-        )
+        )?;
+        let mut owners = Vec::new();
+        owners
+            .try_reserve_exact(count)
+            .map_err(|_| PrepareError::Allocation)?;
+        for drawing in drawings {
+            for _ in &drawing.segments {
+                owners.push(drawing.id);
+            }
+        }
+        for instance in &mut prepared.instances {
+            instance.ids[0] = owners[instance.flags[1] as usize].0;
+            instance.ids[1] = 0;
+            instance.ids[3] = 0;
+            instance.flags[3] |= 64;
+        }
+        // Web flushes each 16,384-stroke layer chunk as lines followed by arcs.
+        let mut offsets = std::collections::BTreeMap::new();
+        let mut ranks = std::collections::BTreeMap::new();
+        for i in &prepared.instances {
+            ranks.insert(i.flags[1], 0usize);
+        }
+        let mut source_order: Vec<_> = prepared
+            .instances
+            .iter()
+            .map(|i| (i.flags[1], i.ids[2]))
+            .collect();
+        source_order.sort_unstable();
+        for (source, layer) in source_order {
+            let offset = offsets.entry(layer).or_insert(0usize);
+            ranks.insert(source, *offset);
+            *offset += 1;
+        }
+        prepared.instances.sort_unstable_by_key(|i| {
+            (
+                i.ids[2],
+                ranks[&i.flags[1]] / 16384,
+                i.flags[0],
+                ranks[&i.flags[1]],
+            )
+        });
+        Ok(prepared)
     }
 
     /// Text strokes use their own renderer source; PCB selection must be disabled
@@ -422,7 +540,12 @@ impl PreparedTracks {
     ) -> Result<Self, PrepareError> {
         let mut batches: Vec<TraceBatch> = Vec::new();
         instances.sort_unstable_by_key(|instance| {
-            (instance.flags[3] & 4, instance.ids[2], instance.flags[1])
+            (
+                instance.flags[3] & 4,
+                instance.ids[2],
+                instance.flags[0],
+                instance.flags[1],
+            )
         });
         // Allocate batch metadata for actual layer/outline runs, rather than
         // one slot per stroke (millions of strokes can share a few layers).
@@ -514,7 +637,7 @@ mod tests {
                 .iter()
                 .map(|instance| instance.ids[0])
                 .collect::<Vec<_>>(),
-            [3, 9, 8]
+            [100, 100, 101]
         );
         assert_eq!(
             prepared

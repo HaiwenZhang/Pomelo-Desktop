@@ -40,9 +40,10 @@ pub(super) fn compile_shader(
     entry: PCSTR,
     target: PCSTR,
 ) -> anyhow::Result<ID3DBlob> {
+    let source = crate::scene::colors::hlsl_library() + source;
     let mut code = None;
     let mut errors = None;
-    // SAFETY: byte pointer/length refer to a static UTF-8 source; out-pointers live for the call.
+    // SAFETY: the owned UTF-8 source and out-pointers live for the synchronous compiler call.
     let result = unsafe {
         D3DCompile(
             source.as_ptr().cast(),

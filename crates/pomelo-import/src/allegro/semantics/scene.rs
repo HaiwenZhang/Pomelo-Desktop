@@ -245,11 +245,10 @@ impl<'a> SceneBuilder<'a> {
                 context.check_cancelled()?;
                 include_segment(&mut bounds, edge, offset)?;
             }
-            // Preserve the frozen Web scene bounds convention for stored outline shapes.
+            // Board-fit includes exact outline arcs and stroke widths, like Web.
             for edge in &object.outline {
                 context.check_cancelled()?;
-                include_point(&mut bounds, edge.a);
-                include_point(&mut bounds, edge.b);
+                include_segment(&mut bounds, edge, offset)?;
             }
             if let Some(zone) = object.zone {
                 include_zone(&mut bounds, &zone, offset, context)?;
@@ -286,7 +285,12 @@ impl<'a> SceneBuilder<'a> {
                 outline.len(),
                 record.span.offset.0 as usize,
             )?;
-            // Graphic-only outlines and annotations do not expand the frozen Web board bounds.
+            // Only accepted board/package outlines expand fit bounds; dimension
+            // drawings and text annotations are deliberately excluded.
+            for edge in &outline {
+                context.check_cancelled()?;
+                include_segment(&mut bounds, edge, record.span.offset.0 as usize)?;
+            }
             scene.outline.extend(outline);
         }
         budget.diagnostics(copper.take_diagnostics(), &mut scene.diagnostics)?;

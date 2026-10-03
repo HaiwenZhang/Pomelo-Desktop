@@ -8,13 +8,13 @@
 
 用户随后确认三端采用统一 GPU 注册/绘制入口和 `pomelo-render` 平台后端，**当前只开发 Windows**。macOS/Metal/MSL 和 Linux/wgpu/WGSL 作为后续方案记录，不进入当前实施与发布门槛。完整分层与目标目录见 [研发计划 6.3](../native-pcb-viewer-development-plan.md#63-三端架构方案与当前-windows-开发范围)，Windows 实施顺序与验收见 [6.4](../native-pcb-viewer-development-plan.md#64-当前-windows-实施计划与验收)。
 
-三端采用按平台手写 shader：Windows HLSL、后续 macOS MSL、Linux WGSL，共享几何、批次输入和画面语义。当前不引入跨平台 shader 转译依赖，不新增 macOS/Linux 的业务 shader 或占位后端；已有 wgpu 实验继续作为独立诊断保留。
+三端采用按平台手写 shader：Windows HLSL、后续 macOS MSL、Linux WGSL，共享几何、批次输入和画面语义。当前不引入跨平台 shader 转译依赖，不新增 macOS/Linux 的业务 shader 或占位后端；2026-10-03 按用户要求移除独立 wgpu 实验代码与直接依赖，只保留历史报告。D3D11 后端及其测试禁止使用 wgpu；共享场景、字体度量与交互逻辑不依赖具体平台。
 
 2026-10-02 实施范围：M0–M6 只交付 Windows D3D11/HLSL 后端、通用 GPUI 补丁维护及真实 BRD 验收。按研发计划 6.4 的顺序推进真实场景、常驻批次、交互、资源恢复和 release 发布；各项诊断同步五语 i18n。macOS/Linux 的上下文、业务 shader、应用构建和打包在后续移植阶段启动。
 
 Windows 产品调用链固定为：应用提交帧快照 → GPUI 场景排序与裁剪 → D3D11 状态隔离 → `pomelo-render` 绘制 PCB 批次 → GPUI 恢复状态并继续绘制界面 → GPUI 交换链呈现。生产视口不使用每帧全画布像素回读；复杂 Zone 从共享轮廓与孔洞三角化结果生成 GPU 批次，方孔 SDF 保留为已验证的小场景实验。
 
-现有 wgpu 三角形已经在 Windows GPU 上验证，但显示路径为 GPU → CPU 回读 → GPUI 图片上传。该实验保留为诊断与算法参考，不作为原生接入或正式性能通过的证据。见 [实验记录](../gpu-triangle-validation.md)。
+现有 wgpu 三角形已经在 Windows GPU 上验证，但显示路径为 GPU → CPU 回读 → GPUI 图片上传。该历史记录保留为算法参考，不作为原生接入或正式性能通过的证据。见 [实验记录](../gpu-triangle-validation.md)。
 
 ## 锁定版本的未打补丁源码事实
 
@@ -36,7 +36,7 @@ Windows 产品调用链固定为：应用提交帧快照 → GPUI 场景排序�
 
 Windows 后端可对照 [锁定修订的上游源码](https://github.com/zed-industries/zed/blob/1a28cff4b409169bac058bca40dfbfeb7621d19b/crates/gpui_windows/src/directx_renderer.rs)。外部纹理合成仍有上游设计讨论；[PR 60573](https://github.com/zed-industries/zed/pull/60573) 在本次查询时已关闭、未合并，不能作为本项目已经可用的公开接口。
 
-Linux 采用框架内部 wgpu 不强制 Windows 或 macOS 使用 wgpu。当前独立三角形使用 `wgpu 30.0.1`；若接入框架 wgpu，版本、设备、队列与资源类型必须对齐，两个版本的 texture 不能直接互传。
+Linux 采用框架内部 wgpu 不强制 Windows 或 macOS 使用 wgpu。独立 `wgpu 30.0.1` 依赖已删除；若接入框架 wgpu，版本、设备、队列与资源类型必须对齐，两个版本的 texture 不能直接互传。
 
 ## 接入结构
 

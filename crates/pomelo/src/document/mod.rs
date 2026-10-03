@@ -12,14 +12,17 @@ use pomelo_render::copper::PreparedCopper;
 use pomelo_render::tracks::{PrepareError, PreparedTracks};
 
 pub struct PreparedDocument {
+    pub label_index: Option<Arc<pomelo_render::text::msdf::LabelIndex>>,
+    pub preview: Option<crate::services::preview::PreparedPreview>,
     pub restored_view: Option<Box<pomelo_core::view_state::ViewState>>,
-    pub texts: Option<Arc<pomelo_render::text_instances::PreparedTextInstances>>,
+    pub texts: Option<Arc<pomelo_render::text::msdf::PreparedGlyphs>>,
     pub drawings: Arc<PreparedTracks>,
     pub render_diagnostics: Vec<Diagnostic>,
     pub board: ImportedBoard,
     pub search: Arc<pomelo_core::search::SearchIndex>,
     pub picking: Arc<pomelo_core::picking_index::SegmentIndex>,
     pub tracks: Arc<PreparedTracks>,
+    pub zone_outlines: Arc<PreparedTracks>,
     pub copper: Arc<PreparedCopper>,
     pub pads: Arc<pomelo_render::pads::PreparedPads>,
     pub drills: Arc<pomelo_render::pads::PreparedPads>,
@@ -40,6 +43,7 @@ pub enum LoadError {
     Import(ImportError),
     Prepare(PrepareError),
     Picking(pomelo_core::picking_index::IndexError),
+    Search(pomelo_core::search::CollationError),
 }
 
 impl LoadError {
@@ -47,6 +51,7 @@ impl LoadError {
         match self {
             Self::Import(error) => error.diagnostic(),
             Self::Prepare(error) => error.diagnostic(),
+            Self::Search(error) => error.diagnostic(),
             Self::Picking(error) => {
                 use pomelo_core::{
                     geometry::PathError, i18n::MessageKey, picking_index::IndexError,
@@ -290,9 +295,12 @@ mod tests {
             .unwrap(),
         );
         PreparedDocument {
+            preview: None,
             restored_view: None,
             texts: None,
+            label_index: None,
             drawings: Arc::clone(&tracks),
+            zone_outlines: Arc::clone(&tracks),
             render_diagnostics: vec![],
             board: ImportedBoard {
                 scene: Arc::clone(&scene),
@@ -308,7 +316,11 @@ mod tests {
                     encoding: "utf-8".into(),
                 },
             },
-            search: Arc::new(pomelo_core::search::SearchIndex::build(&scene, &cancel).unwrap()),
+            search: Arc::new(
+                pomelo_core::search::SearchIndex::build(&scene, &cancel)
+                    .unwrap()
+                    .unwrap(),
+            ),
             picking: Arc::new(
                 pomelo_core::picking_index::SegmentIndex::build(scene, 10, &cancel).unwrap(),
             ),

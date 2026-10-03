@@ -137,3 +137,30 @@ pub fn open(window: &mut Window, cx: &mut App) {
             )
     });
 }
+
+/// Native Help menu destination; version is the running application package.
+pub fn open_about(window: &mut Window, cx: &mut App) {
+    if window.has_active_dialog(cx) {
+        return;
+    }
+    window.open_dialog(cx, |dialog, _, cx| {
+        let locale = i18n::current(cx);
+        dialog
+            .close_button(false)
+            .title("Pomelo")
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(text(locale, Key::ProductViewer))
+                    .child(env!("CARGO_PKG_VERSION"))
+                    .child(text(locale, Key::LocalReadOnly)),
+            )
+            .footer(
+                Button::new("about-close")
+                    .label(text(locale, Key::SettingsClose))
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
+            )
+    });
+}

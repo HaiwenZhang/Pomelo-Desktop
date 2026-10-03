@@ -1,82 +1,67 @@
-//! Network/component result presentation; tasks and navigation stay in the viewport.
+//! Search row presentation; identity and navigation belong to the viewport.
+use crate::tooltips::ButtonTooltipExt;
+use gpui_kit::base::Selectable;
+use gpui_kit::component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use gpui_kit::{
-    base::Selectable,
-    component::{
-        button::{Button, ButtonVariants},
-        scroll::ScrollableElement,
-    },
-};
-use pomelo_core::{
-    i18n::{Locale, Message, MessageKey as Key, text},
-    search::{SearchEntry, SearchTarget},
-    selection::SelectionTarget,
-};
-type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-pub fn results(
-    locale: Locale,
-    entries: &[SearchEntry],
-    selected: Option<SelectionTarget>,
-    commands: impl Fn(SearchTarget) -> ClickHandler,
+use pomelo_core::search::SearchEntry;
+pub fn row(
+    index: usize,
+    entry: &SearchEntry,
+    selected: bool,
+    color: Option<[f32; 4]>,
+    locale: pomelo_core::i18n::Locale,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    // Preserve empty source names in the list, while giving unnamed network
+    // commands an accessible identity independent of their result position.
+    let accessible_name = match entry.target {
+        pomelo_core::search::SearchTarget::Net(id) if entry.name.trim().is_empty() => {
+            pomelo_core::i18n::Message::new(pomelo_core::i18n::MessageKey::SourceNetName)
+                .arg("name", id.0.to_string())
+                .display(locale)
+        }
+        _ => entry.name.clone(),
+    };
     div()
-        .id("search-results")
-        .max_h_48()
-        .min_h_0()
-        .flex_shrink_0()
-        .overflow_y_scrollbar()
-        .children([false, true].into_iter().flat_map(|components| {
-            let mut rows = Vec::new();
-            for entry in entries.iter().filter(|entry| {
-                matches!(
-                    entry.target,
-                    pomelo_core::search::SearchTarget::Component(_)
-                ) == components
-            }) {
-                if rows.is_empty() {
-                    rows.push(
-                        div()
-                            .px_3()
-                            .py_1()
-                            .text_sm()
-                            .child(text(
-                                locale,
-                                if components {
-                                    Key::SearchComponents
-                                } else {
-                                    Key::SearchNets
-                                },
-                            ))
-                            .into_any_element(),
-                    );
-                }
-                let target = entry.target;
-                let (kind, id) = match target {
-                    pomelo_core::search::SearchTarget::Net(id) => ("search-net", id.0),
-                    pomelo_core::search::SearchTarget::Component(id) => ("search-component", id.0),
-                };
-                let label = Message::new(if components {
-                    Key::SearchComponentResult
-                } else {
-                    Key::SearchNetResult
-                })
-                .arg("name", entry.name.as_str())
-                .arg("count", entry.count)
-                .display(locale);
-                rows.push(
+        .w_full()
+        .px_2()
+        .py_1()
+        .child(
+            Button::new(("entity-result", index))
+                .ghost()
+                .small()
+                .w_full()
+                .justify_start()
+                .selected(selected)
+                .accessibility_label(accessible_name.clone())
+                .child(
                     div()
-                        .px_3()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when_some(color, |row, [r, g, b, a]| {
+                            row.child(div().size_2().flex_shrink_0().rounded_full().bg(Rgba {
+                                r,
+                                g,
+                                b,
+                                a,
+                            }))
+                        })
                         .child(
-                            Button::new((kind, id))
-                                .selected(selected == Some(target.into()))
-                                .ghost()
-                                .label(label)
-                                .on_click(commands(target)),
-                        )
-                        .into_any_element(),
-                );
-            }
-            rows
-        }))
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(entry.name.clone()),
+                        ),
+                )
+                .native_tooltip(accessible_name)
+                .on_click(on_click),
+        )
         .into_any_element()
 }

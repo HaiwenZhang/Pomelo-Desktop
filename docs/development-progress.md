@@ -1,12 +1,94 @@
 # 原生 PCB Viewer 开发进展
 
-记录日期：2026-10-02。本文件记录实际结果；目标范围与完成门槛仍以 `native-pcb-viewer-development-plan.md` 为准。目前已实现完整 CPU 场景组装、后台 importer 与 Windows 走线/圆弧 GPU 视口；其他 PCB 图元及查看功能仍在开发，尚未完成 BRD MVP。
+2026-10-04 搜索排序：共享核心与导入链路接入 ICU4X / Unihan 五语离线数据，排序按工作台启动时的系统语言冻结，独立于界面翻译；保留 Web 的数字、稳定同名与身份语义，并对齐 ECMAScript 查询空白。合成及 FPC/camera/AGILEX 共 26,730 组五语查询零差异，旧字节排序复现 1,065 组差异；478 项测试、Clippy、格式和数据再生成哈希通过。最终 Release 与实窗补验结果见[搜索排序验证](search-order-validation.md)，完整 MVP/性能/发布仍未完成。
+
+2026-10-04 左右面板收缩：窗口级布局、标题收起按钮、窄栏展开、Ctrl+B / Ctrl+Shift+B、视图菜单、五语名称及原子保存已实现。Debug 实窗完成独立/同时收起、330 宽度重启恢复、搜索焦点修正、多标签状态隔离、五语及英文浅色键盘展开；最终 Release 在 1000×650 下恢复两栏各 440 时夹取为 396/240，画布约 363，工具栏与搜索可用。工作区 473 项测试、Clippy、格式及 debug/Release 构建通过，UI 字体不变。见[面板验证](panel-collapse-validation.md)；完整 MVP、DPI、性能和发布门槛仍未完成。
+
+2026-10-04 锚点应用接入：画布保留实际对象/层/类别，检查器组合全组统计与实际源字段，模式切换、清除及状态恢复接通。FPC 的 J1 搜索锚点 Pin 15220 与实际鼠标 Pin 15225 分别实窗验证，30 成员、TOP 层及重开恢复正确。FPC/camera/die/AGILEX 背钻共 125,136 次首选、四模式和实际锚点 Web 对照零差异；同名 example 输出冲突已消除。见[应用接入验证](search-anchor-app-validation.md)。以下旧记录保留各阶段当时的验证边界，多语排序和完整验收仍待完成。
+
+2026-10-03 搜索锚点核心：新增 `SegmentIndex::selection_anchor`，按最新 Web 选择最高可见条目，全部隐藏则回退；保留孔 scope、自定义 pad、背钻、die/bond 类别及完整组成员顺序。三块真实板和合成场景共 9,158 查询零差异，17 项新增回归、工作区 456 项测试与 Clippy 通过。**应用检查器/实际鼠标 hit 元数据接入仍未完成**，UI 字体与 TOP 列表未改，见[搜索锚点核心验证](search-anchor-validation.md)。
+
+2026-10-03 TOP 列表顺序：按用户确认修正左侧图层列表反序，默认 TOP → 内层 → BOTTOM；绘制与拾取顺序保持原策略。最终 debug 实窗验证默认顺序、BOTTOM/TOP 置顶的列表与画布同步，以及正常退出后排序恢复，UI 字体保持不变。工作区 439 项测试、Clippy、格式及 debug/Release 构建通过，见[TOP 顺序验证](top-layer-order-validation.md)。用户正在使用的旧实例保留，新版在 `target/debug` / `target/release`。
+
+2026-10-03 定位边界：正式定位使用索引几何，去掉额外源原点和近似文字矩形；最新 Web 实际包含隐藏条目的 bounds，显示状态只影响锚点。三块真实板 8,821 查询及合成场景 19 查询零差异；真实板旧算法也匹配，合成场景复现 18 个旧差异并修正。J1 的 typed 元件分组、30 成员、相机与手动图层排序完成真实落盘及重开恢复。UI 字体保持不变；搜索锚点、多语排序、整板和发布仍待验，见[定位边界验证](selection-navigation-bounds-validation.md)。
+
+2026-10-03 元件 reference 分组：共享核心将搜索、画布选择、完整成员与悬停集合统一为 pin/finger 的精确 reference 分组，保留独立源 placement 和带类型锚点；Windows D3D11 高亮接入。三块真实 PCB 的 3,842 个组/17,178 个成员与最新 Web 零差异，自有 fixture 补验重复 reference 和孤立 finger。实窗 U2 的搜索、finger 拾取及整组悬停验证 29 pin + 28 finger；432 项工作区测试、Clippy、格式和 debug/Release 构建通过。UI 字体保持不变；显示相关定位范围、多语排序、新组恢复闭环与整板验收仍待完成，版本边界见[元件分组验证](component-reference-validation.md)。
+
+2026-10-03 相机导航：整板 86% 适应、定位比例/上限、缩放下限、百分比基准及 resize 保留视角与最新 Web 对齐；修正完整板框范围及首次上传行改变画布高度的问题。56 组/924 个相机状态零差异，三块实际原生导入边界与 Web 精确一致；426 项工作区测试、D3D11 导航硬件回归、Clippy、格式和 debug/Release 构建通过。最终 Release 的 FPC 实窗验证 100%→120%、翻板保留比例、适应恢复 100%。UI 界面字体保持不变；鼠标滚轮映射、完整整板视觉和发布门槛仍待完成，见[相机导航验证](camera-navigation-validation.md)。
+
+2026-10-03 曲边铜皮：共享 f64 可见圆弧细分、不可变视口缓存及 Windows D3D11 奇偶遮罩接入；UI 界面字体保持不变。最新 Web 的 7,181 次几何对照零差异，216 组硬件像素、标签孔洞遮罩和每帧 4 MiB 上传预算通过；418 项工作区测试、Clippy、格式、debug/Release 构建通过。真实窗口发现并修正 GPU 准备行改变画布高度所致的重复重建；新版遥测静止稳定，但本轮新版实窗截图与交互尚未验证。范围与剩余项见[曲边铜皮验证](curve-fill-rendering-validation.md)。
+
+2026-10-03 die pad 分类修正：D3D11 将 BOND TOP 的 pin 几何、填充及边界归入铜线显示与提升顺序，与现有 CPU 拾取和 MSDF 标签一致，UI 字体保持原状。先复现 120 组中 60 组硬件失败，修正后 120 组通过；真实 camera_test_board 的全部 29 个 die pad 共 3,480 次拾取首选及四模式与 Web 完全匹配。四项图元硬件回归、401 项工作区测试（14 项默认忽略）、Clippy 与 debug/Release 构建通过。GPUI 9 帧呈现无 GPU 错误，但本轮实窗截图和交互未验证；证据及限制见[die pad 专项](die-pad-rendering-validation.md)。
+
+2026-10-03 背钻专项：每过孔独立绿色交叉网纹，切除层范围、普通孔独立开关、base 恢复和拾取已接通；新增五语“显示背钻”，UI 字体保持原状。401 项工作区测试、Clippy、debug/Release 构建及 128 组真实 D3D11 像素对照通过。AGILEX 实窗验证 Via 313287 拾取、Tab/Space、重开恢复及几何不重传；552 个背钻的 52,992 次 Web 拾取首选和四模式对照全部匹配，0 差异。范围与终态证据见[背钻验证](backdrill-rendering-validation.md)。
+
+记录日期：2026-10-03。本文件记录实际结果；目标范围与完成门槛仍以 `native-pcb-viewer-development-plan.md` 为准。目前已实现完整 CPU 场景组装、后台 importer，并接入 Windows 走线/圆弧、铜皮、焊盘、钻孔、绘图、文字及主要查看界面；完整 BRD MVP 与发布验收尚未完成。
+
+2026-10-03 最新精度修正：Windows 长直线采用最新 Web 的补偿法向坐标和端帽投影，投影长度超过 16,384 逻辑像素时启用。真实硬件先复现 432 组中 157 组像素误差失败，再完成扩展 960 组全部通过（最大 RGB 误差 1）。FPC 在 50,000 逻辑像素/mm 下完成 Segment 31511 边界拾取、翻板和平移，几何缓存及上传不增加。既有三项图元硬件回归、工作区 396 项测试（12 项默认忽略）、Clippy 与最新 debug 构建通过。UI 字体保持现状，证据见 [长线深度缩放验证](long-line-precision-validation.md)；完整画布/发布验收仍未完成。
+
+2026-10-03 自定义焊盘补验：自定义焊盘在非填充模式使用保留圆弧和孔洞的原生轮廓，选择/悬停保持 pin/via 类型身份；显示面板加入五语“填充焊盘”，UI 字体保持现状。FPC 12 条和 AGILEX 694 条边界（189 条圆弧）与最新 Web 零差异；真实 D3D11 像素、529% 窗口边界拾取、Tab/Space 切换及正常退出重开恢复通过。该阶段工作区 396 项测试通过、11 项默认忽略，Clippy 和 debug 构建通过。证据与限制见 [自定义焊盘轮廓验证](custom-pad-outlines-validation.md)。
+
+2026-10-03 画布文字对齐：板文字与自动标签已采用更新后的 Web 思源黑体 MSDF 方案，UI 字体保持原状。两块真实 PCB 的 67,488 次拾取首选及四模式选择与 Web 一致，7,230 个字形布局对照零差异，32 组原生 D3D11 字体硬件像素验证通过。共享布局/交互保持平台无关，Windows 使用 HLSL；独立 wgpu 30.0.1 依赖与实验源码已删除。验证范围、指纹、复验入口及尚未通过的门槛见 [画布对照记录](canvas-web-parity-validation.md)。
 
 最新走线验证：224 项工作区测试通过，硬件像素测试另行显式通过，Clippy 与 Windows debug 构建通过。FPC 真实案例完成 394 个走线实例的上传和窗口呈现；32,771 个合成实例验证跨帧上传。AGILEX 默认 UTF-8 失败原因已定位，显式 Windows-1252 复验完成 146,571 个走线实例、5 帧上传/呈现，无 GPU 错误。桌面启动已支持独立语言与编码选项。实窗视觉与大板完整验收尚未通过，范围及原始证据见 [gpu-trace-validation.md](gpu-trace-validation.md)。下表保留此前解析阶段的验证记录。
 
 当前平台范围已确认：**只开发、验证和交付 Windows**。三端方案已写入 [研发计划 6.3](native-pcb-viewer-development-plan.md#63-三端架构方案与当前-windows-开发范围) 和 [ADR 0001](adr/0001-native-gpu-rendering.md)：统一 GPUI 注册/绘制入口，业务后端与 HLSL/MSL/WGSL 留在 `pomelo-render`。macOS/Linux 为后续规划，尚未实现；现有核心 CI 的多平台检查不代表应用或 GPU 后端支持。
 
 ## 已有实现
+
+- 启动错误原生反馈增加五语“打开日志文件夹”，日志不可写时隐藏入口，文件夹启动失败保留原始日志。应用 60、i18n 10 项、Clippy、格式及 debug/独立 Release 构建通过；同一新版 Release 完成五语实窗、Tab/Space 日志入口、Enter/Escape/标题栏关闭、语言覆盖、不可写日志、长中文参数和真实退出码 2。正常 USBC GPU 画面也已复验，用户开始操作后停止输入。默认 Release 仍被运行实例锁定，新版位于 `.cache/ui-validation/startup-build/release/pomelo.exe`；真实 GPU 故障、正常闭环与完整发布仍待验收，见 [启动错误验证](startup-error-validation.md)。
+
+- 最近文件缩略图扩展为正式几何批次的有界概览：铜皮及孔洞、解析/自定义焊盘、钻孔、绘图和板框。业务绘制位于 `pomelo-render/scene/thumbnail.rs`，应用保留 PNG/GPUI 适配。8 项新回归通过，渲染库 74、应用 53、i18n 9 与 Clippy/格式通过；debug/Release 均已更新。最终 Release 实窗完成双预览、深浅主题、中文空格路径、重启恢复及损坏缓存重导入恢复；概览仍有 LOD/文字限制，完整 UI 验收未完成，见 [缩略图验证](recent-thumbnail-validation.md)。
+
+- 欢迎页文件入口新增框架驱动的外部文件拖入高亮，使用主题主色与淡背景。格式、工作区全目标全特性 Clippy 与 Release 构建通过，私有副本空历史欢迎页正常显示；工具不支持跨窗口拖放，实际高亮和拖入导入尚待手工验收，见 [拖入反馈记录](file-drop-validation.md)。
+
+- Windows debug/Release 改为 GUI 子系统，直接双击 `pomelo.exe` 不再带出控制台。最新常用 `target/debug` / `target/release` 构建通过，PE 头均为 Windows GUI；Release 私有副本实际显示简中深色欢迎页，未新增终端窗口。Clippy、格式、脚本语法及差分检查通过，见 [启动验证](windows-gui-startup-validation.md)。
+
+- 欢迎页继续对齐设计稿的垂直层级与两栏比例：主标题显式行高和较紧间距，文件入口约 55% 宽、格式说明改为正文大小，主区历史标题减小上下留白。最终独立 Release 补验五语 × 深浅主题的 1000×650 主标题/文件入口，英文浅色复验离屏焦点、菜单及设置恢复；应用 53 项、i18n 9 项、Clippy 和格式通过。验证脚本复制且核验可执行文件，运行副本不锁 Cargo 输出；原用户实例保留。新 Release 位于 `.cache/ui-validation/build/release/pomelo.exe`，完整键盘矩阵、DPI 与逐像素仍待完成，见 [欢迎页排版记录](welcome-layout-validation.md)。
+
+- 标题栏品牌 SVG 按设计图改为粉色柚子切片，保留图片尺寸与既有回退。最新独立 debug/Release 构建通过并观察深浅标题栏；原 `target/release` 和用户运行中的实例保留旧版，具体版本边界见 [欢迎页验证](welcome-layout-validation.md)。
+
+- 欢迎页最低窗口键盘复验发现 Tab 到“查看全部”却没有显示按钮，已复用 FocusScroll 修正，工作台持有四个独立滚动状态。独立修正版 Release 实窗在简中深色 1000×650 验证侧栏、查看全部、三项预览及完整历史离屏焦点自动显示，双向 Tab、Space/Escape 菜单恢复和手动滚轮行为正常；英文浅色补验设置焦点恢复及主区原生打开真实 USBC 板，GPU 呈现和返回历史正常。应用 53 项、i18n 9 项、Clippy 和构建通过；全部组合、DPI 与逐像素验收仍待完成，见 [欢迎页键盘记录](welcome-layout-validation.md)。
+
+- 欢迎页功能介绍区进一步对齐设计图：宽窗口三个居中组，20/16 字号，窄窗口纵向排列。实机发现并修正日文说明缩成单字列；最终 Release 完成五语 × 深浅主题的 1000×650 功能区验证、真实 DDR4 最近文件打开，以及简中默认空历史和首次原生对话框导入。新增独立 UI 验证配置目录，日常四份偏好文件哈希保持一致；应用 53 项、i18n 9 项、Clippy 和 Release 构建通过。全部页面键盘/DPI/逐像素验收仍待完成，见 [欢迎页补验](welcome-layout-validation.md) 与 [配置隔离](ui-validation-profiles.md)。
+
+- 欢迎页按设计图细化最近文件：开始页三项预览、完整历史独立滚动、主区大标题与尾随箭头、两行源文件名及末尾省略号。三个 Scrollable wrapper 使用不同稳定 ID，修复共享滚动状态。最终 Release 在简中默认/最低窗口和英文最低窗口验证，应用 51 项、i18n 9 项、Clippy、格式及构建通过。用户随后开始操作 Release，停止自动输入并保留当前英文深色窗口；其余语言/浅色/键盘和逐像素验收仍待补齐，见 [欢迎页布局验证](welcome-layout-validation.md)。
+
+- 文档标签溢出时，离屏关闭按钮的键盘焦点现在自动显示；复用应用焦点滚动组件的显式横向模式，检查器保留纵向行为。三个真实 BRD 在简中深色 1000×650 下实测双向 Tab、活动标签滚动、Space/Escape 文档菜单及非活动关闭。最新 Release 构建、应用 51 项、i18n 9 项、Clippy 和格式检查通过，完整应用键盘/DPI/逐像素仍待验，见 [文档标签验证](workbench-tabs-validation.md)。
+
+- 文档标签、完整名称提示、40 档位标题栏及检查器主色模式完成此前对齐。该阶段 Release 已独立执行真实 BRD 操作，并补验最终简中深浅 1000×650 工作区；应用 51 项、i18n 9 项、Clippy、格式、Release 构建通过。查看当前界面请运行 `target/release/pomelo.exe`。完整记录和未验范围见 [文档标签验证](workbench-tabs-validation.md)。
+
+- 按工作区设计图细化文档标签：普通活动前景色、半粗体、顶部圆角边框、非活动表面和间距。展示归 `workbench/document_tabs.rs`，公开 Base 语义、Kit 菜单/徽标/关闭按钮与正式命令保持连接，激活标签接入横向显示。独立 Release 实窗验证长名称及双文档相机/过滤隔离、关闭非活动及最后标签；最终简中深色 1000×650 保留所有主窗口控制和命令。全五语门禁通过；其他语言最低窗口、横向溢出及逐像素验收仍待完成，详见 [文档标签验证](workbench-tabs-validation.md)。
+
+- 继续按设计稿调整左右标签栏、筛选框、图层色块与展开卡片；窄栏完整菜单作为独立可聚焦按钮，命令栏补齐真实轮廓、分组线和着色连体边界。检查器统一内容边缘，拾取过滤按走线/过孔/焊盘/铜皮自然换行，底部滑块与百分比同排，新增消息同步五语。实窗验证菜单 Tab/Space/Enter/Escape 和真实网络/元件切换、移除菜单焦点恢复、透明度 35%→59%→35% 及两种着色联动。加入按语言选择 Windows 已安装 UI 字体，最终默认窗口五语已观察；最终字体下最小窗口/窄栏组合仍待复验。应用 51 项、i18n 9 项、Clippy、格式与 debug/Release 构建通过，旧 debug 文件锁已通过正常退出解决。见 [侧栏与命令栏对齐记录](sidebar-style-validation.md)。
+
+- 修复正常退出仍恢复旧相机与选择：查看快照直接进入后台串行合并，退出等待不依赖停止执行的主线程任务，运行时错误仍使用既有 i18n 诊断。实窗验证 Ctrl+Q 的空选择/213%/翻板、标题栏关闭后的走线 12152/3130%，以及 LPDDR4 与 USBC 双文档的相机、着色和过滤独立恢复；应用 51 项、i18n 9 项、debug 构建与 Clippy 通过。慢磁盘/超时/强制结束等仍未覆盖，见 [退出恢复验证](view-exit-validation.md)。
+
+- 成员卡片接入内外两层焦点显示，保持两张卡片窗口，源 ID 在窄栏不压缩，完整动作名称保留五语提示。真实 GND 的第三张离屏卡片、反向返回、六页 Enter/Space 首尾焦点，以及英文深色 1000×650 的自动显示和对象 9759 正式定位均有实窗证据；debug 构建、应用 51、i18n 9 与 Clippy 通过，见 [检查器焦点验证](inspector-focus-validation.md)。全部成员连续 Tab 和完整五语/DPI 仍待验收。
+
+- 检查器焦点显示扩展至选择命令、过滤与显示面板；缩小窗口后仍聚焦的控件保持可见，手动滚轮不强制拉回。清除选择后焦点交回画布。真实 LPDDR4 在简中及英文 1000×650 下验证反向 Tab、过滤切换、四类显示关闭/恢复和透明度 35%→40%→35%，应用 51 项、debug 构建与工作区 Clippy 通过。成员卡片嵌套键盘滚动仍待补齐，见 [检查器焦点验证](inspector-focus-validation.md)。
+
+- 文件信息与诊断命令增加离屏焦点自动显示，外层使用可控的 GPUI 滚动状态与 Kit 滚动条，保留自然高度内容和内层独立滚动。简中浅色及英文深色最小窗口验证 Tab、Space、Enter、页边界焦点与内层滚动，文件信息反向 Tab 边框补充实窗验证；应用 51 项、i18n 9 项、debug 构建与 Clippy 通过。范围与剩余项见 [检查器焦点验证](inspector-focus-validation.md)。
+
+- 诊断展示提取至 `panels/diagnostics.rs`，修复内容高度限制、内部滚轮带动外层、翻页沿用末尾偏移及窄栏分页挤压。分页使用 Kit Base Button 与稳定焦点，在首尾页将焦点交给可用命令，修复禁用按钮焦点陷阱。原创合成 BRD 通过正式导入产生 40 条结构化警告，32+8 项、源 ID/偏移/路径、简中浅色及英文深色最低窗口、连续 Space/Enter 页边界操作均有实窗证据；应用 51、i18n 9、annotations 16 项与 debug 构建、Clippy、格式检查通过，见 [诊断 UI 验证](diagnostics-ui-validation.md)。
+
+- 检查器继续按设计图收紧属性密度，增加四模式边框组、选择色标和可折叠文件信息；默认成员窗口显示两张卡片，定位/清除可见。修复成员内容高度受限及内部滚轮同时移动检查器的问题。真实 GND 的独立滚动、翻页复位和文件信息鼠标/Space/Enter 操作已实窗验证；日文深色 1000×650 下完整模式及按钮、过滤/文件信息可达。应用 51 项、i18n 9 项、Windows debug 构建与全工作区 Clippy 通过，详见 [检查器布局验证](inspector-layout-validation.md)。完整 UI 验收仍待完成。
+
+- 画布悬浮工具栏已在深浅主题中统一为设计稿的深色表面、浅色文字/图标、选中态及分组线，并按实际容器居中。修复命令鼠标按下/滚轮穿透造成选择清除的问题；真实 GND 在放大、平移、适应、翻转及恢复后保持，最低深色窗口下无比例尺遮挡，见 [工作区实窗验证](workbench-tabs-validation.md)。
+
+- UI 补齐文档格式徽标、Ctrl O / F2 提示和五语带文件名的关闭名称；长标签及标题受宽度约束，修复最低窗口中原生控制按钮被挤出的问题。日文拾取过滤改为整项换行。按钮提示使用 GPUI 公开入口管理生命周期，修复旧路径、图层及关闭提示残留。真实 USBC / LPDDR4 同窗快捷键切换保留独立着色、相机和选择；应用 51 项、i18n 9 项、debug 构建、Clippy、格式检查通过，详见 [标签与提示验证](workbench-tabs-validation.md)。完整 UI 验收仍待完成。
+
+- UI 继续按设计图补齐检查器定位/清除按钮、主色着色选中态和画布选择名称提示；定位复用正式目标准备及相机逻辑。图层 Checkbox 取消语言固定宽度，修复日文最小左栏拆字。五语主要工作区在 1000×650 下检查了完整名称和整项换行，日文 GND 搜索/分页/显示面板及英文平移后重新定位/清除状态取得实窗证据；完整 UI 验收仍待完成，见 [工作区五语与检查器验证](workbench-i18n-validation.md)。
+
+- 网络着色已接入正式 D3D11/HLSL：共享 Web 203 项调色板按源 NetId 取色，零网络保留图层色；走线/圆弧、解析及自定义焊盘/过孔、铜皮支持，保留高亮优先级和原 alpha。列表/检查器标记使用同一表，每文档模式持久化，切换不重上传几何。硬件验证同网跨图元、205 个取色样本、钻孔/绘图/文字材料及切回整张像素恢复，1 项显式测试通过；LPDDR4/USBC 切换、GND 搜索、深浅主题、LPDDR4 跨启动 Net 恢复和 USBC 独立 Layer 状态已实窗验证。核心 85、应用 51、渲染库 66 项普通测试通过，Windows debug 构建与全目标全特性 Clippy 通过；完整 UI/MVP 验收仍待完成，见 [网络着色验证](network-colors-validation.md)。
+
+- 检查器模式按钮修正等宽挤压：按完整文字自然宽度分配，空间不足时换行。英文默认窗口完整同排，1000×650 下 Component 完整独占第二行，实际 Component/Object 切换及清除旧选择正常；简中仍为单排。最新 Windows debug 构建、工作区全目标全特性 Clippy 与格式检查通过，详见 [UI 验证记录](ui-design-validation.md)。
+
+- 单图层走线/过孔/焊盘过滤已接入：名称展开行，眼睛独立显隐；核心稀疏显示状态、参考/索引拾取、视图保存与 D3D11 正式合成绘制使用相同规则。支持解析及自定义焊盘、过孔多层钻孔范围，不重新上传几何；列表改为可变高度虚拟列表。真实 LPDDR4 BOTTOM 的三类别过滤、筛选及关闭文档后跨启动恢复已实窗验证。核心 85、应用 51、渲染库 65 项普通测试通过，显式硬件像素测试 1 项通过；Windows debug 构建与工作区 Clippy 通过。所有板及大场景性能仍未完成，网络着色由后续实现补齐，详见 [单图层过滤验证](layer-primitives-validation.md)。
+
+- UI 设计稿落地：欢迎页和工作区接入真实数据、GPUI Kit 可调侧栏及五语。Windows 实窗已验证两块 BRD、文档切换、网络定位、F2、主题、图层过滤、显示开关及分隔条；后续新增的真实 PNG/层数重启恢复、GND 双列属性/统计、成员卡片定位走线 12152、顶部清除选择也已复验。修复 1000×650 欢迎页近期文件名称受挤压、高倍比例尺舍入成零及浮动工具栏重叠；五语欢迎页/设置弹层均实际检查。此前窗口工具错误通过重建会话恢复。最新应用 51 项测试、i18n 9 项门禁、工作区 Clippy 与 debug 构建通过；网络着色占位已由正式实现替换，仍不能宣称逐像素完全一致或 BRD MVP 完成，详见 [UI 验证记录](ui-design-validation.md)。
+
+- 原生语言与外观设置已实现于 `settings/mod.rs`：菜单/工具栏/`Ctrl+,` 共用命令，标准 Dialog 与 RadioGroup 读取现有偏好，五语同步交付，保存失败诊断在对应组展示。真实 Windows 窗口已验证快捷键打开、五语即时切换及默认窗口排版、浅色主题、Escape 关闭及重启恢复英文/浅色；修正默认关闭图标的英文可访问名与分组省略号。最新应用 51 项测试、i18n 9 项门禁、Windows debug 构建与工作区 Clippy 通过。菜单点击、Tab 焦点、DPI 与文档/导入中切换仍待验收，见 [设置验证](settings-validation.md)。
 
 - 15061 全量紧凑文字 Windows D3D11 硬件验证通过：69,797 对象、5,473,611 实例全部上传（350,311,104 字节、168 回调），产生可见像素；重复绘制逐像素一致，改色/裁剪不增加上传且裁剪外像素正确。显式 reset 后重建管线与缓存并完整重传，再次 168 回调、恢复全部相同裁剪像素。专用测试与工作区 Clippy 通过。128×128 离屏诊断不代表真实窗口、整板合成、帧率或显存释放已验收，详见 [15061 GPU 文字验证](text-compact-gpu-validation.md)。
 
@@ -540,7 +622,7 @@
 
 - Windows 走线视口已接入文档独立相机、鼠标锚点缩放、中键平移、键盘导航、适配和翻转，五语按钮与提示同步。CPU 与实际 D3D11 导航像素检查通过，几何上传缓存保持；227 项测试、Clippy 和 Windows 构建通过。输入事件实窗验收受文件对话框自动化定位限制，尚未通过，见 [导航验证](viewport-navigation-validation.md)。
 
-- Rust 四 crate 工作区：领域模型/几何/相机/取消令牌，BRD 导入契约与有界 header/reader，渲染准备，GPUI Kit 原生应用。当前工具链实测为 `rustc 1.98.1`；依赖锁定 `gpui-kit 0.7.0`、`wgpu 30.0.1`、`rust-i18n 4.2.4`。
+- Rust 四 crate 工作区：领域模型/几何/相机/取消令牌，BRD 导入契约与有界 header/reader，渲染准备，GPUI Kit 原生应用。当前工具链实测为 `rustc 1.98.1`；依赖锁定 `gpui-kit 0.7.0`、`rust-i18n 4.2.4`；Windows PCB 后端为 D3D11/HLSL，独立 wgpu 30.0.1 已删除。
 - 原生窗口、欢迎页、文件对话框/拖放/启动参数入口、标签切换/关闭、深浅主题、完整 CPU 场景后台导入、单并发排队、100 ms 合并进度轮询、文档身份/generation 校验和取消检查；场景统计不伪装为 GPU 查看验收。
 - 共享五语资源、消息参数注册表、结构化导入诊断、应用菜单与组件语言同步、后台串行偏好保存、退出等待保存、CLI `--locale`。详见 `i18n.md`。
 - BRD reader 的边界/溢出检查、V15 flags、特殊 f64 word 顺序、绝对偏移字符串对齐，以及 13 个布局族的头部读取契约。
@@ -553,7 +635,7 @@
 - f64 铜皮独立外环/孔洞网格、稳定 Morton 孔洞块及解析边界；锁定 `earcut 0.4.11`。BRD computed copper、hatch 走线、两种旋转矩形和板框通过 `decode-copper` 查询，六代表板 704 条请求与完整冻结 Web SceneBuilder 的对应对象一致。CPU 网格还未接入正式 Windows GPU 视口；范围见 [铜皮网格验证](brd-copper-validation.md)。
 - 板文字、字体、对齐/镜像/间距、所属对象、标准绘图层五语标签与存储尺寸图形；完整 `SceneBuilder`、场景输出预算及 `AllegroImporter::import()` 文件入口。六代表板全部文字/尺寸字段和场景统计/顺序/边界通过对照，详见 [文字与场景验证](brd-annotation-scene-validation.md)。
 - 冻结脚本生成 Web 输入哈希清单与 156 案例 SHA-256 清单；本地 `.cache/` 报告不入库，外部原始案例未修改。
-- `--gpu-demo` 原生画布：真实 wgpu/WGSL 三角形、CPU 回读和 GPUI 合成；GPU 像素验证及结构化五语错误。三角形实验记录见 [gpu-triangle-validation.md](gpu-triangle-validation.md)。
+- 历史 `--gpu-demo` 三角形实验：已于 2026-10-03 删除该命令、源码和直接依赖；既有 GPU 像素记录保留。三角形实验记录见 [gpu-triangle-validation.md](gpu-triangle-validation.md)。
 
 - `--native-gpu-demo`：GPUI 通用回调 + `pomelo-render` 自有 HLSL/管线，Windows 同设备直接呈现；框架补丁在构建前生成，不维护完整 vendor。详见 [gpu-native-validation.md](gpu-native-validation.md)。
 

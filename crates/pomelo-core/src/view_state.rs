@@ -25,19 +25,24 @@ pub struct ViewState {
     #[serde(default)]
     pub pick_filter: crate::picking::PickFilter,
     pub selection: Option<SelectionTarget>,
+    #[serde(default)]
+    pub selection_anchor: Option<crate::picking_index::SelectionAnchor>,
 }
 
 impl ViewState {
     /// Validate before writing or restoring; callers attach configuration paths.
     pub fn validate(&self) -> Result<(), crate::model::Diagnostic> {
         if self.schema_version != 1
+            || (self.selection.is_none() && self.selection_anchor.is_some())
             || self.source.format.is_empty()
             || self.source.format.len() > 64
             || self.source.encoding.is_empty()
             || self.source.encoding.len() > 64
             || !self.camera.is_renderable()
             || self.display.hidden_layers.len() > 4096
+            || self.display.layer_primitives.len() > 4096
             || self.display.layer_order.len() > 4096
+            || self.display.priorities.len() > 4096
             || self
                 .display
                 .layer_order
@@ -88,6 +93,50 @@ mod tests {
             selection: Some(SelectionTarget::Object(
                 crate::selection::SelectedObject::Pin(ObjectId(7)),
             )),
+            selection_anchor: None,
+        }
+    }
+    #[test]
+    fn saved_anchor_roundtrips_with_a_group_identity() {
+        let mut value = state();
+        value.selection = Some(SelectionTarget::Net(crate::model::NetId(9)));
+        value.selection_anchor = Some(crate::picking_index::SelectionAnchor {
+            object: crate::selection::SelectedObject::Pin(ObjectId(7)),
+            layer: LayerId(3),
+            category: crate::display::DisplayCategory::Pin,
+        });
+        let decoded: ViewState =
+            serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            decoded
+                .matching(&value.source)
+                .unwrap()
+                .unwrap()
+                .selection_anchor,
+            value.selection_anchor
+        );
+    }
+    #[test]
+    fn legacy_view_without_anchor_remains_readable() {
+        let mut value = serde_json::to_value(state()).unwrap();
+        value.as_object_mut().unwrap().remove("selection_anchor");
+        let decoded: ViewState = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.selection_anchor, None);
+        assert!(decoded.validate().is_ok());
+    }
+    #[test]
+    fn anchor_without_selection_returns_a_localized_configuration_error() {
+        let mut value = state();
+        value.selection = None;
+        value.selection_anchor = Some(crate::picking_index::SelectionAnchor {
+            object: crate::selection::SelectedObject::Pin(ObjectId(7)),
+            layer: LayerId(3),
+            category: crate::display::DisplayCategory::Pin,
+        });
+        let error = value.validate().unwrap_err();
+        assert_eq!(error.code.as_ref(), "VIEW_STATE_INVALID");
+        for locale in crate::i18n::Locale::ALL {
+            assert!(!error.message.display(locale).is_empty());
         }
     }
     #[test]
@@ -97,11 +146,17 @@ mod tests {
         original.camera.flipped = true;
         original.display.hidden_layers.insert(LayerId(4));
         original.display.show_drills = false;
+        original.display.show_backdrills = false;
         original.display.show_copper = false;
         original.display.show_texts = false;
         original.display.show_drawings = false;
+        original.display.filled = false;
         original.display.copper_opacity = 0.75;
+        original.display.color_mode = crate::display::ColorMode::Net;
         original.display.layer_order = vec![LayerId(4), LayerId(2)];
+        original
+            .display
+            .set_primitive(LayerId(2), crate::display::LayerPrimitive::Traces, false);
         let decoded: ViewState =
             serde_json::from_slice(&serde_json::to_vec(&original).unwrap()).unwrap();
         let restored = decoded.matching(&original.source).unwrap().unwrap();
@@ -110,11 +165,18 @@ mod tests {
         assert_eq!(restored.selection, original.selection);
         assert!(!restored.display.layer_visible(LayerId(4)));
         assert!(!restored.display.show_drills);
+        assert!(!restored.display.show_backdrills);
         assert!(!restored.display.show_copper);
         assert!(!restored.display.show_texts);
         assert!(!restored.display.show_drawings);
+        assert!(!restored.display.filled);
         assert_eq!(restored.display.copper_opacity, 0.75);
+        assert_eq!(restored.display.color_mode, original.display.color_mode);
         assert_eq!(restored.display.layer_order, original.display.layer_order);
+        assert_eq!(
+            restored.display.layer_primitives,
+            original.display.layer_primitives
+        );
     }
     #[test]
     fn content_and_decoding_changes_reject_old_view() {
@@ -127,8 +189,20 @@ mod tests {
         assert!(original.matching(&source).unwrap().is_none());
     }
     #[test]
+    fn too_many_layer_category_overrides_are_rejected_before_restore() {
+        let mut value = state();
+        for id in 0..4097 {
+            value
+                .display
+                .set_primitive(LayerId(id), crate::display::LayerPrimitive::Vias, false);
+        }
+        assert!(value.validate().is_err());
+        value.display.layer_primitives.remove(&LayerId(4096));
+        assert!(value.validate().is_ok());
+    }
+    #[test]
     fn filters_roundtrip_and_legacy_state_defaults_without_accepting_unknown_bits() {
-        for bits in 0..16 {
+        for bits in 0..32 {
             let mut original = state();
             original.pick_filter = bits.try_into().unwrap();
             let decoded: ViewState =
@@ -138,8 +212,8 @@ mod tests {
         let mut json = serde_json::to_value(state()).unwrap();
         json.as_object_mut().unwrap().remove("pick_filter");
         let legacy: ViewState = serde_json::from_value(json.clone()).unwrap();
-        assert_eq!(u8::from(legacy.pick_filter), 15);
-        json["pick_filter"] = serde_json::json!(16);
+        assert_eq!(u8::from(legacy.pick_filter), 31);
+        json["pick_filter"] = serde_json::json!(32);
         assert!(serde_json::from_value::<ViewState>(json).is_err());
     }
     #[test]
@@ -184,9 +258,10 @@ mod tests {
         }
         let display: BoardDisplay =
             serde_json::from_str(r#"{"hidden_layers":[],"show_drills":true}"#).unwrap();
-        assert_eq!(display.copper_opacity, 0.35);
+        assert_eq!(display.copper_opacity, 0.25);
         assert!(display.show_copper);
-        assert!(display.show_texts);
+        assert!(display.show_backdrills);
+        assert!(!display.show_texts);
         assert!(display.show_drawings);
     }
 }

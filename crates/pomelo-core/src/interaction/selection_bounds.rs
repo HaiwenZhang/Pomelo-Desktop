@@ -34,6 +34,11 @@ impl SelectionTarget {
         if cancel.is_cancelled() {
             return Err(PathError::Cancelled);
         }
+        let group_reference = if let Self::ComponentGroup(anchor) = self {
+            anchor.reference(scene, cancel)?
+        } else {
+            None
+        };
         let (mut result, related) = match self {
             Self::Net(id) => return crate::search::SearchTarget::Net(id).bounds(scene, cancel),
             Self::Component(id) => (
@@ -76,7 +81,14 @@ impl SelectionTarget {
             if cancel.is_cancelled() {
                 return Err(PathError::Cancelled);
             }
-            if !matches!(self, Self::Component(_)) && self.matches_pin(pin, scene) {
+            let selected = match self {
+                Self::ComponentGroup(_) => {
+                    group_reference.is_some_and(|reference| pin.reference == reference)
+                }
+                Self::Component(_) => false,
+                _ => self.matches_pin(pin, scene),
+            };
+            if selected {
                 pads(
                     pin.id,
                     PadPlacement {
@@ -94,6 +106,11 @@ impl SelectionTarget {
                 return Err(PathError::Cancelled);
             }
             if self.matches_via(via)
+                || group_reference.is_some_and(|reference| {
+                    via.finger
+                        .as_ref()
+                        .is_some_and(|finger| finger.reference == reference)
+                })
                 || related.contains(&crate::selection::SelectedObject::Via(via.id))
             {
                 pads(
@@ -127,6 +144,66 @@ impl SelectionTarget {
                         return Err(PathError::Cancelled);
                     }
                     include(&mut result, segment.centreline_bounds(), zone.id)?;
+                }
+            }
+        }
+        if let Self::Object(crate::selection::SelectedObject::Drawing(id)) = self
+            && let Some(drawing) = scene.drawings.iter().find(|d| d.id == id)
+        {
+            for segment in &drawing.segments {
+                if cancel.is_cancelled() {
+                    return Err(PathError::Cancelled);
+                }
+                include(&mut result, segment.bounds(), id)?;
+            }
+            for text in scene
+                .texts
+                .iter()
+                .filter(|t| drawing.text_ids.contains(&t.id))
+            {
+                if cancel.is_cancelled() {
+                    return Err(PathError::Cancelled);
+                }
+                let rows: Vec<_> = text
+                    .text
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .replace('\t', "    ")
+                    .split('\n')
+                    .map(str::to_owned)
+                    .collect();
+                for (row, line) in rows.iter().enumerate() {
+                    let count = line.chars().count();
+                    if count == 0 {
+                        continue;
+                    }
+                    let width =
+                        count as f64 * text.width + count.saturating_sub(1) as f64 * text.spacing;
+                    let left = match text.align {
+                        crate::model::TextAlignment::Left => 0.0,
+                        crate::model::TextAlignment::Center => -width * 0.5,
+                        crate::model::TextAlignment::Right => -width,
+                    };
+                    for (x, y) in [
+                        (left, 0.0),
+                        (left + width, 0.0),
+                        (left + width, text.height),
+                        (left, text.height),
+                    ] {
+                        let p = crate::model::Point::new(
+                            if text.mirrored { -x } else { x },
+                            y - row as f64 * text.line_spacing,
+                        )
+                        .rotate(text.angle);
+                        include(
+                            &mut result,
+                            Bounds::from_points([crate::model::Point::new(
+                                text.at.x + p.x,
+                                text.at.y + p.y,
+                            )]),
+                            id,
+                        )?;
+                    }
                 }
             }
         }

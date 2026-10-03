@@ -9,6 +9,13 @@ use crate::{
     task::CancellationToken,
 };
 use std::sync::Arc;
+mod drawings;
+mod locate;
+mod navigation;
+mod visible;
+pub use drawings::TextPickQuad;
+pub use navigation::SelectionAnchor;
+pub use visible::CanvasHit;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
@@ -26,6 +33,11 @@ pub struct SegmentIndex {
     bounds: Vec<Option<Bounds>>,
     leaf_start: usize,
     zones: crate::zone_index::ZoneFillIndex,
+    drawings: drawings::DrawingIndex,
+    pins: super::spatial::BoundsIndex,
+    vias: super::spatial::BoundsIndex,
+    zone_bounds: super::spatial::BoundsIndex,
+    drawing_budget: usize,
 }
 
 impl SegmentIndex {
@@ -210,7 +222,75 @@ impl SegmentIndex {
         }
         let zones =
             crate::zone_index::ZoneFillIndex::build(&scene, max_bytes - peak_bytes, cancel)?;
+        let owner_count = scene
+            .pins
+            .len()
+            .saturating_add(scene.vias.len())
+            .saturating_add(scene.zones.len());
+        // Includes hierarchy nodes, entries and capacity growth during construction.
+        let owner_bytes = owner_count.saturating_mul(384);
+        let used = peak_bytes
+            .saturating_add(zones.bytes)
+            .saturating_add(owner_bytes);
+        if used > max_bytes {
+            return Err(IndexError::ByteLimit {
+                actual: used,
+                limit: max_bytes,
+            });
+        }
+        let pin_bounds =
+            |at, angle, mirrored, pads: &[crate::model::Pad], drill: crate::model::DrillShape| {
+                let owner = crate::pad::PadPlacement {
+                    at,
+                    angle,
+                    mirrored,
+                };
+                let mut result: Option<Bounds> = None;
+                for bounds in pads
+                    .iter()
+                    .filter_map(|pad| pad.bounds(owner))
+                    .chain(drill.pad().and_then(|pad| pad.bounds(owner)))
+                {
+                    if let Some(old) = &mut result {
+                        old.include(bounds.min);
+                        old.include(bounds.max);
+                    } else {
+                        result = Some(bounds);
+                    }
+                }
+                result
+            };
+        let pins = super::spatial::BoundsIndex::build(
+            scene
+                .pins
+                .iter()
+                .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, p.drill_shape)),
+            cancel,
+        )?;
+        let vias = super::spatial::BoundsIndex::build(
+            scene
+                .vias
+                .iter()
+                .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, p.drill_shape)),
+            cancel,
+        )?;
+        let zone_bounds = super::spatial::BoundsIndex::build(
+            scene.zones.iter().map(|z| {
+                z.paths
+                    .first()
+                    .and_then(|p| crate::geometry::path_bounds(p))
+                    .or_else(|| z.mesh.ring_bounds.first().copied())
+            }),
+            cancel,
+        )?;
+        let drawing_budget = max_bytes - used;
+        let drawings = drawings::DrawingIndex::build(&scene, &[], drawing_budget, cancel)?;
         Ok(Self {
+            drawings,
+            pins,
+            vias,
+            zone_bounds,
+            drawing_budget,
             scene,
             order,
             bounds,

@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Context as _, ensure};
 use gpui::NativeGpuContext;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use windows::{
     Win32::{
         Foundation::RECT,
@@ -25,6 +25,16 @@ use windows::{
     },
     core::s,
 };
+
+pub(super) type ZoneAnnotations<'a> =
+    dyn FnMut(&crate::copper::CopperBatch) -> anyhow::Result<()> + 'a;
+pub(super) struct CopperDrawOptions<'a> {
+    pub opacity: f32,
+    pub layer: Option<pomelo_core::model::LayerId>,
+    pub visible: Option<&'a dyn Fn(&crate::copper::CopperBatch) -> bool>,
+    pub annotations: Option<&'a mut ZoneAnnotations<'a>>,
+    pub overrides: Option<&'a BTreeMap<pomelo_core::model::ObjectId, UploadedCopper>>,
+}
 
 pub(super) const UPLOAD_BYTES_PER_FRAME: usize = 4 * 1024 * 1024;
 
@@ -49,6 +59,7 @@ mod tests {
 
 pub(super) struct UploadedCopper {
     pub source: Arc<PreparedCopper>,
+    pub active: bool,
     vertex_buffer: Option<ID3D11Buffer>,
     vertex_view: Option<ID3D11ShaderResourceView>,
     index_buffer: Option<ID3D11Buffer>,
@@ -129,6 +140,7 @@ impl UploadedCopper {
         }
         Ok(Self {
             source,
+            active: false,
             vertex_buffer,
             vertex_view,
             index_buffer,
@@ -141,13 +153,20 @@ impl UploadedCopper {
     }
     pub fn upload_next(&mut self, context: &NativeGpuContext<'_>) -> anyhow::Result<()> {
         let mut budget = UPLOAD_BYTES_PER_FRAME;
+        self.upload_with_budget(context, &mut budget)
+    }
+    pub fn upload_with_budget(
+        &mut self,
+        context: &NativeGpuContext<'_>,
+        budget: &mut usize,
+    ) -> anyhow::Result<()> {
         if let Some(buffer) = &self.vertex_buffer {
             upload_slice(
                 context.context,
                 buffer,
                 &self.source.vertices,
                 &mut self.vertex_uploaded,
-                &mut budget,
+                budget,
             );
         }
         if let Some(buffer) = &self.index_buffer {
@@ -156,7 +175,7 @@ impl UploadedCopper {
                 buffer,
                 &self.source.indices,
                 &mut self.index_uploaded,
-                &mut budget,
+                budget,
             );
         }
         // SAFETY: status queried on the callback's live device, without retaining it.
@@ -236,11 +255,23 @@ pub(super) struct Pipeline {
     holes: ID3D11DepthStencilState,
     shade: ID3D11DepthStencilState,
     clear: ID3D11DepthStencilState,
+    toggle: ID3D11DepthStencilState,
+    apply: ID3D11DepthStencilState,
+    clear_scratch: ID3D11DepthStencilState,
     stencil: Option<StencilTarget>,
 }
 
 fn stencil_state(
     device: &ID3D11Device,
+    mask: u8,
+    compare: D3D11_COMPARISON_FUNC,
+    op: D3D11_STENCIL_OP,
+) -> anyhow::Result<ID3D11DepthStencilState> {
+    stencil_masks(device, 3, mask, compare, op)
+}
+fn stencil_masks(
+    device: &ID3D11Device,
+    read_mask: u8,
     mask: u8,
     compare: D3D11_COMPARISON_FUNC,
     op: D3D11_STENCIL_OP,
@@ -260,7 +291,7 @@ fn stencil_state(
                 DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ZERO,
                 DepthFunc: D3D11_COMPARISON_ALWAYS,
                 StencilEnable: true.into(),
-                StencilReadMask: 3,
+                StencilReadMask: read_mask,
                 StencilWriteMask: mask,
                 FrontFace: face,
                 BackFace: face,
@@ -356,6 +387,27 @@ impl Pipeline {
             holes: stencil_state(device, 2, D3D11_COMPARISON_ALWAYS, D3D11_STENCIL_OP_REPLACE)?,
             shade: stencil_state(device, 0, D3D11_COMPARISON_EQUAL, D3D11_STENCIL_OP_KEEP)?,
             clear: stencil_state(device, 3, D3D11_COMPARISON_ALWAYS, D3D11_STENCIL_OP_ZERO)?,
+            toggle: stencil_masks(
+                device,
+                2,
+                2,
+                D3D11_COMPARISON_ALWAYS,
+                D3D11_STENCIL_OP_INVERT,
+            )?,
+            apply: stencil_masks(
+                device,
+                2,
+                1,
+                D3D11_COMPARISON_EQUAL,
+                D3D11_STENCIL_OP_REPLACE,
+            )?,
+            clear_scratch: stencil_masks(
+                device,
+                2,
+                2,
+                D3D11_COMPARISON_ALWAYS,
+                D3D11_STENCIL_OP_ZERO,
+            )?,
             stencil: None,
         })
     }
@@ -426,9 +478,15 @@ impl Pipeline {
         context: &NativeGpuContext<'_>,
         frame: &TraceFrame,
         cache: &UploadedCopper,
-        opacity: f32,
-        layer: Option<pomelo_core::model::LayerId>,
+        options: CopperDrawOptions<'_>,
     ) -> anyhow::Result<(u64, u64)> {
+        let CopperDrawOptions {
+            opacity,
+            layer,
+            visible,
+            mut annotations,
+            overrides,
+        } = options;
         if cache.index_uploaded == 0 {
             return Ok((0, 0));
         }
@@ -473,7 +531,12 @@ impl Pipeline {
             .view;
         let clip = bounds.intersect(&context.content_mask.bounds);
         let mut uniforms = Uniforms {
-            viewport: [context.viewport[0], context.viewport[1], 0.0, 0.0],
+            viewport: [
+                context.viewport[0],
+                context.viewport[1],
+                frame.scale_factor,
+                f32::from(u8::from(frame.filled)),
+            ],
             canvas: [bounds.origin.x.0, bounds.origin.y.0, width, height],
             clip: [
                 clip.origin.x.0,
@@ -486,7 +549,7 @@ impl Pipeline {
                 camera.pixels_per_mm as f32,
                 if camera.flipped { -1.0 } else { 1.0 },
                 0.0,
-                0.0,
+                frame.pass as u8 as f32,
             ],
             color: frame.fallback_color,
             rectangle: [0.0; 4],
@@ -511,12 +574,27 @@ impl Pipeline {
             ctx.PSSetConstantBuffers(0, Some(&[Some(self.uniforms.clone())]));
             ctx.VSSetShaderResources(0, Some(std::slice::from_ref(&cache.vertex_view)));
             for batch in &cache.source.batches {
-                if layer.is_some_and(|layer| batch.layer != layer) {
+                if layer.is_some_and(|layer| batch.layer != layer)
+                    || visible.is_some_and(|test| !test(batch))
+                {
+                    continue;
+                }
+                let replacement = overrides
+                    .and_then(|entries| entries.get(&batch.object))
+                    .filter(|entry| {
+                        entry.active && entry.uploaded_bytes() == entry.source.upload_bytes()
+                    });
+                let cache = replacement.unwrap_or(cache);
+                let batch = replacement
+                    .and_then(|entry| entry.source.batches.first())
+                    .unwrap_or(batch);
+                let overlay = frame.object_highlight(batch.selected_object, batch.net, None);
+                if frame.pass != super::board::OverlayPass::Base && overlay.is_none() {
                     continue;
                 }
                 let outer = batch.outer_indices();
                 let holes = batch.hole_indices();
-                if outer.is_empty()
+                if (batch.parity_rings.is_none() && outer.is_empty())
                     || holes.end as usize > cache.index_uploaded
                     || (batch.vertex_start as usize + batch.vertex_count as usize)
                         > cache.vertex_uploaded
@@ -563,18 +641,13 @@ impl Pipeline {
                     .highlighted_net
                     .filter(|(net, _)| net.0 != 0 && *net == batch.net)
                     .map(|(_, color)| color)
-                    .unwrap_or_else(|| {
-                        frame
-                            .colors
-                            .get(&batch.layer)
-                            .copied()
-                            .unwrap_or(frame.fallback_color)
-                    });
-                if let Some(color) = frame.object_highlight(batch.selected_object, batch.net, None)
-                {
+                    .unwrap_or_else(|| frame.material_color(batch.layer, batch.net));
+                if let Some(color) = overlay {
                     uniforms.color = color;
                 }
-                uniforms.color[3] *= opacity;
+                if frame.pass == super::board::OverlayPass::Base {
+                    uniforms.color[3] *= opacity;
+                }
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 ctx.Map(
                     &self.uniforms,
@@ -590,6 +663,8 @@ impl Pipeline {
                 );
                 ctx.Unmap(&self.uniforms, 0);
                 ctx.RSSetScissorRects(Some(&[rect]));
+                ctx.IASetIndexBuffer(cache.index_buffer.as_ref(), DXGI_FORMAT_R32_UINT, 0);
+                ctx.VSSetShaderResources(0, Some(std::slice::from_ref(&cache.vertex_view)));
                 ctx.OMSetBlendState(&self.no_color, None, u32::MAX);
                 // Clear only this zone's bounded area, avoiding a full target clear per zone.
                 ctx.VSSetShader(&self.clear_vertex, None);
@@ -597,21 +672,60 @@ impl Pipeline {
                 ctx.OMSetDepthStencilState(&self.clear, 0);
                 ctx.Draw(4, 0);
                 draws += 1;
-                ctx.VSSetShader(&self.vertex, None);
-                ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                ctx.OMSetDepthStencilState(&self.exterior, 1);
-                ctx.DrawIndexed(outer.end - outer.start, outer.start, 0);
-                draws += 1;
-                if !holes.is_empty() {
-                    ctx.OMSetDepthStencilState(&self.holes, 2);
-                    ctx.DrawIndexed(holes.end - holes.start, holes.start, 0);
+                if let Some(rings) = &batch.parity_rings {
+                    for ring in rings {
+                        // Each ring gets fresh scratch parity. Applying holes clears
+                        // final coverage, so overlap/nesting remains a union.
+                        ctx.VSSetShader(&self.vertex, None);
+                        ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                        ctx.OMSetDepthStencilState(&self.toggle, 0);
+                        ctx.DrawIndexed(
+                            ring.indices.end - ring.indices.start,
+                            ring.indices.start,
+                            0,
+                        );
+                        ctx.VSSetShader(&self.clear_vertex, None);
+                        ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+                        ctx.OMSetDepthStencilState(&self.apply, if ring.outer { 3 } else { 2 });
+                        ctx.Draw(4, 0);
+                        ctx.OMSetDepthStencilState(&self.clear_scratch, 0);
+                        ctx.Draw(4, 0);
+                        draws += 3;
+                    }
+                } else {
+                    ctx.VSSetShader(&self.vertex, None);
+                    ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                    ctx.OMSetDepthStencilState(&self.exterior, 1);
+                    ctx.DrawIndexed(outer.end - outer.start, outer.start, 0);
                     draws += 1;
+                    if !holes.is_empty() {
+                        ctx.OMSetDepthStencilState(&self.holes, 2);
+                        ctx.DrawIndexed(holes.end - holes.start, holes.start, 0);
+                        draws += 1;
+                    }
                 }
                 // Both hole-only (2) and exterior+hole (3) fail EQUAL 1. Overlap stays excluded.
                 ctx.OMSetBlendState(&self.blend, None, u32::MAX);
                 ctx.OMSetDepthStencilState(&self.shade, 1);
-                ctx.DrawIndexed(outer.end - outer.start, outer.start, 0);
+                if batch.parity_rings.is_some() {
+                    ctx.Draw(4, 0);
+                } else {
+                    ctx.DrawIndexed(outer.end - outer.start, outer.start, 0);
+                }
                 draws += 1;
+                if let Some(draw_labels) = annotations.as_mut() {
+                    // The current EQUAL-1 stencil excludes the union of this zone's holes.
+                    // Labels use the same mask, then copper bindings are restored for the next zone.
+                    draw_labels(batch)?;
+                    ctx.IASetInputLayout(None);
+                    ctx.IASetIndexBuffer(cache.index_buffer.as_ref(), DXGI_FORMAT_R32_UINT, 0);
+                    ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                    ctx.PSSetShader(&self.fragment, None);
+                    ctx.RSSetState(&self.rasterizer);
+                    ctx.VSSetConstantBuffers(0, Some(&[Some(self.uniforms.clone())]));
+                    ctx.PSSetConstantBuffers(0, Some(&[Some(self.uniforms.clone())]));
+                    ctx.VSSetShaderResources(0, Some(std::slice::from_ref(&cache.vertex_view)));
+                }
                 zones += 1;
             }
             ctx.VSSetShaderResources(0, Some(&[None]));

@@ -4,11 +4,20 @@ actions!(
     pomelo,
     [
         OpenFile,
+        FocusSearch,
         CloseDocument,
         ReloadDocument,
         CancelImport,
         ToggleTheme,
         OpenSettings,
+        AboutPomelo,
+        ShowRecentFiles,
+        ShowStartPage,
+        NextDocument,
+        PreviousDocument,
+        FitActiveBoard,
+        ToggleLeftPanel,
+        ToggleRightPanel,
         Quit
     ]
 );

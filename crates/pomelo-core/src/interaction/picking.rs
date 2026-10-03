@@ -9,6 +9,14 @@ use crate::{
 /// Distance to the filled round-cap stroke, in board millimetres.
 /// Zero means inside the copper; callers convert pixel tolerance with their camera.
 pub fn segment_distance_mm(segment: &Segment, point: Point) -> Result<f64, PathError> {
+    segment_centerline_distance_mm(segment, point)
+        .map(|distance| (distance - segment.width * 0.5).max(0.0))
+}
+
+pub(crate) fn segment_centerline_distance_mm(
+    segment: &Segment,
+    point: Point,
+) -> Result<f64, PathError> {
     if !point.x.is_finite()
         || !point.y.is_finite()
         || segment.width < 0.0
@@ -24,9 +32,10 @@ pub fn segment_distance_mm(segment: &Segment, point: Point) -> Result<f64, PathE
         let dx = point.x - arc.center.x;
         let dy = point.y - arc.center.y;
         let angle = dy.atan2(dx);
-        let travel = ((angle - arc.start.rem_euclid(tau)) * arc.sweep.signum()).rem_euclid(tau);
-        if arc.sweep.abs() >= tau - 1e-12 || (arc.sweep != 0.0 && travel <= arc.sweep.abs()) {
-            (dx.hypot(dy) - arc.radius).abs()
+        let directed = (angle - arc.start) * arc.sweep.signum();
+        let travel = ((directed % tau) + tau) % tau;
+        if travel <= arc.sweep.abs() + 1e-12 {
+            (crate::geometry::web_hypot(dx, dy) - arc.radius).abs()
         } else {
             point.distance(segment.a).min(point.distance(segment.b))
         }
@@ -36,7 +45,7 @@ pub fn segment_distance_mm(segment: &Segment, point: Point) -> Result<f64, PathE
     if !centerline.is_finite() {
         return Err(PathError::Invalid(segment.id));
     }
-    Ok((centerline - segment.width / 2.0).max(0.0))
+    Ok(centerline)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -156,7 +165,7 @@ impl PickQuery {
                 if cancel.is_cancelled() {
                     return Err(PathError::Cancelled);
                 }
-                if !display.layer_visible(pad.layer) {
+                if !display.primitive_visible(pad.layer, crate::display::LayerPrimitive::Vias) {
                     continue;
                 }
                 if let Some(value) = pad_distance(pad, self.point, owner, via.id, cancel)? {
@@ -273,7 +282,7 @@ impl PickQuery {
                 if cancel.is_cancelled() {
                     return Err(PathError::Cancelled);
                 }
-                if !display.layer_visible(pad.layer) {
+                if !display.primitive_visible(pad.layer, crate::display::LayerPrimitive::Pads) {
                     continue;
                 }
                 if pad.custom.is_some() && !options.include_custom {
@@ -444,6 +453,7 @@ pub enum PickCategory {
     Pin = 1,
     Via = 2,
     Zone = 3,
+    Drawing = 4,
 }
 
 impl From<SelectedObject> for PickCategory {
@@ -453,6 +463,7 @@ impl From<SelectedObject> for PickCategory {
             SelectedObject::Pin(_) => Self::Pin,
             SelectedObject::Via(_) => Self::Via,
             SelectedObject::Zone(_) => Self::Zone,
+            SelectedObject::Drawing(_) => Self::Drawing,
         }
     }
 }
@@ -465,7 +476,7 @@ pub struct PickFilter(u8);
 impl TryFrom<u8> for PickFilter {
     type Error = &'static str;
     fn try_from(bits: u8) -> Result<Self, Self::Error> {
-        if bits & !0b1111 != 0 {
+        if bits & !0b11111 != 0 {
             return Err("PICK_FILTER_UNKNOWN_BITS");
         }
         Ok(Self(bits))
@@ -486,7 +497,7 @@ impl Default for PickFilter {
 
 impl PickFilter {
     pub const fn all() -> Self {
-        Self(0b1111)
+        Self(0b11111)
     }
 
     pub const fn none() -> Self {
@@ -514,7 +525,10 @@ impl PickFilter {
         layers: &[LayerId],
         display: &BoardDisplay,
     ) -> bool {
-        self.contains(object.into()) && layers.iter().any(|layer| display.layer_visible(*layer))
+        self.contains(object.into())
+            && layers
+                .iter()
+                .any(|layer| display.object_visible(*layer, object))
     }
 }
 
@@ -661,8 +675,9 @@ mod tests {
             PickCategory::Pin,
             PickCategory::Via,
             PickCategory::Zone,
+            PickCategory::Drawing,
         ];
-        for mask in 0u8..16 {
+        for mask in 0u8..32 {
             let mut filter = PickFilter::none();
             for (index, category) in categories.into_iter().enumerate() {
                 filter.set(category, mask & (1 << index) != 0);

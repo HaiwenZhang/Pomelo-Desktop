@@ -10,6 +10,11 @@ serde.workspace = true
 thiserror.workspace = true
 rust-i18n.workspace = true
 earcut.workspace = true
+libm.workspace = true
+icu_collator.workspace = true
+icu_locale_core.workspace = true
+icu_provider_blob.workspace = true
+icu_provider.workspace = true
 
 [dev-dependencies]
 serde-saphyr.workspace = true

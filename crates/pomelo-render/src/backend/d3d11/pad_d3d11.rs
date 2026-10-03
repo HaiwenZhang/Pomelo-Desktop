@@ -281,7 +281,12 @@ impl Pipeline {
             return Ok(0);
         }
         let mut uniforms = Uniforms {
-            viewport: [context.viewport[0], context.viewport[1], 0.0, 0.0],
+            viewport: [
+                context.viewport[0],
+                context.viewport[1],
+                frame.scale_factor,
+                f32::from(u8::from(frame.filled)),
+            ],
             canvas: [bounds.origin.x.0, bounds.origin.y.0, width, height],
             clip: [
                 clip.origin.x.0,
@@ -293,14 +298,19 @@ impl Pipeline {
             view: [
                 camera.pixels_per_mm as f32,
                 if camera.flipped { -1.0 } else { 1.0 },
-                0.0,
-                0.0,
+                f32::from(u8::from(
+                    frame.color_mode == pomelo_core::display::ColorMode::Net,
+                )),
+                frame.pass as u8 as f32,
             ],
             color: frame.fallback_color,
             batch: [
                 0,
                 frame.highlighted_net.map_or(0, |(net, _)| net.0),
-                u32::from(frame.highlighted_net.is_some_and(|(net, _)| net.0 != 0)),
+                u32::from(
+                    frame.pass == super::board::OverlayPass::Base
+                        && frame.highlighted_net.is_some_and(|(net, _)| net.0 != 0),
+                ),
                 0,
             ],
             highlight: frame.highlighted_net.map_or([0.0; 4], |(_, color)| color),
@@ -371,6 +381,9 @@ impl Pipeline {
                         }
                         let end = cursor;
                         if start == end {
+                            continue;
+                        }
+                        if frame.pass != super::board::OverlayPass::Base && highlighted.is_none() {
                             continue;
                         }
                         uniforms.batch[3] = u32::from(highlighted.is_some());
