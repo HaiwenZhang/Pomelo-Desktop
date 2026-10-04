@@ -122,6 +122,7 @@ pub struct DocumentSession {
     pub status: DocumentStatus,
     pub progress_mailbox: LatestImportProgress,
     pub progress: Option<ImportProgress>,
+    pub progress_log: Vec<ImportProgress>,
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub viewport: Option<gpui_kit::Entity<crate::viewport::BoardViewport>>,
 }
@@ -143,6 +144,7 @@ impl DocumentSession {
             status: DocumentStatus::Queued,
             progress_mailbox: LatestImportProgress::default(),
             progress: None,
+            progress_log: Vec::new(),
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             viewport: None,
         }
@@ -185,6 +187,7 @@ impl DocumentSession {
         self.cancellation = CancellationToken::default();
         self.progress_mailbox = LatestImportProgress::default();
         self.progress = None;
+        self.progress_log.clear();
         self.diagnostics_expanded = false;
         self.diagnostics_page = 0;
         self.status = DocumentStatus::Queued;

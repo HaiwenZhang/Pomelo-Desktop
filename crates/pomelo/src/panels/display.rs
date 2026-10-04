@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 use pomelo_core::{
     display::{BoardDisplay, LabelKind},
-    i18n::{Locale, Message, MessageKey as Key, text},
+    i18n::{Locale, MessageKey as Key, text},
 };
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type VisibilityHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
@@ -25,8 +25,6 @@ pub struct DisplayCommands {
     pub horizontal_pin_names: VisibilityHandler,
     pub labels: LabelHandler,
     pub drawings: VisibilityHandler,
-    pub decrease_opacity: ClickHandler,
-    pub increase_opacity: ClickHandler,
     pub reset_order: ClickHandler,
 }
 pub fn controls(
@@ -74,7 +72,7 @@ pub fn controls(
             ))
             .into_any_element(),
         div()
-            .id("copper-opacity")
+            .id("copper-visibility")
             .px_4()
             .py_2()
             .flex()
@@ -96,35 +94,6 @@ pub fn controls(
                     .checked(state.static_shapes_fill_solid)
                     .on_change(commands.static_shapes_fill_solid),
             ))
-            .child(
-                Message::new(Key::CopperOpacity)
-                    .arg("percent", (state.copper_opacity * 100.0).round() as u32)
-                    .display(locale),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(FocusScroll::new(
-                        "decrease-copper-opacity",
-                        scroll,
-                        Button::new("decrease-copper-opacity")
-                            .outline()
-                            .label(text(locale, Key::DecreaseOpacity))
-                            .disabled(state.copper_opacity <= 0.0)
-                            .on_click(commands.decrease_opacity),
-                    ))
-                    .child(FocusScroll::new(
-                        "increase-copper-opacity",
-                        scroll,
-                        Button::new("increase-copper-opacity")
-                            .outline()
-                            .label(text(locale, Key::IncreaseOpacity))
-                            .disabled(state.copper_opacity >= 1.0)
-                            .on_click(commands.increase_opacity),
-                    )),
-            )
             .into_any_element(),
         div()
             .id("text-visibility")

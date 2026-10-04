@@ -95,7 +95,7 @@ pub struct BoardViewport {
     file_information_expanded: bool,
     pan_tool: bool,
     copper_slider: Entity<SliderState>,
-    opacity_inputs: BTreeMap<opacity::OpacityTarget, Entity<InputState>>,
+    global_slider: Entity<SliderState>,
     color_pickers: BTreeMap<
         pomelo_core::appearance::ColorTarget,
         Entity<gpui_kit::component::color_picker::ColorPickerState>,
@@ -381,6 +381,26 @@ impl BoardViewport {
             }
         })
         .detach();
+        let global_opacity = prepared
+            .restored_view
+            .as_ref()
+            .map_or(initial_display.global_opacity, |state| {
+                state.display.global_opacity
+            });
+        let global_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .step(1.0)
+                .default_value(global_opacity * 100.0)
+        });
+        cx.subscribe(&global_slider, |this, _, event, cx| {
+            if let SliderEvent::Change(value) = event {
+                Arc::make_mut(&mut this.display).global_opacity = value.end() / 100.0;
+                cx.notify();
+            }
+        })
+        .detach();
         let mut viewport = Self {
             diagnostics_navigation: crate::panels::diagnostics::NavigationFocus::new(cx),
             inspector_focus: crate::panels::focus_scroll::InspectorFocus::new(cx),
@@ -395,7 +415,7 @@ impl BoardViewport {
             panel_sizes: panel_layout.read(cx).sizes.clone(),
             panel_layout,
             copper_slider,
-            opacity_inputs: BTreeMap::new(),
+            global_slider,
             color_pickers: BTreeMap::new(),
             search_results: Vec::new(),
             selected_target: None,
@@ -1346,13 +1366,7 @@ impl Render for BoardViewport {
         use crate::workbench::panel_layout::Side;
         let locale = i18n::current(cx);
         let opacity_controls: Vec<_> = if self.show_display {
-            [
-                opacity::OpacityTarget::Global,
-                opacity::OpacityTarget::Copper,
-            ]
-            .map(|target| self.opacity_control(target, locale, window, cx))
-            .into_iter()
-            .collect()
+            vec![self.opacity_control(locale, cx)]
         } else {
             Vec::new()
         };
@@ -2579,28 +2593,6 @@ impl Render for BoardViewport {
                                             |this, visible: &bool, _, cx| {
                                                 Arc::make_mut(&mut this.display).show_drawings =
                                                     *visible;
-                                                cx.notify();
-                                            },
-                                        )),
-                                        decrease_opacity: Box::new(cx.listener(
-                                            |this, _, window, cx| {
-                                                Arc::make_mut(&mut this.display)
-                                                    .adjust_copper_opacity(-5);
-                                                let value = this.display.copper_opacity * 100.0;
-                                                this.copper_slider.update(cx, |slider, cx| {
-                                                    slider.set_value(value, window, cx)
-                                                });
-                                                cx.notify();
-                                            },
-                                        )),
-                                        increase_opacity: Box::new(cx.listener(
-                                            |this, _, window, cx| {
-                                                Arc::make_mut(&mut this.display)
-                                                    .adjust_copper_opacity(5);
-                                                let value = this.display.copper_opacity * 100.0;
-                                                this.copper_slider.update(cx, |slider, cx| {
-                                                    slider.set_value(value, window, cx)
-                                                });
                                                 cx.notify();
                                             },
                                         )),

@@ -31,6 +31,7 @@ use crate::actions::{
 };
 
 mod document_tabs;
+mod import_progress;
 pub(crate) mod panel_layout;
 mod saving;
 
@@ -514,6 +515,16 @@ impl Workbench {
                             return false;
                         }
                         if let Some(progress) = document.progress_mailbox.take() {
+                            if let Some(last) = document.progress_log.last_mut()
+                                && last.stage == progress.stage
+                            {
+                                *last = progress.clone();
+                            } else {
+                                document.progress_log.push(progress.clone());
+                                if document.progress_log.len() > 6 {
+                                    document.progress_log.remove(0);
+                                }
+                            }
                             document.progress = Some(progress);
                             cx.notify();
                         }
@@ -936,6 +947,12 @@ impl Workbench {
                 .child(viewport.clone())
                 .into_any_element();
         }
+        if matches!(
+            document.status,
+            DocumentStatus::Queued | DocumentStatus::Reading
+        ) {
+            return import_progress::render(document, locale, cx);
+        }
         let mut content = div()
             .flex()
             .flex_col()
@@ -954,39 +971,7 @@ impl Workbench {
                 ),
             );
         match &document.status {
-            DocumentStatus::Queued => {
-                content = content.child(text(locale, Key::ImportQueued));
-            }
-            DocumentStatus::Reading => {
-                let key = document
-                    .progress
-                    .as_ref()
-                    .map_or(Key::Reading, |progress| progress.stage.message_key());
-                content = content.child(text(locale, key));
-                if let Some(progress) = &document.progress
-                    && (progress.completed != 0 || progress.total.is_some())
-                {
-                    use pomelo_core::task::ImportStage;
-                    let bytes =
-                        matches!(progress.stage, ImportStage::Reading | ImportStage::Indexing);
-                    let key = match (bytes, progress.total) {
-                        (true, Some(_)) => Key::ImportBytesKnown,
-                        (true, None) => Key::ImportBytesUnknown,
-                        (false, Some(_)) => Key::ImportItemsKnown,
-                        (false, None) => Key::ImportItemsUnknown,
-                    };
-                    let mut message = Message::new(key).arg("completed", progress.completed);
-                    if let Some(total) = progress.total {
-                        message = message.arg("total", total);
-                    }
-                    content = content.child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(message.display(locale)),
-                    );
-                }
-            }
+            DocumentStatus::Queued | DocumentStatus::Reading => unreachable!(),
             DocumentStatus::Cancelled => {
                 content = content
                     .child(text(locale, Key::Cancelled))
@@ -1297,14 +1282,31 @@ impl Render for Workbench {
             self.menu_revision = revision;
         }
         let theme = cx.theme();
-        // TitleBar's inner flex region has an intrinsic minimum. Bound our
-        // content before it reaches that region so long names cannot displace
-        // the library-owned Windows controls; retain their actual fixed width.
+        // Reserve the native macOS traffic lights on the left. Bound the
+        // content to the remaining space so long titles cannot displace controls.
+        let title_left_padding = if cfg!(target_os = "macos") {
+            px(80.0)
+        } else {
+            px(0.0)
+        };
         let controls = window.window_controls();
         let control_count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
+        let controls_width = if cfg!(target_os = "macos") {
+            px(0.0)
+        } else {
+            TITLE_BAR_HEIGHT * f32::from(control_count)
+        };
+        // TitleBar adds another 12 pixels inside its content in fullscreen.
+        let fullscreen_padding = if window.is_fullscreen() {
+            px(12.0)
+        } else {
+            px(0.0)
+        };
         let title_content_width = (window.viewport_size().width
-            - TITLE_BAR_HEIGHT * f32::from(control_count))
-        .max(px(0.0));
+            - title_left_padding
+            - controls_width
+            - fullscreen_padding)
+            .max(px(0.0));
         let title = self
             .active
             .and_then(|index| self.documents.get(index))
@@ -1422,7 +1424,7 @@ impl Render for Workbench {
                 i18n::select(LanguagePreference::Explicit(Locale::Korean), cx);
             }))
             .child(
-                TitleBar::new().h_10().pl_0().child(
+                TitleBar::new().h_10().pl(title_left_padding).child(
                     div()
                         .w(title_content_width)
                         .min_w_0()

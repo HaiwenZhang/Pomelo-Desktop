@@ -26,3 +26,5 @@ docs/gpu-validation/
 __pycache__/
 dist/
 tests/fixtures
+
+*.DS_Store
