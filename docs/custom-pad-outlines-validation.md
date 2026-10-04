@@ -1,5 +1,7 @@
 # 自定义焊盘轮廓验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-03。参考最新 Web 项目 `C:/Users/Zen/Desktop/gitrepo/pomelo`，源码及 `E:/brd_cases` 均只读。UI 界面的字体保持现状；本次没有修改 UI 字体、主题或 Web 源码。
 
 ## 修正范围
@@ -53,10 +55,10 @@ f63e83b131b9f59bd237b19a3a3a6c68f555d5d574802923fb9d88ea951bf5d0
 - `custom-outline-window-evidence.json`（冻结的操作结果）、`custom-outline-window-restored.json`（重开后的遥测）
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-render --example custom_pad_outline_probe --locked --offline
+cargo +stable build -p pomelo-render --example custom_pad_outline_probe --locked --offline
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-custom-pad-outline-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/custom_pad_outline_probe.exe E:/brd_cases/USBC_FPC.brd .cache/canvas-parity/custom-outlines-usbc utf-8
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-custom-pad-outline-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/custom_pad_outline_probe.exe E:/brd_cases/AGILEX_I_SERIES.brd .cache/canvas-parity/custom-outlines-agilex windows-1252
-python scripts/cargo.py +stable test -p pomelo-render --all-features --lib --locked --offline hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache -- --ignored
+cargo +stable test -p pomelo-render --all-features --lib --locked --offline hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache -- --ignored
 ```
 
 本记录补齐自定义焊盘的非填充边界，不代表整板与 Web 的全部视觉和交互已一致。特殊背钻、极深缩放长线/曲线铜皮、多 DPI、设备恢复及大板性能等门槛仍见 [画布总体对照记录](canvas-web-parity-validation.md)。当前只开发 Windows。

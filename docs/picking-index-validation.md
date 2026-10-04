@@ -42,7 +42,7 @@ AGILEX（显式 Windows-1252）的 384 项查询全部一致（146,571 段、16,
 复验设置 `POMELO_PICK_CASE` 为案例绝对路径、`POMELO_PICK_REPORT` 为输出 JSON 绝对路径。AGILEX 另设 `POMELO_PICK_ENCODING=windows-1252`；UTF-8 案例不设置该变量。运行：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test -p pomelo-import --test picking_real_board --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-import --test picking_real_board --locked --offline -- --ignored --nocapture
 ```
 
 仍待完成：鼠标接入、重叠候选切换、对象/走线/网络/元件四模式、焊盘/铜皮命中、GPU 像素对照、真实 DPI 交互、release 延迟与内存基线。索引排序目前只在前后检查取消。

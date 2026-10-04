@@ -1,5 +1,7 @@
 # BRD 走线、过孔与键合对象验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 日期：2026-10-02。Windows 原生语义查询已实现，156 个冻结案例的独立对照全部匹配。**这是走线/过孔查询验证，不是原生整板场景或 GPU 画面验收。** `AllegroImporter::import` 仍返回场景未实现诊断；后续完成文字、绘图、铜皮网格、场景预算和 SceneBuilder 后再接入桌面打开流程。
 
 ## 实现与职责
@@ -58,12 +60,12 @@ ID、网络、图层、类型、源引用、文字与诊断要求精确；几何
 ## 复现与证据
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-import --bin pcb_inspect --locked --offline
+cargo +stable build -p pomelo-import --bin pcb_inspect --locked --offline
 python scripts/probe-records.py .cache/indexes-windows1252.jsonl .cache/routing-probes target/debug/pcb_inspect.exe --routing --samples 32
 node --max-old-space-size=24576 --import file:///C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/loader.mjs scripts/check-routing-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo .cache/routing-probes/manifest.jsonl .cache/web-inputs.json .cache/cases-manifest.jsonl .cache/indexes-windows1252.jsonl .cache/routing-parity.jsonl
-python scripts/cargo.py +stable test --workspace --locked --offline
-python scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python scripts/cargo.py +stable fmt --all -- --check
+cargo +stable test --workspace --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable fmt --all -- --check
 ```
 
 本机使用 `+stable`，实际版本与仓库锁定的 Rust 1.98.1 相同。Node 为开发对照工具，不进入桌面运行依赖。`.cache/` 报告不入库，需要保留或按上述命令重建；案例与 Web 源码只读。

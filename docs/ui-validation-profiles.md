@@ -1,5 +1,7 @@
 # UI 验证配置目录
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 更新：2026-10-03。当前仅 Windows。复验 UI 的语言、主题、历史与查看状态时，用独立配置目录运行正式应用，避免测试切换写入日常偏好。
 
 ## 应用规则
@@ -15,7 +17,7 @@
 先构建对应版本，在项目根目录的正常桌面 PowerShell 执行：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable build -p pomelo --release --locked --offline
+cargo +stable build -p pomelo --release --locked --offline
 .\scripts\launch-ui-validation.ps1 -Locale ja -Theme light -Configuration release -CopyRecentHistory
 ```
 
@@ -26,7 +28,7 @@ python -X utf8 scripts/cargo.py +stable build -p pomelo --release --locked --off
 `TargetDirectory` 默认 `target`，可接受项目相对路径或绝对路径，必须与构建时的 Cargo `--target-dir` 一致。此前直接启动原构建产物的用户窗口仍在运行时，可以使用另一份标准 Cargo 构建目录，不关闭该窗口：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline --target-dir .cache/ui-validation/build
+cargo +stable build -p pomelo --locked --offline --target-dir .cache/ui-validation/build
 .\scripts\launch-ui-validation.ps1 -Locale zh-CN -Theme dark -Configuration debug -TargetDirectory .cache/ui-validation/build -CopyRecentHistory
 ```
 

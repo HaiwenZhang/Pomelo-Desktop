@@ -1,5 +1,7 @@
 # Die pad 显示分类与拾取验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-03。参考最新本地 Web `C:/Users/Zen/Desktop/gitrepo/pomelo`，Web 与 `E:/brd_cases` 只读。UI 界面字体保持原状，未新增界面文案或修改翻译资源。
 
 ## 问题与修正
@@ -42,9 +44,9 @@ Release SHA-256 为 `a658056b439978ef6397d1cd91065a0a110841a7f7ef73239ffa8b283c9
 
 ```powershell
 $env:POMELO_CANVAS_GPU_REPORT_DIR = Join-Path $PWD '.cache/canvas-parity/die-pad-after'
-python scripts/cargo.py +stable test -p pomelo-render --all-features --lib --locked --offline hardware_die_pads_follow -- --ignored
-python scripts/cargo.py +stable build -p pomelo-render --example canvas_pick_probe --locked --offline
+cargo +stable test -p pomelo-render --all-features --lib --locked --offline hardware_die_pads_follow -- --ignored
+cargo +stable build -p pomelo-render --example canvas_pick_probe --locked --offline
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-canvas-picking-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/canvas_pick_probe.exe E:/brd_cases/camera_test_board.brd .cache/canvas-parity/die-pad-camera utf-8 die-pads
-python scripts/cargo.py +stable test --workspace --all-features --locked --offline
-python scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable test --workspace --all-features --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
 ```

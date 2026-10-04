@@ -132,11 +132,11 @@ Release 首次独立构建通过（2 分 46 秒），产物 `.cache/ui-validatio
 最终 Release 构建通过，耗时 57.97 秒；可执行文件为 35,471,872 字节，生成时间 2026-10-03 09:28:27。以下命令在最终源代码上通过：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable build -p pomelo --release --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python -X utf8 scripts/cargo.py +stable fmt --all -- --check
+cargo +stable build -p pomelo --release --locked --offline
+cargo +stable test -p pomelo --locked --offline
+cargo +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable fmt --all -- --check
 git -c core.safecrlf=false diff --check
 ```
 

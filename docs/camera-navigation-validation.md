@@ -1,5 +1,7 @@
 # 相机导航与整板范围验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-03。参考最新本地 Web `C:/Users/Zen/Desktop/gitrepo/pomelo`，Web 源码和 `E:/brd_cases` 案例只读。**桌面及 Web UI 界面字体保持不变**；本轮没有修改主题、字体资源或翻译文件。Windows 仍使用 GPUI 同设备 D3D11/HLSL，没有引入 wgpu。
 
 ## 实现
@@ -57,12 +59,12 @@ Computer Use 实际观察窗口，并依次点击放大、翻板和适应按钮�
 ## 复验与剩余项
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-core --example camera_navigation_probe --locked --offline
-python scripts/cargo.py +stable build -p pomelo-import --bin pcb_inspect --locked --offline
+cargo +stable build -p pomelo-core --example camera_navigation_probe --locked --offline
+cargo +stable build -p pomelo-import --bin pcb_inspect --locked --offline
 $env:POMELO_SCENE_BOUNDS_PROBE = "$PWD/target/debug/pcb_inspect.exe"
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-camera-navigation-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/camera_navigation_probe.exe .cache/canvas-parity/camera-recheck E:/brd_cases/USBC_FPC.brd:utf-8 E:/brd_cases/camera_test_board.brd:utf-8 E:/brd_cases/AGILEX_I_SERIES.brd:windows-1252
 Remove-Item Env:/POMELO_SCENE_BOUNDS_PROBE
-python scripts/cargo.py +stable test -p pomelo-render --all-features --lib --locked --offline hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache -- --ignored --nocapture
+cargo +stable test -p pomelo-render --all-features --lib --locked --offline hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache -- --ignored --nocapture
 ```
 
 上述画布尺寸与缩放使用逻辑像素，不是独立 DPI 验收。仍需实测 Windows GPUI 与浏览器的滚轮 delta 映射；当前对照给定相同比例因子，没有验证两端每一格滚轮产生相同比例。搜索/元件定位的目标集合、完整 resize/恢复交互、全案例边界回归、整板视觉及性能/设备恢复/发布验收仍待完成。macOS/Linux 未开发、未验证。

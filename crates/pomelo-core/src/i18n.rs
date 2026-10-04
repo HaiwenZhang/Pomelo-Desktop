@@ -383,8 +383,6 @@ message_keys! {
     RenderTextInvalidGeometry => "render.text_invalid_geometry" [],
     RenderFontLimit => "render.font_limit" [],
     RenderFontResourceInvalid => "render.font_resource_invalid" [],
-    RenderFontDuplicate => "render.font_duplicate" ["character"],
-    RenderFontInvalid => "render.font_invalid" ["character"],
     SourceFontRead => "render.source_font_read" [],
     SourceFontFallback => "render.source_font_fallback" ["character"],
     SourceFontOptions => "app.source_font_options" [],

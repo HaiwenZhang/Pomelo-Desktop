@@ -107,11 +107,11 @@ PCB 业务绘制仍由 `pomelo-render` 的 D3D11/HLSL 完成，GPUI 补丁继续
 以下命令均通过：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable fmt --all
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable fmt --all
+cargo +stable build -p pomelo --locked --offline
+cargo +stable test -p pomelo --locked --offline
+cargo +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
 ```
 
 最新应用测试 51 passed；i18n 资源及语法门禁 9 passed；Clippy 无警告。新增测试针对持久化、解码及比例尺数值行为，没有新增仅镜像样式实现的测试，也没有将这些结果扩大为大板性能、完整格式或 GPU 释放验收。

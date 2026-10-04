@@ -6,19 +6,40 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-native-gpu = ["dep:gpui", "dep:windows", "dep:anyhow"]
+native-gpu = [
+    "dep:anyhow",
+    "dep:gpui",
+    "dep:gpui-apple",
+    "dep:gpui-wgpu",
+    "dep:gpui-windows",
+    "dep:metal",
+    "dep:windows",
+]
 
 [dependencies]
 pomelo-core.workspace = true
 thiserror.workspace = true
+bytemuck.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
 anyhow = { workspace = true, optional = true }
+gpui = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.7", default-features = false, optional = true }
-windows = { version = "0.62", optional = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
+gpui-windows = { workspace = true, optional = true }
+windows = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-apple = { workspace = true, optional = true, features = ["runtime_shaders"] }
+metal = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui-wgpu = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+naga.workspace = true
+futures.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true

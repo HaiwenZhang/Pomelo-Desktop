@@ -1,5 +1,7 @@
 # 元件 reference 分组验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 后续补验：正式定位现已使用索引几何 bounds，确认最新 Web 包含隐藏条目，显示状态只影响搜索锚点；J1 的 typed 分组、30 成员及相机完成真实落盘和重开恢复。此前本轮未验证项保留作为历史边界，最新证据和其余未验范围见[定位边界验证](selection-navigation-bounds-validation.md)。
 
 记录日期：2026-10-03。Windows 本轮完成搜索、画布元件选择、成员查询、悬停和 D3D11 高亮的 reference 分组对齐。**桌面与 Web 的 UI 界面字体保持不变**；Web 项目只作只读参考。本记录不代表完整 PCB Viewer 或整板视觉验收通过。
@@ -42,7 +44,7 @@
 复验示例，从桌面项目根目录执行：
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-import --example component_group_probe --locked --offline
+cargo +stable build -p pomelo-import --example component_group_probe --locked --offline
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-component-group-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/component_group_probe.exe E:/brd_cases/camera_test_board.brd .cache/canvas-parity/components-recheck utf-8
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-component-group-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/component_group_probe.exe tests/fixtures/component-reference-groups.json .cache/canvas-parity/components-synthetic-recheck synthetic
 ```

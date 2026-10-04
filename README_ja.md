@@ -6,15 +6,15 @@
 
 <p align="center">
   <strong>すべての接続を、レイヤーごとに見渡す。</strong><br>
-  Rust と GPUI Kit で構築したネイティブ PCB ビューアー。Windows 上でファイルをローカルに処理し、GPU 描画で Cadence Allegro の基板を確認できます。
+  GPUI と GPUI Kit を基盤とする PCB ビューアー。Cadence Allegro (.brd)、Altium Designer、ODB++、PADS、Ansys HFSS 3D Layout(edb.def)、KiCad に対応しています。
 </p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README_zh-CN.md">简体中文</a> · <a href="README_zh-TW.md">繁體中文</a> · 日本語 · <a href="README_ko.md">한국어</a></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Windows">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows, macOS, Linux">
   <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI_Kit-58752c" alt="Rust + GPUI Kit">
-  <img src="https://img.shields.io/badge/rendering-D3D11-58752c" alt="D3D11">
+  <img src="https://img.shields.io/badge/rendering-D3D11%20%7C%20Metal%20%7C%20wgpu-58752c" alt="D3D11, Metal, wgpu">
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
@@ -23,7 +23,7 @@
 ## 基板をより見やすく
 
 - **設計データはローカルに。** 基板ファイルをアップロードせずに読み込み、表示できます。元のファイルは変更しません。
-- **ネイティブ GPU 描画。** D3D11 と HLSL で配線、円弧、パッド、ビア、銅箔と穴、図形、MSDF による基板テキストを描画します。
+- **ネイティブ GPU 描画。** D3D11/HLSL、Metal/MSL、wgpu/WGSL で配線、円弧、パッド、ビア、銅箔と穴、図形、MSDF による基板テキストを描画します。
 - **接続を追跡。** ネットや部品を検索し、結果に移動して選択したオブジェクトの属性を確認できます。
 - **表示を調整。** レイヤーの管理、レイヤー別・ネット別の色分け、銅箔の不透明度、パッドの塗りつぶし、ラベルを設定できます。
 - **複数の基板を扱う。** 複数ドキュメント、最近使ったファイル、表示設定の保存に対応しています。
@@ -37,12 +37,14 @@
 
 ## クイックスタート
 
-**Windows x64**、**Direct3D 11** に対応する GPU とドライバー、**Git**、**Python 3.12+**、Rust、および **MSVC C++ ビルドツールと Windows SDK** が必要です。`rust-toolchain.toml` で Rust **1.98.1** を固定し、依存関係のバージョンは `Cargo.lock` で管理しています。
+macOS には Metal 対応の Mac と Xcode Command Line Tools が必要です。Linux には fontconfig、FreeType、xkbcommon、Wayland/X11、ALSA、OpenSSL の開発パッケージと Vulkan 対応 GPU ドライバーが必要です。以下のビルドコマンドは３つのプラットフォームで共通です。macOS のアプリショートカットでは Ctrl の代わりに Cmd を使います。
+
+**Windows x64**、**Direct3D 11** に対応する GPU とドライバー、**Git**、Rust、および **MSVC C++ ビルドツールと Windows SDK** が必要です。`rust-toolchain.toml` で Rust **1.98.1** を固定し、依存関係のバージョンは `Cargo.lock` で管理しています。
 
 ```powershell
 git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
 cd Pomelo-Desktop
-python scripts/cargo.py run -p pomelo --locked
+cargo run -p pomelo --locked
 ```
 
 **Ctrl+O**、ドラッグ＆ドロップ、または起動時のファイルパス指定で基板を開きます。アプリのメニューまたはツールバーから表示言語を選択できます。
@@ -50,7 +52,7 @@ python scripts/cargo.py run -p pomelo --locked
 ![ウェルカム画面（英語 UI）](images/welcome-en.png)
 
 ```powershell
-python scripts/cargo.py run -p pomelo --locked -- --locale ja --encoding windows-1252 "C:\boards\example.brd"
+cargo run -p pomelo --locked -- --locale ja --encoding windows-1252 "C:\boards\example.brd"
 ```
 
 `--locale` は `en`、`zh-CN`、`zh-TW`、`ja`、`ko` に対応します。その起動にのみ適用され、保存済みの言語設定は変更しません。`--encoding` は `utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252` に対応し、既定値は厳密な UTF-8 です。指定した文字コードはそのプロセスで開くファイルに適用されます。UI 言語とファイルの文字コードは独立しています。`--` 以降の引数はすべてファイルパスとして扱います。
@@ -70,20 +72,39 @@ python scripts/cargo.py run -p pomelo --locked -- --locale ja --encoding windows
 
 ## ビルドと開発
 
-Cargo ラッパーは `.cache/gpui/` にローカルの GPUI GPU パッチを準備します。グローバルな Cargo registry は変更しません。通常の Cargo や rust-analyzer を初めて使う前に、`python scripts/prepare_gpui.py` を実行してください。[パッチの説明](patches/gpui/README.md)も参照してください。通常のデスクトップ利用に Node.js や Web 版のリポジトリは不要です。macOS と Linux は今後の計画であり、現在のネイティブアプリと GPU バックエンドは Windows を対象としています。
+GPUI は当面 [HaiwenZhang/zed の gpui-pre-0.3.7-native-gpu ブランチ](https://github.com/HaiwenZhang/zed/tree/gpui-pre-0.3.7-native-gpu)を使用し、Cargo.lock でコミット `8c92bda2dc9d718cd520d37fda20bca00fa3e274` に固定します。Cargo が fork を直接取得するため、ローカルパッチの準備は不要です。薄いパッケージ名互換層により、GPUI Kit 0.7.0 も同じ GPUI 型を使用します。[GPUI 依存関係の説明](docs/gpui-dependencies.md)を参照してください。通常のデスクトップ利用に Node.js や Web リポジトリは不要です。Windows は D3D11、macOS は Metal、Linux は wgpu を使用します。シーンとバッチ処理は共通化し、シェーダーは各プラットフォームで管理します。 GPUI Kit は registry のオリジナルパッケージを使用します。通常の Cargo と rust-analyzer にパッチの準備は不要です。
 
 ```powershell
-python scripts/cargo.py build -p pomelo --locked
-python scripts/cargo.py test --workspace --locked
-python scripts/cargo.py clippy --workspace --all-targets --locked -- -D warnings
-python scripts/cargo.py run -p pomelo-import --bin pcb_inspect --locked -- --help
+cargo build -p pomelo --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo run -p pomelo-import --bin pcb_inspect --locked -- --help
 ```
+
+### Release パッケージ
+
+| プラットフォーム／構成 | 形式 | コマンド |
+| --- | --- | --- |
+| Windows x64 | `.exe` | `scripts\build-windows.bat` |
+| macOS arm64 / x64 | `.dmg`, `.app.zip` | `scripts/build-macos.sh` |
+| Ubuntu 24.04+ amd64 / arm64 | `.deb`, `.tar.gz` | `scripts/build-ubuntu.sh` |
+
+Rust と各 OS のビルド依存関係が必要です。macOS は ImageMagick、Windows は Inno Setup 6、Ubuntu は `dpkg-dev` と `desktop-file-utils` も必要です。出力先は `dist` です。
+
+Shell スクリプトは `--offline`、`--toolchain NAME`、`--output-dir PATH`、既存バイナリ用の `--binary PATH` に対応します。正式ビルドは `cargo build --release --locked` を使用し、Python は不要です。
+
+Ubuntu Release は 24.04 でビルドして ABI 基準を維持し、CI で 26.04 へのインストールと実行も確認します。新しい Ubuntu でのローカルビルドは、新しいライブラリを要求する場合があります。
+
+macOS は既定でアドホック署名、最低 macOS 14.0 です。`MACOS_SIGNING_IDENTITY` でキーチェーンの署名 ID を指定できます。Apple の公証は未設定です。
+
+[Release ワークフロー](.github/workflows/release.yml)：`vX.Y.Z` タグを push すると全 OS をビルドし、検証後にパッケージと `SHA256SUMS` を公開します。タグは `Cargo.toml` の workspace バージョンと一致させてください。手動実行は Actions アーティファクトのみ生成します。
+
 
 | 場所 | 内容 |
 | --- | --- |
 | [crates/pomelo-core](crates/pomelo-core) | 基板モデル、検索、選択、国際化 |
 | [crates/pomelo-import](crates/pomelo-import) | Allegro の解析とインポート診断 |
-| [crates/pomelo-render](crates/pomelo-render) | シーン準備、D3D11 描画、HLSL シェーダー |
+| [crates/pomelo-render](crates/pomelo-render) | シーン準備、D3D11・Metal・wgpu 描画 |
 | [crates/pomelo](crates/pomelo) | GPUI デスクトップアプリとドキュメント管理 |
 | [locales](locales) | 5 言語の UI リソース |
 | [docs](docs) | 開発計画と検証記録 |
@@ -91,12 +112,16 @@ python scripts/cargo.py run -p pomelo-import --bin pcb_inspect --locked -- --hel
 - [開発計画](docs/native-pcb-viewer-development-plan.md)
 - [開発状況と検証範囲](docs/development-progress.md)
 - [i18n](docs/i18n.md)
-- [GPU / ADR](docs/adr/0001-native-gpu-rendering.md)
+- [GPU / ADR](docs/adr/0001-gpui-pre-0.3.7-native-gpuing.md)
 
 ## 貢献
 
-Allegro 互換性、描画精度、性能、翻訳、ドキュメントへの貢献を歓迎します。[不具合の報告](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)には、元のツールとファイルのバージョン、Windows と GPU の情報、再現手順、インポート診断を添えてください。小さなサンプルや比較画像が役立ちます。共有前に機密の設計データを除去してください。解析や幾何処理の変更には対象を絞った回帰テストを、表示変更にはスクリーンショットを添え、5 言語の README を同期してください。
+Allegro 互換性、描画精度、性能、翻訳、ドキュメントへの貢献を歓迎します。[不具合の報告](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)には、元のツールとファイルのバージョン、OS と GPU の情報、再現手順、インポート診断を添えてください。小さなサンプルや比較画像が役立ちます。共有前に機密の設計データを除去してください。解析や幾何処理の変更には対象を絞った回帰テストを、表示変更にはスクリーンショットを添え、5 言語の README を同期してください。
 
 ## ライセンス
 
-プロジェクトのコードは [MIT ライセンス](LICENSE)です。同梱フォントにはそれぞれのライセンスが適用されます。[Source Han Sans](assets/fonts/source-han-sans/README.md)と[ストロークフォント](assets/fonts/stroke/README.md)を参照してください。
+プロジェクトのコードは [MIT ライセンス](LICENSE)です。同梱フォントにはそれぞれのライセンスが適用されます。[Source Han Sans](assets/fonts/source-han-sans/README.md)を参照してください。
+
+## 謝辞
+
+Pomelo Desktop の GPU アクセラレーション対応 UI フレームワークと UI コンポーネントを提供する [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) および [GPUI Kit](https://github.com/longbridge/gpui-kit) プロジェクトに感謝します。

@@ -1,5 +1,7 @@
 # PCB 画布与最新 Web 的对照验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 die pad GPU 显示分类已与 Web etch 对齐：120 组正式 D3D11 硬件场景通过，真实 camera_test_board 全部 29 个 die pad 的 3,480 次拾取首选和四模式对照零差异，显示切换不重传几何。工作区 401 项测试通过、14 项默认忽略，debug/Release 构建通过，UI 字体保持原状。此项尚未完成实窗截图与交互验收，详见[die pad 专项](die-pad-rendering-validation.md)。
 
 日期：2026-10-03。参考目录：`C:/Users/Zen/Desktop/gitrepo/pomelo`；外部案例只读，报告保存在桌面项目中。
@@ -62,14 +64,14 @@ MSDF 硬件测试使用真实 D3D11 设备、原字体图集和 HLSL，按 Web �
 
 报告记录案例 SHA-256 和参考 Web 文件的 SHA-256，字体资源完整指纹另见 `assets/fonts/source-han-sans/provenance.json`。
 
-## 复验入口
+## 历史复验入口（旧探针已移除）
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-render --example canvas_pick_probe --example msdf_layout_probe --locked --offline
+cargo +stable build -p pomelo-render --example canvas_pick_probe --example msdf_layout_probe --locked --offline
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-canvas-picking-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/canvas_pick_probe.exe E:/brd_cases/USBC_FPC.brd .cache/canvas-parity/latest-usbc
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-msdf-layout-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/msdf_layout_probe.exe E:/brd_cases/USBC_FPC.brd .cache/canvas-parity/msdf-usbc
 $env:POMELO_CANVAS_GPU_REPORT_DIR = "$PWD/.cache/canvas-parity/gpu"
-python scripts/cargo.py +stable test -p pomelo-render --all-features --lib --locked --offline hardware_msdf_atlas -- --ignored
+cargo +stable test -p pomelo-render --all-features --lib --locked --offline hardware_msdf_atlas -- --ignored
 ```
 
 ## 尚未代表通过的门槛

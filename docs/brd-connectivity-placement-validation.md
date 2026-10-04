@@ -1,5 +1,7 @@
 # BRD 网络归属与封装/引脚放置验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 日期：2026-10-02。当前只在 Windows 开发与验证。本阶段将源记录、网络连接与已验证的 padstack/焊盘几何组合成封装和引脚查询结果，尚未完成整板 `BoardScene` 或真实 PCB GPU 视口。
 
 ## 实现范围
@@ -63,8 +65,8 @@
 ## 复现
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test --workspace --locked --offline
-python -X utf8 scripts/cargo.py +stable build --workspace --locked --offline
+cargo +stable test --workspace --locked --offline
+cargo +stable build --workspace --locked --offline
 python -X utf8 scripts/probe-connectivity.py .cache/indexes-windows1252.jsonl .cache/connectivity-probes target/debug/pcb_inspect.exe
 python -X utf8 scripts/probe-records.py .cache/indexes-windows1252.jsonl .cache/placement-probes target/debug/pcb_inspect.exe --placement --samples 4
 node --max-old-space-size=24576 --import file:///C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/loader.mjs scripts/check-connectivity-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo .cache/connectivity-probes/manifest.jsonl .cache/web-inputs.json .cache/cases-manifest.jsonl .cache/indexes-windows1252.jsonl .cache/connectivity-parity.jsonl

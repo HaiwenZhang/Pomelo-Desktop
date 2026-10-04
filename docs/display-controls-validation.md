@@ -25,8 +25,8 @@
 验证命令：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test --workspace --all-targets --all-features --locked --offline
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
+cargo +stable test --workspace --all-targets --all-features --locked --offline
+cargo +stable build -p pomelo --locked --offline
 ```
 
 工作区 32 个测试目标，341 passed、0 failed、7 ignored，exit 0。原始输出见 [display-controls-workspace-tests.log](gpu-validation/display-controls-workspace-tests.log)。ignored 包括 4 项外部案例、2 项硬件和 1 项外部字体，未计作通过。Windows debug 构建 exit 0，二进制 SHA-256 为 `FBAFC17428430F6B71635307AB758382F8BB641C0670E23482EAA7754052E5E7`。此前最新工作区 Clippy 已通过。

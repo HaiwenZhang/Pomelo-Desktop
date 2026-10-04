@@ -1,13 +1,14 @@
-//! Windows-only shader probe using GPUI's own D3D11 context and presentation.
+//! Native shader probe using GPUI's device and frame presentation.
 
 use gpui_kit::base::Selectable;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, WindowExt, button::Button};
+use gpui_kit::gpui;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pomelo_core::i18n::{Message, MessageKey as Key, text};
 
 use crate::i18n;
-use pomelo_render::backend::d3d11::{PcbProbeRenderer, ProbeScene, ProbeTelemetry};
+use pomelo_render::backend::native::{PcbProbeRenderer, ProbeScene, ProbeTelemetry};
 use std::sync::Arc;
 
 actions!(pomelo_native_gpu, [RotateColors, ToggleClip, ShowOverlay]);
@@ -17,7 +18,7 @@ pub struct NativeGpuDemo {
     color_rotation: u32,
     clipped: bool,
     dark: bool,
-    renderer: Result<NativeGpuHandle, String>,
+    renderer: Result<GpuPainterHandle, String>,
     telemetry: Arc<ProbeTelemetry>,
     triangle: bool,
 }
@@ -26,7 +27,9 @@ impl NativeGpuDemo {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let telemetry = Arc::new(ProbeTelemetry::default());
         let renderer = window
-            .register_gpu_renderer(PcbProbeRenderer::new(telemetry.clone()))
+            .register_gpu_painter(pomelo_render::backend::native::painter(
+                PcbProbeRenderer::new(telemetry.clone()),
+            ))
             .map_err(|error| format!("{error:#}"));
         Self {
             renderer,
@@ -81,14 +84,13 @@ impl Render for NativeGpuDemo {
         {
             let status = handle.status();
             let report = serde_json::json!({
-                "backend": "GPUI_D3D11",
+                "backend": pomelo_render::backend::native::NAME,
                 "shader_owner": "pomelo-render",
                 "scene": if self.triangle { "triangle" } else { "trace_disc_square_zone_with_hole" },
-                "stage": if status.presented > 0 && status.last_error.is_none() { "present_succeeded" } else { "pending_or_failed" },
+                "stage": if status.encoded > 0 && status.last_error.is_none() { "encoding_succeeded" } else { "pending_or_failed" },
                 "adapter": specs.as_ref().map(|specs| &specs.device_name),
                 "software_emulated": specs.as_ref().map(|specs| specs.is_software_emulated),
-                "submitted": status.submitted,
-                "presented": status.presented,
+                "encoded": status.encoded,
                 "last_error": status.last_error,
                 "statistics": self.telemetry.snapshot(),
                 "cpu_pixel_readback": false,
@@ -100,7 +102,10 @@ impl Render for NativeGpuDemo {
             }
         }
         let clipped = self.clipped;
-        // Require a reported hardware adapter; do not pass this probe with WARP.
+        // GPUI Metal currently does not expose gpu_specs; registration selects Metal.
+        #[cfg(target_os = "macos")]
+        let hardware = true;
+        #[cfg(not(target_os = "macos"))]
         let hardware = specs
             .as_ref()
             .is_some_and(|specs| !specs.is_software_emulated);

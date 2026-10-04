@@ -26,7 +26,7 @@
 硬件命令及原始输出：[layer-primitives-hardware-tests.log](gpu-validation/layer-primitives-hardware-tests.log)。必须启用 `native-gpu`；未启用时该测试不会编译，零测试不能计作硬件通过。
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --features native-gpu --lib hardware_copper_overlapping_holes_preserve_underlying_trace --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-render --features native-gpu --lib hardware_copper_overlapping_holes_preserve_underlying_trace --locked --offline -- --ignored --nocapture
 ```
 
 ## Windows 实窗证据

@@ -21,10 +21,10 @@
 最终渲染库启用 `native-gpu` 后 **74 passed / 5 ignored**；应用 **53 passed**；五语资源和源码门禁 **9 passed**；工作区全目标全特性 Clippy 与格式通过。忽略项包括硬件/外部资源测试，本轮未重新执行 GPU 硬件像素验收；两个外部缩略图测试已另行显式执行。
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --features native-gpu --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable test -p pomelo-render --features native-gpu --locked --offline
+cargo +stable test -p pomelo --locked --offline
+cargo +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
 ```
 
 外部验证显式传入本地路径，仅在设置 `POMELO_PREVIEW_PNG` 时写出预览，源 BRD 保持只读。LPDDR4 使用同一命令替换两个路径。
@@ -32,7 +32,7 @@ python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-f
 ```powershell
 $env:POMELO_PREVIEW_BOARD_PATH = 'E:\brd_cases\USBC_FPC.brd'
 $env:POMELO_PREVIEW_PNG = "$PWD\.cache\ui-validation\thumbnails\USBC_FPC.png"
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --features native-gpu external_board_thumbnail --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-render --features native-gpu external_board_thumbnail --locked --offline -- --ignored --nocapture
 ```
 
 ## 真实案例

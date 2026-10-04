@@ -1,5 +1,8 @@
 # 紧凑文字：15061 Windows GPU 验证
 
+> 2026-10-04：KiCad stroke 资源及其专用加载/GPU 验证入口已移除。本文涉及该字体的结果仅为历史记录；通用笔画布局与合成几何 GPU 测试仍保留，当前产品使用 Source Han Sans MSDF 和外部 ANSI 字体。
+
+
 日期：2026-10-02。案例：`E:/brd_cases/15061-1b.brd`，文本解码 Windows-1252。
 
 ## 本次实际执行
@@ -24,7 +27,7 @@
 ```powershell
 $env:POMELO_TEXT_BOARD_PATH = 'E:/brd_cases/15061-1b.brd'
 $env:POMELO_TEXT_BOARD_ENCODING = 'windows-1252'
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --features native-gpu hardware_real_board_compact_text_upload_draw_and_reset --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-render --features native-gpu hardware_real_board_compact_text_upload_draw_and_reset --locked --offline -- --ignored --nocapture
 ```
 
 ## 证据边界

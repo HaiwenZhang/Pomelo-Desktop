@@ -122,7 +122,7 @@ pub struct DocumentSession {
     pub status: DocumentStatus,
     pub progress_mailbox: LatestImportProgress,
     pub progress: Option<ImportProgress>,
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub viewport: Option<gpui_kit::Entity<crate::viewport::BoardViewport>>,
 }
 
@@ -143,7 +143,7 @@ impl DocumentSession {
             status: DocumentStatus::Queued,
             progress_mailbox: LatestImportProgress::default(),
             progress: None,
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             viewport: None,
         }
     }
@@ -188,7 +188,7 @@ impl DocumentSession {
         self.diagnostics_expanded = false;
         self.diagnostics_page = 0;
         self.status = DocumentStatus::Queued;
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         {
             self.viewport = None;
         }

@@ -1,5 +1,7 @@
 # Windows release 文字准备基线
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-02。使用锁定离线构建的 release `text_prepare.exe`，每个案例串行运行三个独立进程。脚本记录二进制和案例 SHA-256、原始输出、退出码及统计一致性，原始报告为 [USBC](gpu-validation/text-prepare-usbc-release.json) 和 [AGILEX](gpu-validation/text-prepare-agilex-release.json)。
 
 最新代码复测（包含导入内容 SHA-256）：重新构建 release 探针后，USBC 三次为 **0.0728 / 0.0264 / 0.0268 秒**，AGILEX Windows-1252 为 **1.7605 / 1.7502 / 1.7227 秒**。两板对象与实例数仍分别为 482 / 44,841、46,480 / 3,094,215，六次均 exit 0、无跳过且统计一致。新报告保留二进制及输入哈希：[当前 USBC](gpu-validation/text-prepare-usbc-current-release.json)、[当前 AGILEX](gpu-validation/text-prepare-agilex-current-release.json)。下表保留较早基线；未控制缓存和硬件运行状态，不从两批耗时推断哈希步骤的独立开销或性能回退。探针不创建应用视口、不读取查看状态配置，因此这些数字不包括应用状态恢复流程。
@@ -14,7 +16,7 @@
 复现：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable build --release -p pomelo-render --example text_prepare --locked --offline
+cargo +stable build --release -p pomelo-render --example text_prepare --locked --offline
 python -X utf8 scripts/measure-text-prepare.py --binary target/release/examples/text_prepare.exe --board E:/brd_cases/AGILEX_I_SERIES.brd --encoding windows-1252 --output docs/gpu-validation/text-prepare-agilex-release.json
 ```
 

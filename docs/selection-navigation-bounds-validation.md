@@ -1,5 +1,7 @@
 # 索引几何定位边界验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-03。Windows 应用的搜索、检查器定位及选择恢复改用共享 `SegmentIndex::selection_bounds`。UI 界面字体和 Web 源码保持不变。
 
 ## 实际 Web 契约与修正
@@ -30,7 +32,7 @@
 复验入口：
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-render --example selection_bounds_probe --locked --offline
+cargo +stable build -p pomelo-render --example selection_bounds_probe --locked --offline
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-selection-bounds-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/selection_bounds_probe.exe E:/brd_cases/USBC_FPC.brd .cache/canvas-parity/locate-recheck utf-8
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-selection-bounds-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/selection_bounds_probe.exe tests/fixtures/selection-navigation-bounds.json .cache/canvas-parity/locate-synthetic-recheck synthetic
 ```

@@ -1,5 +1,7 @@
 # BRD 记录索引验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 验证日期：2026-10-02。开发范围为 Windows。本轮完成 M2 的字符串表、记录边界扫描和索引；`AllegroImporter::import` 仍返回场景未实现诊断，桌面打开流程目前仍是头部探测。
 
 ## 实现与边界
@@ -49,11 +51,11 @@ Windows-1252 是本轮两端统一的**记录布局验证参数**。它保证同
 外部 Web 源码和 BRD 案例只读，报告及逐条证据写入本地 `.cache/`，不入库。
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable run -p pomelo-import --bin pcb_inspect --locked --offline -- --locale zh-CN --encoding windows-1252 check --stage index --cases-dir E:\brd_cases --report .cache\indexes-windows1252.jsonl --index-data-dir .cache\index-data-windows1252
+cargo +stable run -p pomelo-import --bin pcb_inspect --locked --offline -- --locale zh-CN --encoding windows-1252 check --stage index --cases-dir E:\brd_cases --report .cache\indexes-windows1252.jsonl --index-data-dir .cache\index-data-windows1252
 
 node C:\Users\Zen\Desktop\gitrepo\pomelo\node_modules\tsx\dist\cli.mjs --tsconfig C:\Users\Zen\Desktop\gitrepo\pomelo\tsconfig.json scripts\check-index-parity.mts C:\Users\Zen\Desktop\gitrepo\pomelo .cache\indexes-windows1252.jsonl .cache\web-inputs.json .cache\cases-manifest.jsonl .cache\index-parity.jsonl
 
-python -X utf8 scripts/cargo.py +stable run -p pomelo-import --bin pcb_inspect --locked --offline -- --locale ja index E:\brd_cases\example.brd
+cargo +stable run -p pomelo-import --bin pcb_inspect --locked --offline -- --locale ja index E:\brd_cases\example.brd
 ```
 
 `example.brd` 替换为真实文件。单文件 `index` 和批量 `check --stage index` 均可用；`--index-data-dir` 仅用于批量索引证据导出。Node/tsx 只用于研发差分，桌面程序没有 JavaScript 运行依赖。本机 tsx 在沙箱内遇到 `uv_os_get_passwd` 限制，沙箱外执行上述只读对照取得结果。

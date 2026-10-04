@@ -38,11 +38,11 @@
 Windows debug 构建、全工作区全目标全特性 Clippy、格式检查通过。应用测试 51 项通过，i18n 资源与语法门禁 9 项通过；没有添加仅镜像布局样式的测试。本轮没有修改 GPU Shader、GPUI 补丁或源 BRD。
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable fmt --all -- --check
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable fmt --all -- --check
+cargo +stable build -p pomelo --locked --offline
+cargo +stable test -p pomelo --locked --offline
+cargo +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
 ```
 
 ## 剩余范围

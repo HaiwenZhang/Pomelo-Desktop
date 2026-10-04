@@ -21,8 +21,8 @@
 本轮实际验证：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test --workspace --all-targets --all-features --locked --offline
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
+cargo +stable test --workspace --all-targets --all-features --locked --offline
+cargo +stable build -p pomelo --locked --offline
 ```
 
 工作区 335 项通过、0 失败、7 ignored，32 个测试目标成功结束。原始输出见 [view-state-workspace-tests.log](gpu-validation/view-state-workspace-tests.log)。ignored 是既有外部案例/资源及硬件项，本轮没有把它们计作通过。Windows debug 构建 exit 0；此前查看状态最终接线的工作区 Clippy 已通过。
@@ -31,4 +31,4 @@ python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
 
 仍待验收：真实板调整相机/图层/选择后关闭并重新打开、退出进程后重启、源文件或编码变化、快速关闭/退出、保存失败及退出等待超时。正式发布还需重新构建 release（当前已有 release 二进制早于此功能），并进行干净环境验证。
 
-首次布局前关闭的保存边界已补齐：未初始化导航不生成快照，不以默认相机覆盖磁盘状态；已恢复或手动设置的有效相机可以在首次布局前生成快照。针对性命令 `python -X utf8 scripts/cargo.py +stable test -p pomelo-core interaction::tests --locked --offline` 实际结束，8 项通过、0 失败；工作区全目标全特性 Clippy 通过。修复后执行 `python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline`，Windows debug 构建 exit 0。这些测试和构建不替代真实窗口关闭时序验收。
+首次布局前关闭的保存边界已补齐：未初始化导航不生成快照，不以默认相机覆盖磁盘状态；已恢复或手动设置的有效相机可以在首次布局前生成快照。针对性命令 `cargo +stable test -p pomelo-core interaction::tests --locked --offline` 实际结束，8 项通过、0 失败；工作区全目标全特性 Clippy 通过。修复后执行 `cargo +stable build -p pomelo --locked --offline`，Windows debug 构建 exit 0。这些测试和构建不替代真实窗口关闭时序验收。

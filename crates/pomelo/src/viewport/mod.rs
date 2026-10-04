@@ -1,4 +1,4 @@
-//! Windows native board canvas. Business GPU resources stay in pomelo-render.
+//! Native desktop board canvas. Business GPU resources stay in pomelo-render.
 use crate::panels::focus_scroll::FocusScroll;
 use crate::tooltips::ButtonTooltipExt;
 mod appearance;
@@ -15,6 +15,7 @@ use gpui_kit::component::{
     Icon, ResizableState, Sizable, h_resizable, resizable_panel,
     slider::{SliderEvent, SliderState},
 };
+use gpui_kit::gpui;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     base::{Disableable, Selectable},
@@ -32,7 +33,7 @@ use pomelo_core::{
     model::BoardScene,
 };
 use pomelo_render::{
-    backend::d3d11::{BoardFrame, BoardRenderer, CopperTelemetry, TraceFrame, TraceTelemetry},
+    backend::native::{BoardFrame, BoardRenderer, CopperTelemetry, TraceFrame, TraceTelemetry},
     tracks::PreparedTracks,
 };
 use std::{
@@ -135,7 +136,7 @@ pub struct BoardViewport {
     layer_scroll_target: Option<usize>,
     display: Arc<pomelo_core::display::BoardDisplay>,
     colors: Arc<BTreeMap<pomelo_core::model::LayerId, [f32; 4]>>,
-    renderer: Result<NativeGpuHandle, String>,
+    renderer: Result<GpuPainterHandle, String>,
     telemetry: Arc<TraceTelemetry>,
     copper_telemetry: Arc<CopperTelemetry>,
     pad_telemetry: Arc<TraceTelemetry>,
@@ -286,7 +287,7 @@ impl BoardViewport {
         let zone_outline_telemetry = Arc::new(TraceTelemetry::default());
         let label_telemetry = Arc::new(TraceTelemetry::default());
         let renderer = window
-            .register_gpu_renderer(
+            .register_gpu_painter(pomelo_render::backend::native::painter(
                 BoardRenderer::new(
                     Arc::clone(&telemetry),
                     Arc::clone(&copper_telemetry),
@@ -300,7 +301,7 @@ impl BoardViewport {
                 .with_custom_outline_telemetry(Arc::clone(&custom_outline_telemetry))
                 .with_zone_outline_telemetry(Arc::clone(&zone_outline_telemetry))
                 .with_label_telemetry(Arc::clone(&label_telemetry)),
-            )
+            ))
             .map_err(|error| format!("{error:#}"));
         let colors =
             scene
@@ -2680,6 +2681,7 @@ impl Render for BoardViewport {
         let pad_stats = self.pad_telemetry.snapshot();
         let custom_pad_stats = self.custom_pad_telemetry.snapshot();
         let custom_outline_stats = self.custom_outline_telemetry.snapshot();
+        let zone_outline_stats = self.zone_outline_telemetry.snapshot();
         let drill_stats = self.drill_telemetry.snapshot();
         let drawing_stats = self.drawing_telemetry.snapshot();
         let text_stats = self.text_telemetry.snapshot();
@@ -2691,7 +2693,7 @@ impl Render for BoardViewport {
             .as_ref()
             .map_or(0, |mesh| mesh.upload_bytes());
         let renderer = self.renderer.as_ref().ok().cloned();
-        let status = renderer.as_ref().map(NativeGpuHandle::status);
+        let status = renderer.as_ref().map(GpuPainterHandle::status);
         let failure = self
             .renderer
             .as_ref()
@@ -2710,6 +2712,7 @@ impl Render for BoardViewport {
                     .as_ref()
                     .map_or(0, |source| source.instances.len()) as u64
             && drill_stats.uploaded_instances == self.drills.analytic.len() as u64
+            && zone_outline_stats.uploaded_instances == self.zone_outlines.instances.len() as u64
             && drawing_stats.uploaded_instances == self.drawings.instances.len() as u64
             && text_stats.uploaded_instances
                 == self
@@ -2733,7 +2736,7 @@ impl Render for BoardViewport {
                     .map_or(0, |cache| cache.source.instances.len()) as u64;
         if failure.is_none()
             && !self.curve_fill.failed
-            && (!ready || status.as_ref().is_some_and(|status| status.submitted == 0))
+            && (!ready || status.as_ref().is_some_and(|status| status.encoded == 0))
         {
             window.request_animation_frame();
         }
@@ -2765,11 +2768,10 @@ impl Render for BoardViewport {
                 })
             });
             let mut report = serde_json::json!({
-                "backend": "GPUI_D3D11", "shader_owner": "pomelo-render", "scope": "traces_outline_copper_pads_drills_drawings_msdf_text_labels",
+                "backend": pomelo_render::backend::native::NAME, "shader_owner": "pomelo-render", "scope": "traces_outline_copper_pads_drills_drawings_msdf_text_labels",
                 "cpu_pixel_readback": false, "expected_instances": self.tracks.instances.len(),
                 "ready": ready, "status": {
-                    "submitted": status.as_ref().map(|status| status.submitted),
-                    "presented": status.as_ref().map(|status| status.presented),
+                    "encoded": status.as_ref().map(|status| status.encoded),
                     "last_error": failure,
                 },
                 "statistics": stats,
@@ -2782,6 +2784,8 @@ impl Render for BoardViewport {
                 "pad_statistics": pad_stats,
                 "custom_pad_statistics": custom_pad_stats,
                 "custom_outline_statistics": custom_outline_stats,
+                "zone_outline_statistics": zone_outline_stats,
+                "expected_zone_outline_instances": self.zone_outlines.instances.len(),
                 "drill_statistics": drill_stats,
                 "drawing_statistics": drawing_stats,
                 "expected_drawing_instances": self.drawings.instances.len(),
@@ -2867,7 +2871,7 @@ impl Render for BoardViewport {
             }
         }
         let mut frame = TraceFrame {
-            pass: pomelo_render::backend::d3d11::OverlayPass::Base,
+            pass: pomelo_render::backend::native::OverlayPass::Base,
             filled: self.display.filled,
             hover_selection: self.hover_selection.clone().filter(|_| {
                 self.hovered.as_ref().is_some_and(|(_, context)| {
@@ -2906,10 +2910,10 @@ impl Render for BoardViewport {
                 use pomelo_core::selection::{SelectedObject, SelectionTarget};
                 let selection = match target {
                     SelectionTarget::Object(SelectedObject::Segment(id)) => {
-                        pomelo_render::backend::d3d11::TraceSelection::Segment(id)
+                        pomelo_render::backend::native::TraceSelection::Segment(id)
                     }
                     SelectionTarget::Track(id) => {
-                        pomelo_render::backend::d3d11::TraceSelection::Track(id)
+                        pomelo_render::backend::native::TraceSelection::Track(id)
                     }
                     _ => return None,
                 };
@@ -3124,7 +3128,7 @@ impl Render for BoardViewport {
                             || before_labels != label_telemetry.snapshot().uploaded_instances
                             || before_zone_outlines
                                 != zone_outline_telemetry.snapshot().uploaded_instances
-                            || (before.presented == 0 && after.presented > 0)
+                            || (before.encoded == 0 && after.encoded > 0)
                         {
                             let _ = weak.update(cx, |_, cx| cx.notify());
                         }
@@ -3721,14 +3725,22 @@ impl Render for BoardViewport {
             );
         }
         if let Some(details) = failure {
-            view = view
-                .child(
-                    div()
-                        .text_color(theme.danger)
-                        .child(text(locale, Key::GpuFailed)),
-                )
-                .child(div().text_sm().child(text(locale, Key::TechnicalDetails)))
-                .child(div().text_sm().child(details));
+            // Error details must not resize the canvas and invalidate its curve view.
+            view = view.child(
+                div()
+                    .absolute()
+                    .bottom_12()
+                    .left_4()
+                    .max_w(relative(0.85))
+                    .rounded_sm()
+                    .bg(theme.popover)
+                    .px_3()
+                    .py_2()
+                    .text_color(theme.danger)
+                    .child(div().child(text(locale, Key::GpuFailed)))
+                    .child(div().text_sm().child(text(locale, Key::TechnicalDetails)))
+                    .child(div().text_sm().child(details)),
+            );
         }
         view
     }

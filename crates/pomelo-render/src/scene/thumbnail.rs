@@ -465,4 +465,5 @@ fn inside_triangle([a, b, c]: [Point; 3], at: Point) -> bool {
 }
 
 #[cfg(test)]
+#[path = "../../tests/unit/scene/thumbnail.rs"]
 mod tests;

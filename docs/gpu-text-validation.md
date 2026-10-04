@@ -1,5 +1,8 @@
 # Windows PCB 文字 GPU 验证
 
+> 2026-10-04：KiCad stroke 资源及其专用加载/GPU 验证入口已移除。本文涉及该字体的结果仅为历史记录；通用笔画布局与合成几何 GPU 测试仍保留，当前产品使用 Source Han Sans MSDF 和外部 ANSI 字体。
+
+
 记录日期：2026-10-02。当前仅验证 Windows D3D11/HLSL；业务文字实例和绘制继续位于 `pomelo-render`，不增加 GPUI 的 PCB 专用能力。
 
 ## 真实 BRD 离屏验证
@@ -10,7 +13,7 @@
 
 ```powershell
 $env:POMELO_TEXT_BOARD_PATH = 'E:/brd_cases/SS8633A_AMPB_FPC_DOE_V2_HVT_A_0423_1716.brd'
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --all-features --lib hardware_ --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-render --all-features --lib hardware_ --locked --offline -- --ignored --nocapture
 ```
 
 实际结果：
@@ -44,7 +47,7 @@ USBC 在严格路径完成验证；AGILEX 在严格及当前产品恢复路径�
 ```powershell
 $env:POMELO_TEXT_BOARD_PATH = 'E:/brd_cases/AGILEX_I_SERIES.brd'
 $env:POMELO_TEXT_BOARD_ENCODING = 'windows-1252'
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --all-features --lib hardware_trace_pixels --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-render --all-features --lib hardware_trace_pixels --locked --offline -- --ignored --nocapture
 ```
 
 此处帧数是离屏测试调用次数，未按显示器刷新节奏运行，不能换算交互帧率或加载时间。128 像素目标中的非空像素只证明绘制产生内容；396 MB 是实例累计上传载荷，不是峰值显存测量。大板窗口流畅度、DPI、LOD 和完整图元合成性能仍未验收。
@@ -63,4 +66,4 @@ BoardRenderer 的文字合成测试现使用嵌入核心字体的真实 A 字形
 
 本轮证明真实源文字能够经过布局、实例上传和 D3D11 绘制生成非空画面，并复用缓存。它没有验证 GPUI 完整窗口中的文字与铜皮、焊盘、走线合成，也没有逐字与 Web 字形对照。
 
-仍需验证真实窗口缩放、图层显隐、DPI、文字清晰度及遮挡顺序；大板文字需单独测上传、峰值内存、帧耗时及 LOD。当前字体缺少韩文字形；界面五语支持与源 PCB 字形覆盖是不同要求。字体来源与发布许可审查见 [pcb-text-font-provenance.md](pcb-text-font-provenance.md)，本轮 GPU 测试不改变其审查状态。
+仍需验证真实窗口缩放、图层显隐、DPI、文字清晰度及遮挡顺序；大板文字需单独测上传、峰值内存、帧耗时及 LOD。旧 KiCad stroke 字体缺少韩文字形，该字体现已移除；界面五语支持与源 PCB 字形覆盖是不同要求。字体来源与发布许可审查见 [pcb-text-font-provenance.md](pcb-text-font-provenance.md)，其中的 KiCad stroke 核对已归档为历史记录；当前内置字体通知见 `assets/fonts/source-han-sans/`。

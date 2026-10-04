@@ -10,6 +10,7 @@ pomelo-core.workspace = true
 pomelo-import.workspace = true
 pomelo-render = { workspace = true, features = ["native-gpu"] }
 gpui-kit.workspace = true
+gpui.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -22,11 +23,11 @@ chrono.workspace = true
 futures.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
+rfd.workspace = true
 
 [lints]
 workspace = true
 
 [build-dependencies]
-embed-resource = "=3.0.11"
-resvg = { version = "=0.46.0", default-features = false }
+embed-resource.workspace = true
+resvg.workspace = true

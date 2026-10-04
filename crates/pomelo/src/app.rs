@@ -6,7 +6,7 @@ use crate::actions::{
 use crate::services::startup_error;
 use crate::workbench::Workbench;
 use crate::{i18n, recent, startup, theme};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use crate::{native_gpu_demo, viewport};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
@@ -19,9 +19,9 @@ use std::{cell::Cell, process::ExitCode, rc::Rc};
 pub fn run() -> ExitCode {
     let preferred_locale = startup_error::preferred_locale();
     if std::env::args_os().any(|argument| argument == "--native-gpu-demo") {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         return run_native_gpu_demo(preferred_locale);
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             startup_error::report(
                 preferred_locale,
@@ -58,7 +58,7 @@ pub fn run() -> ExitCode {
             KeyBinding::new("secondary-shift-b", ToggleRightPanel, Some("Pomelo")),
             KeyBinding::new("secondary-q", Quit, None),
         ]);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         cx.bind_keys([
             KeyBinding::new("secondary-k", viewport::FocusSearch, Some("Pomelo")),
             KeyBinding::new("escape", viewport::LeaveSearch, Some("BoardWorkspace")),
@@ -137,7 +137,7 @@ fn run_application(
     ExitCode::from(u8::from(failed.get()))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn run_native_gpu_demo(locale: Locale) -> ExitCode {
     run_application(locale, |cx, failed| {
         init(cx);

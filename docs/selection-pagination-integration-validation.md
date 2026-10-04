@@ -12,9 +12,9 @@
 执行命令（仓库根目录，顺序执行）：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test --workspace --all-features --locked --offline
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --all-features --lib hardware_ --locked --offline -- --ignored
+cargo +stable test --workspace --all-features --locked --offline
+cargo +stable build -p pomelo --locked --offline
+cargo +stable test -p pomelo-render --all-features --lib hardware_ --locked --offline -- --ignored
 ```
 
 首次硬件测试命令遗漏 `--all-features`，实际执行 0 项，因此不计为 GPU 验证。修正参数后确认运行 2 项、2 项通过。

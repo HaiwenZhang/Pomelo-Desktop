@@ -1,5 +1,7 @@
 # 搜索排序与最新 Web 对照
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-04。Windows 正式搜索已接入平台无关的 ICU4X / Unihan 离线排序；本记录验证名称匹配、排序和结果身份，不代替完整查看器验收。
 
 ## 行为与实现
@@ -37,7 +39,7 @@ Web 的 `toLocaleLowerCase()` / `localeCompare()` 未指定语言，使用 JavaS
 复验示例：
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-import --example search_order_probe --release --offline --locked
+cargo +stable build -p pomelo-import --example search_order_probe --release --offline --locked
 node --import file:///C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/loader.mjs scripts/check-search-order-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/release/examples/search_order_probe.exe - .cache/search-parity/synthetic synthetic
 node --import file:///C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/loader.mjs scripts/check-search-order-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/release/examples/search_order_probe.exe E:/brd_cases/AGILEX_I_SERIES.brd .cache/search-parity/agilex windows-1252
 ```

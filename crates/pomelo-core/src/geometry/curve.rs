@@ -1,4 +1,4 @@
-//! View-dependent f64 contour refinement, matching Web curve-tessellator.
+//! View-dependent f64 contour refinement.
 //! Clipped contours retain even/odd coverage; they need parity fans rather than earcut.
 
 use crate::{
@@ -6,9 +6,6 @@ use crate::{
     model::{Arc, Bounds, Point, Segment},
     task::CancellationToken,
 };
-
-#[path = "curve/trig.rs"]
-mod trig;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CurveLimits {
@@ -131,7 +128,7 @@ impl Refinement<'_> {
             min: Point::new(a.x.min(b.x), a.y.min(b.y)),
             max: Point::new(a.x.max(b.x), a.y.max(b.y)),
         };
-        let sine = trig::sin((end - start) / 4.0);
+        let sine = ((end - start) / 4.0).sin();
         let error = (2.0 * self.arc.radius) * (sine * sine);
         let mid = (start + end) / 2.0;
         if error > self.tolerance
@@ -211,8 +208,8 @@ pub fn clip_ring(
 
 fn arc_point(arc: Arc, angle: f64) -> Point {
     Point::new(
-        arc.center.x + arc.radius * trig::cos(angle),
-        arc.center.y + arc.radius * trig::sin(angle),
+        arc.center.x + arc.radius * angle.cos(),
+        arc.center.y + arc.radius * angle.sin(),
     )
 }
 fn overlaps(a: Bounds, b: Bounds) -> bool {
@@ -288,7 +285,3 @@ fn push_point(
     points.push(p);
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "curve/tests.rs"]
-mod tests;

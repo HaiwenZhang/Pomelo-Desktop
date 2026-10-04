@@ -1,5 +1,7 @@
 # Allegro 案例解析与原生画布对齐记录
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 记录日期：2026-10-04。状态：进行中，尚未完成四板视觉验收。
 
 目标是先完成 `E:/brd_cases` 当前案例的解析，再将下列四板的走线、过孔、焊盘、铺铜、板文字、网络标注、透明度以及跨层/同层叠加与 Allegro 的实际画面对齐。发现的差异必须修复并复验，不能以整理文档或导入成功代替画面验收。本记录同时给后续 Web Pomelo 实现提供可追溯的行为依据。
@@ -98,7 +100,7 @@
 复验时使用新的输出目录，防止旧成功文件掩盖失败：
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-import --example import_case_probe --release --locked --offline
+cargo +stable build -p pomelo-import --example import_case_probe --release --locked --offline
 python scripts/check-full-import.py E:/brd_cases target/release/examples/import_case_probe.exe .cache/allegro-parity/current-cases.jsonl .cache/full-import-new
 ```
 
@@ -245,7 +247,7 @@ U94 区域的 TOP Dynamic zone 5598600 有一个围绕 U94.41（Pin 901969）的
 ```powershell
 $env:POMELO_S5000C_U94_BOARD_PATH = 'E:/brd_cases/S5000C-64_DDR5_BGA_V0.61.brd'
 $env:POMELO_S5000C_U94_GPU_REPORT = Join-Path $PWD.Path '.cache/allegro-parity/s5000c-u94-offscreen-report.json'
-python scripts/cargo.py +stable test -p pomelo-render --features native-gpu --locked --offline hardware_s5000c_u94_real_void_and_same_layer_composition_without_reupload -- --ignored --nocapture
+cargo +stable test -p pomelo-render --features native-gpu --locked --offline hardware_s5000c_u94_real_void_and_same_layer_composition_without_reupload -- --ignored --nocapture
 ```
 
 **尚未完成**：S5000C 实际 Allegro 报告与画面、整板 GPU 上传/呈现、跨层覆盖、标签、曲边 AA 和独立 ART12 走线圆弧。硬件范围仅为 9 对象子集，不将此前整板 CPU 准备通过升级为整板 GPU 验收。后续 Web 可复用同一对象 ID、解析轮廓、圆角孔洞独立判定与非黑底检查，并保持真实 void 不覆盖目标已有内容；最终显示优先级仍以实际 Allegro 对照为准。
@@ -266,7 +268,7 @@ python scripts/cargo.py +stable test -p pomelo-render --features native-gpu --lo
 新增三个真实 D3D11 硬件专项，3 passed / 0 failed；专项 Clippy `-D warnings` 和格式检查通过。独立合成输入证实当前同类别 TOP 覆盖底层、全局 Pin/Via/Drill 顺序、active/promoted Etch 可覆盖钻孔、每对象 source-over、铜皮独立 alpha、上层真孔露下层和 via drill 的图层 scope。示例两层铜皮 alpha=99 时中心 `[99,0,61]`，上层孔露下层 `[0,0,99]`；这些是当前策略的证明，不是 Allegro 验收。没有改生产管线或字体。
 
 ```powershell
-python scripts/cargo.py test -p pomelo-render --features native-gpu hardware_compositor_ --locked --offline -- --ignored --nocapture
+cargo test -p pomelo-render --features native-gpu hardware_compositor_ --locked --offline -- --ignored --nocapture
 ```
 
 日志和版本证据：`.cache/allegro-parity/compositor-policy-{hardware,clippy}.log`、`compositor-policy-verification.json`。零 global 时仍显示 selected/hover 的原生/Web 差异见 A12；active/promoted Etch 与真实钻孔的覆盖仍待 Allegro 校准。
@@ -442,7 +444,7 @@ Windows 组合器在每个绘制命令选择类别材质，通过 `TraceFrame.ma
 ```powershell
 $env:POMELO_TEXT_BOARD_PATH = 'E:\brd_cases\DemoCase_LPDDR4.brd'
 $env:POMELO_TEXT_BOARD_ENCODING = 'windows-1252'
-python scripts/cargo.py test -p pomelo-render --features native-gpu hardware_ -- --ignored --nocapture
+cargo test -p pomelo-render --features native-gpu hardware_ -- --ignored --nocapture
 ```
 
 最终 Release SHA-256：`be46b5c4372ca68886c4fc01bf4841c636c64bfbb164858756d5a98034847df1`。私有配置 `.cache/allegro-parity/opacity-e46ffbc566394c128c8146c2b0941da0` 使用同一 DemoCase、619% 翻板、单 TOP 和已验证颜色；首次默认 UTF-8 在原生界面报告解码失败，实际选择 Windows-1252 并重试后成功。实窗已验证：
@@ -505,7 +507,7 @@ python scripts/cargo.py test -p pomelo-render --features native-gpu hardware_ --
 $env:POMELO_ANSI_FONT_PATH = 'C:/Cadence/SPB_25.1/share/pcb/text/ansifont.dat'
 $env:POMELO_ANSI_TEXT_PATH = "$PWD/.cache/allegro-parity/source-text-imx-input.json"
 $env:POMELO_ANSI_PIXELS_PATH = "$PWD/.cache/allegro-parity/source-text-ansi-gpu.png"
-python scripts/cargo.py test -p pomelo-render --features native-gpu hardware_ansi_source_text --locked --offline -- --ignored --nocapture
+cargo test -p pomelo-render --features native-gpu hardware_ansi_source_text --locked --offline -- --ignored --nocapture
 ```
 
 以上是初始离线实验的证据。随后已接入显式工作台入口，范围及用户决定见下一节；其他 TEXT_BLOCK/font 类型、非 ASCII、完整字形及真实半透明交点仍未验收，四板整体验收仍未通过。

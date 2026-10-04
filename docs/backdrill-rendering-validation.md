@@ -1,5 +1,7 @@
 # 背钻图元渲染与交互验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-03。参考最新本地 Web `C:/Users/Zen/Desktop/gitrepo/pomelo`。Web 与外部 BRD 只读，UI 字体保持原状。
 
 ## 实现
@@ -61,8 +63,8 @@ Windows Release 构建也已完成，日志为 `backdrill-release-build.log`。`
 
 ```powershell
 $env:POMELO_CANVAS_GPU_REPORT_DIR = Join-Path $PWD '.cache/canvas-parity/backdrill-hardware'
-python scripts/cargo.py +stable test -p pomelo-render --all-features --lib --locked --offline hardware_backdrill_patterns_match_web -- --ignored
-python scripts/cargo.py +stable test --workspace --all-features --locked --offline
-python scripts/cargo.py +stable build -p pomelo-render --example canvas_pick_probe --locked --offline
+cargo +stable test -p pomelo-render --all-features --lib --locked --offline hardware_backdrill_patterns_match_web -- --ignored
+cargo +stable test --workspace --all-features --locked --offline
+cargo +stable build -p pomelo-render --example canvas_pick_probe --locked --offline
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-canvas-picking-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/canvas_pick_probe.exe E:/brd_cases/AGILEX_I_SERIES.brd .cache/canvas-parity/backdrill-agilex-final windows-1252 backdrills
 ```

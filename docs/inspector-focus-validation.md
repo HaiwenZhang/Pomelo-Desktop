@@ -26,11 +26,11 @@
 ## 自动检查
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -q -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -q -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python -X utf8 scripts/cargo.py +stable fmt --all -- --check
+cargo +stable build -p pomelo --locked --offline
+cargo +stable test -q -p pomelo --locked --offline
+cargo +stable test -q -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable fmt --all -- --check
 git -c core.safecrlf=false diff --check
 ```
 

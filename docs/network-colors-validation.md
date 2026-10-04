@@ -28,7 +28,7 @@
 另在同次硬件测试用 205 个格子覆盖全部 203 项调色板、零网络及 `u32::MAX`，分别核对走线和解析焊盘 Shader 实际像素与 CPU 材料色一致；切回 Layer 后全部恢复源红色，上传不增加。
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test -p pomelo-render --features native-gpu --lib hardware_copper_overlapping_holes_preserve_underlying_trace --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-render --features native-gpu --lib hardware_copper_overlapping_holes_preserve_underlying_trace --locked --offline -- --ignored --nocapture
 ```
 
 原始输出：[network-colors-hardware-tests.log](gpu-validation/network-colors-hardware-tests.log)。这是 128×128 硬件诊断，不是正式产品回读路径，不代表大板帧率、显存释放或完整实窗验收。

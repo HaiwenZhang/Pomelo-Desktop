@@ -58,7 +58,7 @@ c51f1b7121357613e1a85b2cb7d6b96909420cc2e2e79df057e40d82c20d45be
 
 ```powershell
 $env:POMELO_CANVAS_GPU_REPORT_DIR = "$PWD/.cache/canvas-parity/long-lines-after"
-python scripts/cargo.py +stable test -p pomelo-render --all-features --lib --locked --offline hardware_long_lines_match_f64_capsules_at_deep_zoom -- --ignored
+cargo +stable test -p pomelo-render --all-features --lib --locked --offline hardware_long_lines_match_f64_capsules_at_deep_zoom -- --ignored
 ```
 
 本记录证明指定直线管线在高倍率下的距离精度，并包含真实窗口验证；不是 WebGPU 与 D3D11 的整板截图对照，也不是帧率或显存性能报告。曲线铜皮的缩放适配、特殊背钻图元、全案例、多 DPI/设备恢复及发布验收仍待完成，见 [画布总体对照记录](canvas-web-parity-validation.md)。当前只开发 Windows。

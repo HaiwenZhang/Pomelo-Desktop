@@ -35,10 +35,10 @@
 ## 自动检查
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable test -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
+cargo +stable test -p pomelo --locked --offline
+cargo +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable build -p pomelo --locked --offline
 ```
 
 2026-10-02 应用 44 项测试通过；2026-10-03 最新应用 51 项通过。五语资源、参数、并发格式化与源码文案门禁 9 项通过；Windows debug 构建和工作区全部目标/功能 Clippy 通过。应用测试覆盖偏好替换、损坏恢复、失败诊断和语言/主题互不覆盖，未新增仅重复 UI 实现的单元测试。

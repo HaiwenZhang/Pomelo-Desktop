@@ -576,12 +576,12 @@ struct QueryResult {
 文档编制未执行下列产品检查。每批实现后按改动范围选择目标测试，核心算法必须做独立参考回归；必要的 GPU 和实窗测试按专项条件显式运行。
 
 ```powershell
-python scripts/cargo.py +stable fmt --all -- --check
-python scripts/cargo.py +stable test -p pomelo-core --locked --offline
-python scripts/cargo.py +stable test -p pomelo-import --locked --offline
-python scripts/cargo.py +stable test -p pomelo-render --all-features --lib --locked --offline
-python scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python scripts/cargo.py +stable build -p pomelo --locked --offline
+cargo +stable fmt --all -- --check
+cargo +stable test -p pomelo-core --locked --offline
+cargo +stable test -p pomelo-import --locked --offline
+cargo +stable test -p pomelo-render --all-features --lib --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable build -p pomelo --locked --offline
 ```
 
 仓库固定工具链和包装器以实际配置为准；`+stable` 仅在本机 stable 与固定版本匹配时使用。硬件或外部案例默认忽略项必须另行记录是否执行，不能把普通测试通过写成硬件通过。

@@ -378,5 +378,5 @@ fn contains(a: Bounds, b: Bounds) -> bool {
 }
 
 #[cfg(test)]
-#[path = "curves/tests.rs"]
+#[path = "../../tests/unit/scene/curves.rs"]
 pub(crate) mod tests;

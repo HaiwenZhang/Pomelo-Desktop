@@ -1,0 +1,24 @@
+# Package-name compatibility for GPUI Kit 0.7.0. All types come from the workspace fork.
+[package]
+name = "gpui-pre-platform"
+version = "0.3.7"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+gpui-platform.workspace = true
+
+[features]
+default = []
+bench-support = ["gpui-platform/bench-support"]
+font-kit = ["gpui-platform/font-kit"]
+inspector = ["gpui-platform/inspector"]
+test-support = ["gpui-platform/test-support"]
+screen-capture = ["gpui-platform/screen-capture"]
+runtime_shaders = ["gpui-platform/runtime_shaders"]
+wayland = ["gpui-platform/wayland"]
+x11 = ["gpui-platform/x11"]

@@ -9,10 +9,4 @@
 - `pages.rs` 是由同步脚本生成的嵌入清单。运行时按板文字及网络名解码需要的页，GPU 使用 RGBA8 UNORM 和线性采样。
 - 只用于 PCB 板文字和自动标签。桌面 UI 字体保持原有方案；不使用 Web CSS 或 WOFF2 替换界面字体。
 
-更新资源：
-
-```powershell
-python scripts/sync-web-msdf.py C:/Users/Zen/Desktop/gitrepo/pomelo
-```
-
-同步后必须重新执行 `scripts/check-msdf-layout-parity.mts`、`scripts/check-canvas-picking-parity.mts` 和 Windows D3D11 MSDF 硬件测试。资源增长会增加可执行文件体积；当前 PNG 共约 55 MiB。缺失字符遵循 Web 的问号回退，诊断使用共享五语消息契约。
+字体同步与 Web 对照脚本已移除，保留冻结资源及来源哈希。资源增长会增加可执行文件体积；当前 PNG 共约 55 MiB。缺失字符遵循 Web 的问号回退，诊断使用共享五语消息契约。

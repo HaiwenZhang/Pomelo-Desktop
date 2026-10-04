@@ -217,7 +217,7 @@ impl MsdfFont {
 
 /// Six initialized vectors. Position high/residual supports deep zoom, while
 /// page/opacity flags follow the Web's 16-float label packet verbatim.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct GlyphInstance {
     pub xywh: [f32; 4],

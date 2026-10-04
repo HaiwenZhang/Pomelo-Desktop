@@ -1,5 +1,7 @@
 # BRD 图层、路径与铜皮轮廓验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 日期：2026-10-02。当前开发平台为 Windows。本轮实现源单位、物理图层、路径、圆弧及铜皮轮廓语义，并在真实案例中与冻结的 Web 算法对照。**这不是完整 BoardScene、铜皮三角化或桌面整板查看验收。**
 
 ## 已有实现
@@ -47,11 +49,11 @@
 使用已冻结并验证的索引报告及案例清单：
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable build -p pomelo-import --bin pcb_inspect --locked --offline
+cargo +stable build -p pomelo-import --bin pcb_inspect --locked --offline
 python -X utf8 scripts/probe-records.py .cache/indexes-windows1252.jsonl .cache/geometry-probes target/debug/pcb_inspect.exe --geometry --samples 4
 node C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/cli.mjs --tsconfig C:/Users/Zen/Desktop/gitrepo/pomelo/tsconfig.json scripts/check-geometry-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo .cache/geometry-probes/manifest.jsonl .cache/web-inputs.json .cache/cases-manifest.jsonl .cache/indexes-windows1252.jsonl .cache/geometry-parity.jsonl
-python -X utf8 scripts/cargo.py +stable test --workspace --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --locked --offline -- -D warnings
+cargo +stable test --workspace --locked --offline
+cargo +stable clippy --workspace --all-targets --locked --offline -- -D warnings
 ```
 
 报告位于 `.cache/geometry-probes/`、`.cache/geometry-parity.jsonl` 及对应 summary；负向材料为 `.cache/geometry-negative/` 中的副本。工具不修改外部 BRD 与 Web 源码，正式应用不携带 Node/TypeScript。`decode-geometry` 请求沿用记录 probe 的 schema version 1、2 MiB/4096 span 限制；报告首行是 metadata，后续每行一个请求，所有行保留 `scene_validated: false`。

@@ -1,5 +1,7 @@
 # BRD 按需记录解码与验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 日期：2026-10-02。当前开发平台为 Windows。本轮完成固定及变长记录的原生字段解码、数据库按 Key 查询和受预算约束的链表遍历；**尚未完成 BoardScene、整板语义对照或桌面真实 PCB 查看**。
 
 ## 实现范围
@@ -50,12 +52,12 @@
 先按 [索引验证](brd-index-validation.md) 生成 `.cache/indexes-windows1252.jsonl` 及逐记录索引证据，并冻结 Web/案例清单。然后执行：
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-import --bin pcb_inspect --locked --offline
+cargo +stable build -p pomelo-import --bin pcb_inspect --locked --offline
 python scripts/probe-records.py .cache/indexes-windows1252.jsonl .cache/record-probes target/debug/pcb_inspect.exe --samples 32 --locale en
 node C:\Users\Zen\Desktop\gitrepo\pomelo\node_modules\tsx\dist\cli.mjs --tsconfig C:\Users\Zen\Desktop\gitrepo\pomelo\tsconfig.json scripts/check-record-parity.mts C:\Users\Zen\Desktop\gitrepo\pomelo .cache/record-probes/manifest.jsonl .cache/web-inputs.json .cache/cases-manifest.jsonl .cache/indexes-windows1252.jsonl .cache/record-parity.jsonl
-python scripts/cargo.py +stable test --workspace --locked --offline
-python scripts/cargo.py +stable clippy --workspace --all-targets --locked --offline -- -D warnings
-python scripts/cargo.py +stable fmt --all -- --check
+cargo +stable test --workspace --locked --offline
+cargo +stable clippy --workspace --all-targets --locked --offline -- -D warnings
+cargo +stable fmt --all -- --check
 ```
 
 `probe-records.py --fixed-only` 可单独验证固定布局。原生程序不依赖 Python 或 Node；这些脚本只服务研发差分。本机 Node/tsx 的 `uv_os_get_passwd` 沙箱限制仍需在沙箱外执行只读 Web 对照。

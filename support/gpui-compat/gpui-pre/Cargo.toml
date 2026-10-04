@@ -1,0 +1,28 @@
+# Package-name compatibility for GPUI Kit 0.7.0. All types come from the workspace fork.
+[package]
+name = "gpui-pre"
+version = "0.3.7"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+gpui.workspace = true
+
+[features]
+default = ["gpui/font-kit", "gpui/wayland", "gpui/x11", "gpui/windows-manifest"]
+test-support = ["gpui/test-support"]
+bench-support = ["gpui/bench-support"]
+bench = ["gpui/bench"]
+inspector = ["gpui/inspector"]
+leak-detection = ["gpui/leak-detection"]
+wayland = ["gpui/wayland"]
+x11 = ["gpui/x11"]
+screen-capture = ["gpui/screen-capture"]
+windows-manifest = ["gpui/windows-manifest"]
+profiler = ["gpui/profiler"]
+stacker = ["gpui/stacker"]
+font-kit = ["gpui/font-kit"]

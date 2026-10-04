@@ -552,7 +552,7 @@ impl Workbench {
                             cx,
                         );
                     }
-                    #[cfg(target_os = "windows")]
+                    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
                     if let DocumentStatus::Imported(prepared) = &document.status {
                         document.viewport = Some(cx.new(|cx| {
                             crate::viewport::BoardViewport::new(
@@ -641,7 +641,7 @@ impl Workbench {
         index: Option<usize>,
         cx: &Context<Self>,
     ) -> saving::ViewSaveSnapshot {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         let entries: Vec<_> = self
             .documents
             .iter()
@@ -658,7 +658,7 @@ impl Workbench {
                 })
             })
             .collect();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         let entries: Vec<crate::prefs::ViewEntry> = {
             let _ = index;
             Vec::new()
@@ -705,14 +705,14 @@ impl Workbench {
         };
         self.active = Some(index);
         self.document_scroll.scroll_to_item(index);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if let Some(viewport) = &document.viewport {
             let focus = viewport.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
         } else {
             window.focus(&self.focus, cx);
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -752,7 +752,7 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if let Some(viewport) = self
             .active
             .and_then(|index| self.documents.get(index))
@@ -762,7 +762,7 @@ impl Workbench {
                 viewport.fit_board(&crate::viewport::FitBoard, window, cx);
             });
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         let _ = (window, cx);
     }
 
@@ -772,7 +772,7 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if let Some(viewport) = self
             .active
             .and_then(|index| self.documents.get(index))
@@ -784,7 +784,7 @@ impl Workbench {
             self.save_views(None, cx);
             cx.notify();
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         let _ = (side, window, cx);
     }
 
@@ -812,7 +812,7 @@ impl Workbench {
         ) {
             return;
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         let snapshot = match &self.documents[index].status {
             DocumentStatus::Imported(prepared) => self.documents[index]
                 .viewport
@@ -823,7 +823,7 @@ impl Workbench {
         self.save_views(Some(index), cx);
         match self.documents[index].reload() {
             Ok(true) => {
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
                 {
                     self.documents[index].reload_view = snapshot;
                 }
@@ -925,7 +925,7 @@ impl Workbench {
                 cx,
             );
         };
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if let DocumentStatus::Imported(_) = &document.status
             && let Some(viewport) = &document.viewport
         {
@@ -1060,7 +1060,7 @@ impl Workbench {
                         cx,
                     ));
                 }
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
                 if let Some(viewport) = self
                     .active
                     .and_then(|index| self.documents.get(index))
@@ -1069,7 +1069,7 @@ impl Workbench {
                     content =
                         content.child(div().flex_1().min_h_0().min_w_0().child(viewport.clone()));
                 }
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
                 {
                     content = content.child(text(locale, Key::ViewportPending));
                 }
@@ -1276,12 +1276,12 @@ impl Render for Workbench {
                     DocumentStatus::Queued | DocumentStatus::Reading
                 )
             });
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         let fit_available = self
             .active
             .and_then(|index| self.documents.get(index))
             .is_some_and(|document| document.viewport.is_some());
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         let fit_available = false;
         let menu_changed = i18n::set_document_commands(
             i18n::DocumentMenuState {
@@ -1379,7 +1379,7 @@ impl Render for Workbench {
             }))
             .on_action(
                 cx.listener(|this, _: &crate::actions::FocusSearch, window, cx| {
-                    #[cfg(target_os = "windows")]
+                    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
                     if let Some(viewport) = this
                         .active
                         .and_then(|index| this.documents.get(index))

@@ -59,7 +59,7 @@ crates/pomelo/src/
 
 workspace 使用 `earcut = "=0.4.11"`，`pomelo-core` 通过 `earcut.workspace = true` 引入，`Cargo.lock` 锁定版本 0.4.11。等号将用户要求的版本精确固定。实际调用位于 `pomelo-core/src/geometry/copper.rs`，CPU 三角剖分不依赖 GPUI 或 GPU；洞轮廓和三角覆盖正确性由铜皮回归验证。
 
-2026-10-02 复核运行 `python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test copper_mesh --locked --offline`，10 项通过、0 失败，覆盖凹轮廓、反向绕序、共线与重复点、重叠孔洞并集、资源限制和取消。研发计划第 4.1、6.3 节已同步目录与依赖约定。
+2026-10-02 复核运行 `cargo +stable test -p pomelo-core --test copper_mesh --locked --offline`，10 项通过、0 失败，覆盖凹轮廓、反向绕序、共线与重复点、重叠孔洞并集、资源限制和取消。研发计划第 4.1、6.3 节已同步目录与依赖约定。
 
 ## UI 设计落地
 
@@ -67,7 +67,7 @@ workspace 使用 `earcut = "=0.4.11"`，`pomelo-core` 通过 `earcut.workspace =
 
 `welcome/mod.rs` 读取窗口逻辑宽度与 rem 计算功能介绍区横向/纵向布局；只组合展示，不持有渲染或导入状态。侧栏设置入口派发已有 `OpenSettings` Action，由 Workbench 处理，不再额外传递同一设置回调。共享文案继续使用核心五语入口。
 
-独立验证配置根目录归 `services/prefs.rs`，四个 store 复用 `POMELO_CONFIG_DIR` 规则；启动编排位于 `scripts/launch-ui-validation.ps1`，不把测试配置目录逻辑放进欢迎页。未设置覆盖变量时日常偏好路径保持原样，无效显式覆盖不回退写入日常目录，见 [UI 验证配置目录](ui-validation-profiles.md)。
+独立验证配置根目录归 `services/prefs.rs`，四个 store 复用 `POMELO_CONFIG_DIR` 规则；验证实例通过 `POMELO_CONFIG_DIR` 隔离配置，原辅助启动脚本已移除。未设置覆盖变量时日常偏好路径保持原样，无效显式覆盖不回退写入日常目录，见 [UI 验证配置目录](ui-validation-profiles.md)。
 
 `welcome/recent.rs` 使用 `Presentation::{Sidebar, Continue, All}` 表达侧栏、开始页三项预览和完整历史，WorkBench 选择展示方式并传入既有文件命令。三个 Kit Scrollable wrapper 分别拥有稳定 ID；展示模块不改历史上限、编码、预览缓存或磁盘写入。完整列表的可用高度由 `welcome/mod.rs` 主区组合约束，实际范围见 [欢迎页布局验证](welcome-layout-validation.md)。
 
@@ -91,7 +91,7 @@ workspace 使用 `earcut = "=0.4.11"`，`pomelo-core` 通过 `earcut.workspace =
 
 `pomelo-render/src/scene/thumbnail.rs` 从正式不可变图元批次生成固定大小的 CPU 概览，复用核心解析焊盘距离、走线/圆弧查询和铜皮网格。应用主题模块传入材料颜色，返回普通 RGBA 与 LOD 摘要，不依赖 GPUI、PNG 或平台窗口。`services/preview.rs` 做应用适配，后台导入传入取消令牌并在发布前再检查；不改变 D3D11 视口或 GPUI 通用入口，见 [缩略图记录](recent-thumbnail-validation.md)。
 
-`panels/diagnostics.rs` 共用页行与可持有焦点的分页按钮；视口和工作台保留页码、展开、请求身份校验与焦点状态。固定高度仅用于滚动窗口，页身份属于 Scrollable wrapper，内部滚轮不再同时移动上级面板。合成案例生成器、fixture 和正式 importer 回归分别位于 `scripts/`、`tests/fixtures/`、`pomelo-import/tests/annotations.rs`，见 [诊断 UI 验证](diagnostics-ui-validation.md)。
+`panels/diagnostics.rs` 共用页行与可持有焦点的分页按钮；视口和工作台保留页码、展开、请求身份校验与焦点状态。固定高度仅用于滚动窗口，页身份属于 Scrollable wrapper，内部滚轮不再同时移动上级面板。正式 importer 回归位于 `pomelo-import/tests/annotations.rs`，原合成案例生成器及 fixture 已移除，见 [诊断 UI 验证](diagnostics-ui-validation.md)。
 
 `panels/file_info.rs` 接收当前语言、展开状态、共享场景引用、诊断展示及切换回调，组合 Kit `Collapsible` 和公开 Base Button；视口保留展开状态与诊断分页。成员列表的固定窗口、分页 revision 和滚轮边界仍在视口协调，不把导入或 GPU 状态迁入展示模块。详见 [检查器布局验证](inspector-layout-validation.md)。
 
@@ -106,3 +106,21 @@ workspace 使用 `earcut = "=0.4.11"`，`pomelo-core` 通过 `earcut.workspace =
 工作区 364 项测试通过、0 失败、7 项按原条件忽略；工作区全部目标/功能 Clippy 通过。Windows 硬件显式运行的走线/紧凑文字与带孔铜皮合成测试 2 项通过。
 
 原始证据：[工作区测试](gpu-validation/layout-reorganization-workspace-tests.log)、[硬件测试](gpu-validation/layout-reorganization-hardware-tests.log)。迁移不代表全部真实窗口或 156 案例整板验收完成；15061 的全量紧凑文字已另行通过 [D3D11 硬件验证](text-compact-gpu-validation.md)，整板合成、实窗与性能门槛仍待验收。
+
+## 测试与已移除的 example 探针
+
+2026-10-04：删除 `pomelo-core`、`pomelo-import`、`pomelo-render` 的 13 个命令行 example 探针及三个 `examples/` 目录。相机、搜索排序、元件分组、拾取、圆弧细分、焊盘轮廓、MSDF 与笔画文字验证使用现有单元/集成测试，不保留旧 Web 对照脚本的 JSON 适配器。整板导入后按正式资源限额准备走线、绘图、铜皮、焊盘、钻孔、搜索和拾取的检查保留在 `crates/pomelo-render/tests/board_prepare.rs`。
+
+常规 CPU 测试：
+
+```sh
+cargo test -p pomelo-core -p pomelo-import -p pomelo-render --all-targets --locked --offline
+```
+
+显式选择本地 BRD 运行整板准备测试（默认 UTF-8，可用 `POMELO_PREPARE_ENCODING=windows-1252` 指定编码）：
+
+```sh
+POMELO_PREPARE_CASE=/path/to/board.brd cargo test -p pomelo-render --test board_prepare --locked --offline -- --ignored --nocapture
+```
+
+该测试不启动 GPU；历史报告中的 example 构建/运行命令只用于记录当时的验证方式。

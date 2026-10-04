@@ -2,6 +2,7 @@ use std::{env, error::Error, fs, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=assets/pomelo.svg");
+    println!("cargo:rerun-if-env-changed=POMELO_PACKAGE_ICON");
     if env::var("CARGO_CFG_TARGET_OS")? != "windows" {
         return Ok(());
     }
@@ -41,6 +42,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?);
     let icon_path = output.join("pomelo.ico");
     fs::write(&icon_path, icon)?;
+    if let Some(package_icon) = env::var_os("POMELO_PACKAGE_ICON") {
+        fs::copy(&icon_path, package_icon)?;
+    }
     let resource = output.join("pomelo.rc");
     fs::write(
         &resource,

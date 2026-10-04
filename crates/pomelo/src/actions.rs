@@ -1,4 +1,5 @@
 //! Shared native application commands.
+use gpui_kit::gpui;
 use gpui_kit::*;
 actions!(
     pomelo,

@@ -38,7 +38,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]
 Source: "{#BuildDir}\pomelo.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\assets\licenses\fdlibm-v8.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\..\assets\fonts\source-han-sans\LICENSE.txt"; DestDir: "{app}\licenses"; DestName: "Source-Han-Sans-OFL.txt"; Flags: ignoreversion
+Source: "..\..\crates\pomelo-core\src\search\data\LICENSE"; DestDir: "{app}\licenses"; DestName: "Unicode-License.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Pomelo"; Filename: "{app}\pomelo.exe"; IconFilename: "{app}\pomelo.exe"

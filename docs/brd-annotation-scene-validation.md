@@ -1,5 +1,7 @@
 # BRD 文字、尺寸绘图与场景组装验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 日期：2026-10-02。当前开发平台为 Windows。
 
 结论：已实现完整板文字与存储尺寸图形组装，`SceneBuilder` 汇合物理图层、网络、走线、过孔、封装/引脚、铜皮、板框、文字和尺寸绘图。`AllegroImporter::import()` 已从文件生成共享 `Arc<BoardScene>`，不再返回未实现错误。**桌面打开流程仍停留在文件头展示；真实 BRD GPU 视口、完整字段回归和性能验收仍待完成。**
@@ -50,9 +52,9 @@
 205 项工作区测试通过、0 失败；包含本轮新增的 15 项文字/尺寸、场景预算/取消、真实文件 importer 和 JSONL CLI 测试。全部特性/目标 Clippy `-D warnings`、格式检查与 Windows debug 工作区构建通过。日志：`.cache/annotation-scene-workspace-tests.log`、`.cache/annotation-scene-clippy.log`、`.cache/annotation-scene-build.log`。
 
 ```powershell
-python scripts/cargo.py +stable test --workspace --locked --offline
-python scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python scripts/cargo.py +stable build --workspace --locked --offline
+cargo +stable test --workspace --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable build --workspace --locked --offline
 
 target\debug\pcb_inspect.exe --locale zh-CN --encoding windows-1252 decode-annotations E:\brd_cases\ntpcb_320mb.brd --report .cache\annotations.json
 target\debug\pcb_inspect.exe --locale zh-CN --encoding windows-1252 decode-scene E:\brd_cases\ntpcb_320mb.brd --report .cache\scene.jsonl

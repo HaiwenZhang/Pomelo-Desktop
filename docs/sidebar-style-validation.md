@@ -50,11 +50,11 @@ Windows 按当前界面语言选择已安装的 UI 字体：Segoe UI、Microsoft
 ## 复验命令
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable fmt --all -- --check
-python -X utf8 scripts/cargo.py +stable test -p pomelo --locked --offline
-python -X utf8 scripts/cargo.py +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python -X utf8 scripts/cargo.py +stable build --release -p pomelo --locked --offline
+cargo +stable fmt --all -- --check
+cargo +stable test -p pomelo --locked --offline
+cargo +stable test -p pomelo-core --test i18n_resources --test i18n_source --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable build --release -p pomelo --locked --offline
 # 正常退出正在运行的 debug Pomelo 后执行。
-python -X utf8 scripts/cargo.py +stable build -p pomelo --locked --offline
+cargo +stable build -p pomelo --locked --offline
 ```

@@ -14,7 +14,7 @@ GPUI 补丁仍只提供通用 renderer 注册、绘制、状态隔离与资源�
 
 ```powershell
 $env:POMELO_TRACE_PIXEL_OUTPUT = '.cache/native-trace-pixels.png'
-python scripts/cargo.py +stable test -p pomelo-render --all-features hardware_trace_pixels --locked --offline -- --ignored --nocapture
+cargo +stable test -p pomelo-render --all-features hardware_trace_pixels --locked --offline -- --ignored --nocapture
 ```
 
 结果：1 项硬件测试通过。检查圆端帽、完整圆周及透明中心、负向四分之一圆弧、抗锯齿覆盖、裁剪、DPI、缓存复用、reset 后图像一致、大坐标平移和翻转。另用 32,771 个实例验证跨帧上传及同一缓冲中不同图层的非零起始偏移。

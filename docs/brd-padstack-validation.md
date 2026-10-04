@@ -1,5 +1,7 @@
 # BRD Padstack、焊盘与钻孔验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 日期：2026-10-02。当前开发与验证平台为 Windows。本轮实现 padstack 引用、焊盘定义、钻孔和背钻的语义，并与冻结 Web 源码进行独立差分。**这不是完整 BoardScene、放置关系、整板 GPU 画面或 BRD MVP 验收。**
 
 ## 实现范围
@@ -57,11 +59,11 @@ padstack resolver 与 pad decoder 各自默认限制 256 MiB、100,000 个缓存
 ## 复现与报告
 
 ```powershell
-python -X utf8 scripts/cargo.py +stable build -p pomelo-import --bin pcb_inspect --locked --offline
+cargo +stable build -p pomelo-import --bin pcb_inspect --locked --offline
 python -X utf8 scripts/probe-records.py .cache/indexes-windows1252.jsonl .cache/padstack-probes target/debug/pcb_inspect.exe --padstack --samples 32
 node --max-old-space-size=24576 --import file:///C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/loader.mjs scripts/check-geometry-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo .cache/padstack-probes/manifest.jsonl .cache/web-inputs.json .cache/cases-manifest.jsonl .cache/indexes-windows1252.jsonl .cache/padstack-parity.jsonl padstack
-python -X utf8 scripts/cargo.py +stable test --workspace --locked --offline
-python -X utf8 scripts/cargo.py +stable clippy --workspace --all-targets --locked --offline -- -D warnings
+cargo +stable test --workspace --locked --offline
+cargo +stable clippy --workspace --all-targets --locked --offline -- -D warnings
 ```
 
 报告保存在 `.cache/padstack-probes/`、`.cache/padstack-parity.jsonl` 及 summary；细分覆盖统计、负向副本和最终复核分别位于 `.cache/padstack-coverage.json`、`.cache/padstack-negative/`、`.cache/padstack-final-recheck.json`。外部 Web 源码和 BRD 均只读；正式桌面运行不携带 Node/TypeScript。

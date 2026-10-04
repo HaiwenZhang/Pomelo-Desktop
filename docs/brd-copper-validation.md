@@ -1,5 +1,7 @@
 # BRD 铜皮网格与板框验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本已移除；当前 `scripts/` 仅保留 Windows 打包工具。
+
 记录日期：2026-10-02。当前开发平台为 Windows。本记录证明 CPU 铜皮语义与网格查询，尚不证明 Native 整板导入或真实铜皮的 GPU 呈现；`AllegroImporter::import` 仍返回未实现诊断。
 
 ## 实现与数据契约
@@ -14,7 +16,7 @@
 新增 CLI：
 
 ```powershell
-python scripts/cargo.py +stable run -p pomelo-import --bin pcb_inspect --locked --offline -- --locale zh-CN --encoding windows-1252 decode-copper FILE --records REQUEST.json --report REPORT.jsonl
+cargo +stable run -p pomelo-import --bin pcb_inspect --locked --offline -- --locale zh-CN --encoding windows-1252 decode-copper FILE --records REQUEST.json --report REPORT.jsonl
 ```
 
 请求仍绑定源 SHA-256、大小及索引中的 Key/类型/起止偏移。输出包含 metadata、查询对象及结构化诊断，所有行保持 `scene_validated: false`。新增网格构建失败、铜皮边界为空、矩形图层未定义三种消息同步英/简中/繁中/日/韩；驱动或算法技术详情与译文分开。
@@ -70,9 +72,9 @@ python scripts/cargo.py +stable run -p pomelo-import --bin pcb_inspect --locked 
 ```powershell
 python scripts/probe-records.py .cache/copper-six-indexes.jsonl .cache/copper-six-probes target/debug/pcb_inspect.exe --copper --samples 32
 node --max-old-space-size=24576 --import file:///C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/loader.mjs scripts/check-copper-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo .cache/copper-six-probes/manifest.jsonl .cache/web-inputs.json .cache/cases-manifest.jsonl .cache/indexes-windows1252.jsonl .cache/copper-earcut-baseline.json .cache/copper-six-parity.jsonl
-python scripts/cargo.py +stable test --workspace --locked --offline
-python scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-python scripts/cargo.py +stable build --workspace --locked --offline
+cargo +stable test --workspace --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable build --workspace --locked --offline
 ```
 
 本地 frozen/case/index/earcut 清单需要保留；不随仓库分发外部案例和缓存。Node/Web 只用于研发对照，正式应用运行不依赖它们。

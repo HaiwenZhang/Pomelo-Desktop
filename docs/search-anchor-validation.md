@@ -1,5 +1,7 @@
 # 搜索定位锚点：共享核心验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 2026-10-04 更新：应用检查器、实际画布命中元数据及锚点保存/恢复已接通，125,136 次最新 Web 拾取与实际锚点对照零差异，FPC 实窗完成搜索、实际拾取、模式转换、清除和重开恢复。详见[应用接入验证](search-anchor-app-validation.md)。下文保留 2026-10-03 核心阶段的范围与当时未完成项。
 
 日期：2026-10-03。本记录覆盖核心定位锚点及无窗口差分；**尚未接入应用检查器和画布命中元数据，不能视为搜索交互全部完成。** 左侧 TOP 列表顺序和 UI 字体不变。
@@ -35,7 +37,7 @@
 报告位于 `.cache/canvas-parity/anchor-{fpc,camera,agilex,synthetic}/`，每份包含输入 SHA-256、Web 源码指纹、请求及两端结果。运行使用 Node 24.18.1，native probe 为优化的 debug 构建；批量用时包含导入、字体准备和查找，不能作为 release 单次定位或 UI 延迟的性能验收。复现示例：
 
 ```powershell
-python scripts/cargo.py build -p pomelo-render --example selection_bounds_probe --offline --locked
+cargo build -p pomelo-render --example selection_bounds_probe --offline --locked
 node --import file:///C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/tsx/dist/loader.mjs scripts/check-selection-anchor-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/selection_bounds_probe.exe E:/brd_cases/USBC_FPC.brd .cache/canvas-parity/anchor-fpc utf-8
 ```
 

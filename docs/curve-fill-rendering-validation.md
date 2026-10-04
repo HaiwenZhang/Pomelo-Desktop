@@ -1,5 +1,7 @@
 # 曲边铜皮深度缩放验证
 
+> 本文保留历史验证记录，其中引用的辅助脚本及 pomelo-core/import/render 的 example 探针已移除；旧探针命令不再可执行。当前验证使用各 crate 的测试代码。
+
 日期：2026-10-03。参考最新本地 Web `C:/Users/Zen/Desktop/gitrepo/pomelo`，Web 和外部 BRD 案例只读。桌面及 Web **UI 界面字体保持不变**；本次只扩展 PCB 铜皮几何、D3D11 合成和后台调度，没有更改字体或翻译资源。
 
 ## 实现与边界
@@ -11,7 +13,7 @@
 - 单环最多 1,000,000 个点，轮廓自有点缓冲峰值上限 64 MiB；准备缓存软预算 64 MiB、输出硬预算 512 MiB。可见工作集可超软预算，报告超额并淘汰非活动资源。硬预算核算准备几何缓冲及批次容量，不代表进程总内存上限，旧借用快照、容器管理开销和其他资源另计。
 - 所有曲边对象共享每帧 4 MiB 几何上传预算，并等待静态几何、文字及标签就绪；缓存命中不重新上传。字体图集的独立上传预算仍是后续性能验收项。
 
-真实 FPC 源端点与圆弧计算结果有末位差异，平台 CRT 或普通 libm 的舍入会改变连接边去重结果。普通 PCB 角度的 sin/cos 使用适配自 Node v24.18.0 / V8 `src/base/ieee754.cc` 的 fdlibm 内核与中等参数约简，保持运算顺序；更大角度回退平台无关的 `libm = "=0.2.16"`，不承诺与所有 JavaScript 引擎逐位一致。Sun 与 V8 许可保留在源码及 `assets/licenses/fdlibm-v8.txt`，Windows 安装脚本加入该许可文件；安装包尚未构建验收。
+2026-10-04：圆弧计算改用 Rust 标准 `f64::sin()` / `f64::cos()`。原有 Node/V8 移植代码、对应许可文件和 Windows 安装脚本引用已删除，项目不再直接依赖 libm。源端点及连接边保留原有处理规则；不再要求与 JavaScript 或其他平台逐位一致，末位舍入差异可能改变重复点去重后的数量。已删除依赖 V8 特定末位舍入的测试，保留端点连接、弦误差、裁剪和资源限制等几何行为测试。下方 Web 的零差异数据属于替换前的历史验证，不能作为当前实现的逐位对照结果。
 
 ## Web 几何对照
 
@@ -66,12 +68,12 @@
 
 仍需完成整板 WebGPU 与原生视觉/交互比较、曲边边缘抗锯齿、完整案例与多 DPI/设备恢复、后台预处理峰值内存和帧耗时，以及安装包与完整发布验收。macOS/Linux 未开发、未验证。
 
-## 复验入口
+## 历史复验入口（旧探针已移除）
 
 ```powershell
-python scripts/cargo.py +stable build -p pomelo-render --example curve_fill_probe --locked --offline
+cargo +stable build -p pomelo-render --example curve_fill_probe --locked --offline
 & C:/Users/Zen/Desktop/gitrepo/pomelo/node_modules/.bin/tsx.cmd scripts/check-curve-fill-parity.mts C:/Users/Zen/Desktop/gitrepo/pomelo target/debug/examples/curve_fill_probe.exe .cache/canvas-parity/curve-fill-parity E:/brd_cases/USBC_FPC.brd:utf-8 E:/brd_cases/camera_test_board.brd:utf-8 E:/brd_cases/AGILEX_I_SERIES.brd:windows-1252
-python scripts/cargo.py +stable test -p pomelo-render --all-features --locked --offline hardware_curve_ -- --ignored --nocapture
-python scripts/cargo.py +stable test --workspace --all-targets --all-features --locked --offline
-python scripts/cargo.py +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
+cargo +stable test -p pomelo-render --all-features --locked --offline hardware_curve_ -- --ignored --nocapture
+cargo +stable test --workspace --all-targets --all-features --locked --offline
+cargo +stable clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
 ```

@@ -4,9 +4,9 @@
 
 CPU 生命周期进一步验证：已导入文档重载专项扩展至走线/绘图共享批次、焊盘/钻孔共享批次、铜皮、搜索及拾取索引的 Weak 引用，全部随旧文档状态释放。新增过期导入结果释放专项：将正式准备函数生成的合成场景结果提交给旧 generation，结果被拒绝，其场景、批次和索引引用全部失效，新请求保持 Reading。当前 18 项文档测试通过，fmt 检查和应用 all-targets/all-features Clippy（`-D warnings`）通过。这仍是 CPU 所有权证据，不是 GPU 显存测量。
 
-当前代码完整回归：`python -X utf8 scripts/cargo.py +stable test --workspace --all-targets --all-features --locked --offline` exit 0，32 个测试目标合计 345 passed、0 failed、7 ignored，原始输出见 [工作区日志](gpu-validation/reload-workspace-tests.log)。忽略项未计作通过。
+当前代码完整回归：`cargo +stable test --workspace --all-targets --all-features --locked --offline` exit 0，32 个测试目标合计 345 passed、0 failed、7 ignored，原始输出见 [工作区日志](gpu-validation/reload-workspace-tests.log)。忽略项未计作通过。
 
-另行显式执行 `python -X utf8 scripts/cargo.py +stable test -p pomelo-render hardware_ --all-features --locked --offline -- --ignored`，exit 0，2 passed、0 failed、0 ignored，原始输出见 [D3D11 硬件日志](gpu-validation/reload-hardware-tests.log)。这些测试覆盖图元合成、显示设置、缓存及主动 `reset()` 后重建；不经过 Workbench 重载和 GPUI 窗口关闭流程，不能据此宣称实窗重载资源释放已验收。
+另行显式执行 `cargo +stable test -p pomelo-render hardware_ --all-features --locked --offline -- --ignored`，exit 0，2 passed、0 failed、0 ignored，原始输出见 [D3D11 硬件日志](gpu-validation/reload-hardware-tests.log)。这些测试覆盖图元合成、显示设置、缓存及主动 `reset()` 后重建；不经过 Workbench 重载和 GPUI 窗口关闭流程，不能据此宣称实窗重载资源释放已验收。
 
 生命周期源码核查：GPUI 的注册表使用弱引用，绘制句柄和场景图元持有 renderer 强引用；业务 renderer 持有自身 GPU 资源。重载移除视口后，旧场景是否仍持有绘制句柄必须通过实际窗口流程确认。CPU 场景 Weak 引用失效与硬件 reset 测试是两项独立证据，不替代该项验收。
 

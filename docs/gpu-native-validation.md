@@ -56,7 +56,7 @@
 ### 复现
 
 ```powershell
-python scripts/cargo.py +stable run -p pomelo --locked -- --native-gpu-demo
+cargo +stable run -p pomelo --locked -- --native-gpu-demo
 ```
 
 `Ctrl+R` 换色，`Ctrl+C` 切换裁剪，`Ctrl+O` 打开覆盖层，`Escape` 关闭，`Ctrl+T` 切主题，`Ctrl+Q` 退出。文案提供英文、简中、繁中、日文、韩文。可选 `--triangle` 保留 pomelo-render 内的三角形模式；历史三角形的框架专用入口已经删除。
@@ -67,7 +67,7 @@ python scripts/cargo.py +stable run -p pomelo --locked -- --native-gpu-demo
 
 ## 维护方式与未验证范围
 
-构建 wrapper 每次校验固定源码归档、版本化补丁及生成文件，必要时重新解压并打补丁；Cargo 通过 `[patch.crates-io]` 指向 `.cache/gpui/`。不修改全局 registry，不再维护完整 `vendor/`。说明及接口约束见 [GPUI 补丁说明](../patches/gpui/README.md)。仍需维护补丁与上游的兼容性，不能把“删除 vendor”理解为零框架维护。
+构建 wrapper 每次校验固定源码归档、版本化补丁及生成文件，必要时重新解压并打补丁；Cargo 通过 `[patch.crates-io]` 指向 `.cache/gpui/`。不修改全局 registry，不再维护完整 `vendor/`。说明及接口约束见 [GPUI 补丁说明](gpui-dependencies.md)。仍需维护补丁与上游的兼容性，不能把“删除 vendor”理解为零框架维护。
 
 原始 GPUI 的 `Element` / `Render` trait 不提供 GPU context。现在 `pomelo-render` 实现的是项目补丁新增的 `NativeGpuRenderer`，不是继承现成的上游 GPU 扩展 trait。
 

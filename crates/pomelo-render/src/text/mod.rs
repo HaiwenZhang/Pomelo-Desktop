@@ -1,4 +1,4 @@
-//! Shared MSDF board text and labels; legacy stroke layout for compatibility checks.
+//! Shared MSDF board text and labels, with stroke layout for caller-supplied ANSI fonts.
 mod ansi;
 pub mod instances;
 pub use ansi::AnsiStrokeFont;

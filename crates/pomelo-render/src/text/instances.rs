@@ -12,7 +12,7 @@ use pomelo_core::{
 /// Four 16-byte vectors. Endpoints retain high/residual precision; the native
 /// text shader derives its quad from endpoints and width rather than storing
 /// arc data and redundant bounds for every straight font stroke.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct TextInstance {
     pub a: [f32; 4],

@@ -11,13 +11,6 @@
 - SHA-256：`37c34672d6bae78434672a07d301c9320181d3416edba80cf69d3bdeb8c85dab`。
 - 许可与版权：相邻 `LICENSE`（Unicode License V3）；发布时保留通知。
 
-复现工具仅供开发使用：
-
-```powershell
-cargo +stable install icu4x-datagen --version 2.1.1 --locked --root .cache/search-parity/tools
-python scripts/generate-search-collation-data.py .cache/search-parity/tools/bin/icu4x-datagen.exe
-```
-
-脚本生成到唯一缓存路径并校验冻结哈希，保留当前正式资源。更新数据时先重跑 `scripts/check-search-order-parity.mts`，核对 Web 的实际 ICU/CLDR 版本及全部五语差分，再更新数据、哈希与验证记录。资源不是翻译文件；用户界面和错误摘要仍统一使用 rust-i18n 五语消息。
+开发阶段的数据生成与 Web 对照脚本已移除。保留冻结数据、版本、哈希及许可记录；普通构建直接嵌入现有资源。用户界面和错误摘要仍统一使用 rust-i18n 五语消息。
 
 上游说明：[ICU4X 数据生成器](https://docs.rs/crate/icu4x-datagen/2.1.1)、[Collator 数据接口](https://docs.rs/icu_collator/2.1.1/icu_collator/struct.Collator.html)。
