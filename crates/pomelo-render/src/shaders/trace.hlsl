@@ -102,6 +102,10 @@ float4 trace_fragment(Out input) : SV_Target {
     float2 screen_px = input.position.xy;
     clip(screen_px - clip_bounds.xy);
     clip(clip_bounds.xy + clip_bounds.zw - screen_px);
+    // Only reliable Dynamic Base boundaries use this rule. Static, Unknown,
+    // selection and hover retain their existing analytic outline coverage.
+    bool dynamic_base = (input.flags.w & 128u) != 0u && view.w < 0.5 && batch.w != 0u;
+    if (dynamic_base && batch.w == 2u) discard;
     float2 screen = (screen_px - canvas.xy - canvas.zw * 0.5) * float2(view.y, -1) / view.x;
     float4 a = delta(screen, input.a);
     float4 b = delta(screen, input.b);
@@ -131,8 +135,9 @@ float4 trace_fragment(Out input) : SV_Target {
     }
     float pixel_mm = viewport.z / view.x;
     float width = (input.flags.w & 4u) != 0u ? 0.0 : asfloat(input.flags.z);
-    distance -= (input.flags.w & 8u) != 0u ? pixel_mm * 0.65 : max(width * 0.5, pixel_mm * 0.5);
-    float alpha = 1.0 - smoothstep(-pixel_mm * 0.65, pixel_mm * 0.65, distance);
+    float antialias_mm = dynamic_base ? 0.5 / view.x : pixel_mm * 0.65;
+    distance -= dynamic_base ? 0.5 / view.x : (input.flags.w & 8u) != 0u ? pixel_mm * 0.65 : max(width * 0.5, pixel_mm * 0.5);
+    float alpha = 1.0 - smoothstep(-antialias_mm, antialias_mm, distance);
     if (view.w > 0.5) {
         float edge = 1.0 - smoothstep(pixel_mm * 0.6, pixel_mm * 1.6, abs(distance));
         float2 screen = input.position.xy / viewport.z;

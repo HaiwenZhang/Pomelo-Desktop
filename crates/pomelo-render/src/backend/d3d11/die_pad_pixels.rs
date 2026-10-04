@@ -129,6 +129,8 @@ fn hardware_die_pads_follow_etch_visibility_and_priority_without_reupload() {
                     (LayerId(1), [0.0, 0.0, 1.0, 1.0]),
                 ])),
                 fallback_color: [1.0; 4],
+                material_override: None,
+                opacity: 1.0,
                 color_mode: pomelo_core::display::ColorMode::Layer,
                 pass: super::super::super::OverlayPass::Base,
                 filled: true,

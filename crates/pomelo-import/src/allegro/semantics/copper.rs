@@ -4,6 +4,7 @@ use super::{
     CacheBudget, CacheLimits,
     connectivity::NetworkMap,
     geometry::{GeometryDecoder, GeometryLimits},
+    shape_kind::ShapeKinds,
 };
 use crate::{
     ImportContext, ImportError,
@@ -16,7 +17,7 @@ use crate::{
 use pomelo_core::{
     copper::{CopperMesh, MeshLimits},
     i18n::{Message, MessageKey},
-    model::{Diagnostic, LayerId, NetId, ObjectId, Point, Segment, Severity, Zone},
+    model::{Diagnostic, LayerId, NetId, ObjectId, Point, Segment, Severity, Zone, ZoneKind},
 };
 use serde::Serialize;
 
@@ -56,6 +57,7 @@ pub struct CopperDecoder<'a> {
     limits: CopperLimits,
     budget: CacheBudget,
     diagnostics: Vec<Diagnostic>,
+    shape_kinds: Option<ShapeKinds>,
 }
 impl<'a> CopperDecoder<'a> {
     pub fn new(
@@ -78,6 +80,7 @@ impl<'a> CopperDecoder<'a> {
             budget: CacheBudget::new(limits.objects.clone()),
             limits,
             diagnostics: Vec::new(),
+            shape_kinds: None,
         })
     }
 
@@ -201,6 +204,21 @@ impl<'a> CopperDecoder<'a> {
             context.check_cancelled()?;
             return Ok(output);
         }
+        if self.shape_kinds.is_none() {
+            self.shape_kinds = Some(ShapeKinds::build(
+                database,
+                self.layers,
+                &self.limits.chain,
+                &mut self.budget,
+                context,
+            )?);
+        }
+        let kind = self
+            .shape_kinds
+            .as_ref()
+            .map_or(ZoneKind::Unknown, |kinds| {
+                kinds.classify(key, shape.unknown2)
+            });
         let contours = self.geometry()?.read_contours(key, context)?;
         if contours.rings.is_empty() {
             self.budget.check(1024, offset)?;
@@ -216,7 +234,7 @@ impl<'a> CopperDecoder<'a> {
             self.budget.commit(1024);
             return Ok(CopperObject::default());
         }
-        let zone = self.zone(
+        let mut zone = self.zone(
             key,
             layer,
             net,
@@ -225,6 +243,7 @@ impl<'a> CopperDecoder<'a> {
             offset,
             context,
         )?;
+        zone.kind = kind;
         Ok(CopperObject {
             zone: Some(zone),
             ..CopperObject::default()
@@ -396,6 +415,7 @@ impl<'a> CopperDecoder<'a> {
             id: ObjectId(key.0),
             layer,
             net,
+            kind: ZoneKind::Unknown,
             paths,
             mesh,
         })

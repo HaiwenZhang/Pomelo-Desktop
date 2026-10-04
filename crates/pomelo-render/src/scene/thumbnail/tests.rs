@@ -99,6 +99,7 @@ fn rectangle(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Point> {
 }
 fn zone(id: u32, rings: &[Vec<Point>]) -> Zone {
     Zone {
+        kind: pomelo_core::model::ZoneKind::Unknown,
         id: ObjectId(id),
         layer: LayerId(1),
         net: NetId(1),

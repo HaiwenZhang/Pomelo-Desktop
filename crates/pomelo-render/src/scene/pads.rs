@@ -176,6 +176,7 @@ impl PreparedPads {
                 .flatten()
                 .any(|segment| segment.arc.is_some());
             zones.push(Zone {
+                kind: pomelo_core::model::ZoneKind::Unknown,
                 id: source.object,
                 layer: source.pad.layer,
                 net: source.net,

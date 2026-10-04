@@ -282,8 +282,8 @@ impl PreparedGlyphs {
         }
     }
 
-    pub fn build(
-        texts: &[BoardText],
+    pub fn build<'a>(
+        texts: impl IntoIterator<Item = &'a BoardText>,
         font: Arc<MsdfFont>,
         max_bytes: usize,
         cancel: &CancellationToken,

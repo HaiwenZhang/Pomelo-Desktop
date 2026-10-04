@@ -1,52 +1,102 @@
-# Pomelo-Desktop
+<p align="center">
+  <img src="crates/pomelo/assets/pomelo.svg" width="120" alt="Pomelo logo">
+</p>
 
-Rust + GPUI Kit 原生 PCB Viewer，当前只开发 Windows，PCB 渲染使用 GPUI 原生 GPU 入口与 pomelo-render 自有 HLSL，国际化使用 rust-i18n，支持英/简中/繁中/日/韩。
+<h1 align="center">Pomelo Desktop · PCB Viewer</h1>
 
-目前已接入 Allegro BRD 后台导入、原生 D3D11 视口、走线/圆弧、焊盘/过孔、铜皮孔洞、绘图和 MSDF 板文字，并提供图层控制、网络/元件搜索、选择检查、多文档、最近文件及视图恢复。156 案例的分层解析和部分代表板/交互已有差分与实窗证据，不能等同于完整 MVP 验收。搜索锚点的应用接入、多语排序、全案例整板、DPI/输入法、性能/长期运行和正式发布仍待完成，具体范围见 [开发进展](docs/development-progress.md) 与 [研发计划](docs/native-pcb-viewer-development-plan.md)。
+<p align="center">
+  <strong>See every connection, layer by layer.</strong><br>
+  A native PCB viewer built with Rust and GPUI Kit. Explore Cadence Allegro boards on Windows with local file processing and GPU rendering.
+</p>
+
+<p align="center">English · <a href="README_zh-CN.md">简体中文</a> · <a href="README_zh-TW.md">繁體中文</a> · <a href="README_ja.md">日本語</a> · <a href="README_ko.md">한국어</a></p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Windows">
+  <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI_Kit-58752c" alt="Rust + GPUI Kit">
+  <img src="https://img.shields.io/badge/rendering-D3D11-58752c" alt="D3D11">
+  <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
+</p>
+
+![PCB workspace](images/pcb-example-en.png)
+
+## Your board, a clearer view
+
+- **Keep designs local.** Import and view board files on your computer without uploading them. Viewing does not modify the source board.
+- **Explore with native GPU rendering.** D3D11 and HLSL render traces, arcs, pads, vias, copper regions and holes, drawings, and MSDF board text.
+- **Follow connections.** Search nets and components, navigate to results, and inspect selected objects.
+- **Control the view.** Manage layers, color by layer or net, and adjust copper opacity, pad fills, and labels.
+- **Work across boards.** Multiple documents, recent files, and saved view preferences make it easier to return to a design.
+- **Choose your language.** English, Simplified Chinese, Traditional Chinese, Japanese, and Korean interfaces; light and dark themes.
+
+> **In development:** the full BRD MVP acceptance checks remain incomplete. Visual fidelity, large-board performance, DPI/input methods, and long-running stability still need broader validation. This is a read-only viewer; it does not edit boards or run DRC. See [development progress](docs/development-progress.md) for verification scope.
+
+## Supported formats
+
+Currently supports **Cadence Allegro binary `.brd` files**. This extension does not imply support for other EDA tools that also use `.brd`. Import coverage and rendering accuracy depend on the file version and its contents. Other formats supported by the web version are not yet available in this desktop project.
+
+## Quick start
+
+Use **Windows x64**, a graphics device and driver supporting **Direct3D 11**, **Git**, **Python 3.12+**, and Rust with the **MSVC C++ build tools and Windows SDK**. The repository pins Rust **1.98.1** in `rust-toolchain.toml`; dependency versions are recorded in `Cargo.lock`.
 
 ```powershell
+git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
+cd Pomelo-Desktop
 python scripts/cargo.py run -p pomelo --locked
-python scripts/cargo.py run -p pomelo --locked -- --locale ja --encoding windows-1252 E:\brd_cases\AGILEX_I_SERIES.brd
+```
+
+Open a board with **Ctrl+O**, drag and drop, or a startup file path. Select a language from the application menu or toolbar.
+
+![Welcome screen](images/welcome-en.png)
+
+```powershell
+python scripts/cargo.py run -p pomelo --locked -- --locale en --encoding windows-1252 "C:\boards\example.brd"
+```
+
+`--locale` accepts `en`, `zh-CN`, `zh-TW`, `ja`, and `ko`. It applies only to this launch and does not overwrite the saved language preference. `--encoding` accepts `utf-8`, `gbk`, `shift_jis`, `big5`, and `windows-1252`; the default is strict UTF-8. The selected encoding applies to files opened in that process. Interface language and source encoding are independent. Arguments after `--` are treated as file paths.
+
+## Navigation
+
+| Action | Control |
+| --- | --- |
+| Open file | `Ctrl+O` |
+| Close document | `Ctrl+W` |
+| Reload document | `Ctrl+R` |
+| Next / previous document | `Ctrl+Tab / Ctrl+Shift+Tab` |
+| Fit board | `F2` |
+| Focus search | `Ctrl+K` |
+| Settings | `Ctrl+,` |
+| Toggle left / right panel | `Ctrl+B / Ctrl+Shift+B` |
+
+## Build and development
+
+The Cargo wrapper prepares the local GPUI GPU patches under `.cache/gpui/` without modifying the global Cargo registry. Run `python scripts/prepare_gpui.py` before using plain Cargo or rust-analyzer for the first time. See [GPUI patch notes](patches/gpui/README.md). Normal desktop use does not require Node.js or the web repository. macOS and Linux are planned; the native application and GPU backend currently target Windows.
+
+```powershell
+python scripts/cargo.py build -p pomelo --locked
 python scripts/cargo.py test --workspace --locked
 python scripts/cargo.py clippy --workspace --all-targets --locked -- -D warnings
-python scripts/cargo.py run -p pomelo-import --bin pcb_inspect --locked -- --locale ja --help
-python scripts/cargo.py run -p pomelo-import --bin pcb_inspect --locked -- --locale zh-CN --encoding windows-1252 check --stage index --cases-dir E:\brd_cases --report .cache\indexes.jsonl
+python scripts/cargo.py run -p pomelo-import --bin pcb_inspect --locked -- --help
 ```
 
-构建需要 Git 和 Python 3.12+。包装器每次检查并准备 GPUI 通用 GPU 补丁，源码生成在 `.cache/gpui/`，不修改全局 Cargo registry。首次使用普通 Cargo 或 rust-analyzer 前先执行 `python scripts/prepare_gpui.py`。详见 [补丁说明](patches/gpui/README.md)。
+| Location | Purpose |
+| --- | --- |
+| [crates/pomelo-core](crates/pomelo-core) | Board model, search, selection, and localization |
+| [crates/pomelo-import](crates/pomelo-import) | Allegro parsing and import diagnostics |
+| [crates/pomelo-render](crates/pomelo-render) | Scene preparation, D3D11 renderer, and HLSL shaders |
+| [crates/pomelo](crates/pomelo) | GPUI desktop application and document management |
+| [locales](locales) | Five-language interface resources |
+| [docs](docs) | Development plans and validation evidence |
 
-工具链固定为 `1.98.1`。本机已经安装相同版本的 stable 工具链时，可用 `python scripts/cargo.py +stable ...`；依赖版本以 `Cargo.lock` 为准。打开文件可使用 `Ctrl+O`、拖放或启动参数；语言在应用菜单/工具栏选择器中切换。
+- [Development plan](docs/native-pcb-viewer-development-plan.md)
+- [Development progress](docs/development-progress.md)
+- [i18n](docs/i18n.md)
+- [GPU / ADR](docs/adr/0001-native-gpu-rendering.md)
 
-桌面启动支持 `--locale en|zh-CN|zh-TW|ja|ko` 和 `--encoding utf-8|gbk|shift_jis|big5|windows-1252`。语言覆盖仅作用于本次启动，不改写保存的语言偏好；编码默认严格 UTF-8，选定编码应用于该次进程打开的文件。语言和源文件编码相互独立。`--` 后的参数全部作为文件路径。
+## Contributing
 
-- [研发计划](docs/native-pcb-viewer-development-plan.md)
-- [实际进展与验证范围](docs/development-progress.md)
-- [BRD 索引实现与差分验证](docs/brd-index-validation.md)
-- [BRD 按需记录解码与字段验证](docs/brd-record-decoder-validation.md)
-- [BRD 图层、路径与铜皮轮廓验证](docs/brd-geometry-validation.md)
-- [BRD Padstack、焊盘与钻孔验证](docs/brd-padstack-validation.md)
-- [BRD 完整网络归属与封装/引脚放置验证](docs/brd-connectivity-placement-validation.md)
-- [BRD 走线、过孔与键合对象验证](docs/brd-routing-validation.md)
-- [BRD 铜皮网格与板框验证](docs/brd-copper-validation.md)
-- [i18n 开发契约与术语](docs/i18n.md)
-- [wgpu + WGSL 三角形验证](docs/gpu-triangle-validation.md)
-- [原生 GPU 实窗验证](docs/gpu-native-validation.md)
-- [视口导航实现与验证范围](docs/viewport-navigation-validation.md)
-- [板框 GPU 与铜皮批次准备](docs/outline-copper-preparation-validation.md)
-- [原生 GPU 渲染路线决策](docs/adr/0001-native-gpu-rendering.md)
+Contributions to Allegro compatibility, rendering accuracy, performance, translations, and documentation are welcome. [Report an issue](https://github.com/HaiwenZhang/Pomelo-Desktop/issues) with the source tool/file version, Windows and GPU details, reproduction steps, and import diagnostics. A small sample or comparison screenshot helps; remove confidential design data before sharing. Add focused regression tests for parser or geometry changes and screenshots for visual changes. Keep all five README versions in sync.
 
-`E:\brd_cases` 等外部样本与 `.cache/` 报告不随仓库分发。正常桌面运行不需要 Web 仓库或 Node；跨语言差分脚本仅用于研发验证。
+## License
 
-## Windows 安装包
-
-安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)、Python 3.12+ 和项目要求的 Rust/MSVC 构建工具后，在仓库目录执行：
-
-```powershell
-python scripts/build-windows.py
-# 指定编译器位置或使用本机 stable 工具链：
-python scripts/build-windows.py --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" --toolchain stable
-```
-
-脚本通过现有 GPUI 包装器编译 Windows x64 release，版本读取工作区 Cargo.toml，输出 `dist/Pomelo-<版本>-windows-x64-setup.exe`。支持 `--offline` 和 `--output-dir`。安装到当前用户的 Programs/Pomelo，无需管理员权限，创建开始菜单快捷方式，并提供可选桌面快捷方式和卸载功能。
-
-`crates/pomelo/build.rs` 从 `assets/pomelo.svg` 自动生成 16/24/32/48/64/128/256 像素 ICO 并嵌入 exe；安装包、卸载程序、快捷方式和应用卸载列表共用项目图标。修改 SVG 后重新构建即可，无需手动同步 ICO。普通 Cargo 构建也会嵌入图标。安装包尚未配置代码签名。
+Project code is licensed under [MIT](LICENSE). Bundled font assets retain their own licenses; see [Source Han Sans](assets/fonts/source-han-sans/README.md) and [stroke fonts](assets/fonts/stroke/README.md).

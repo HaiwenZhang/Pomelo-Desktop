@@ -14,7 +14,10 @@ Out trace_vertex(uint vertex_id:SV_VertexID,uint instance_id:SV_InstanceID){
     Out output;output.position=float4(screen/viewport.xy*float2(2,-2)+float2(-1,1),0,1);
     output.uv=lerp(float2(g.uv.x,g.uv.w),float2(g.uv.z,g.uv.y),corner);
     // Source board text uses its layer color; automatic labels carry calibrated colors.
-    output.color=g.color*(g.ids.y==5u?color:float4(1,1,1,1));return output;
+    // Low bit is independent opacity; upper bits still select the unchanged atlas page.
+    // Drill spans and via names share a batch, so classify opacity per glyph.
+    float alpha=(uint(g.rotation.w)&1u)!=0u?1.0:view.z;
+    output.color=g.color*(g.ids.y==PCB_SOURCE_TEXT_CATEGORY?color:float4(1,1,1,alpha));return output;
 }
 float4 trace_fragment(Out input):SV_Target{
     clip(input.position.xy-clip_bounds.xy);clip(clip_bounds.xy+clip_bounds.zw-input.position.xy);

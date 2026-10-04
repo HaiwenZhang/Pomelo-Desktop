@@ -3,7 +3,7 @@
 
 use crate::{split_position, tracks::PrepareError};
 use pomelo_core::{
-    model::{Bounds, LayerId, NetId, ObjectId, Zone},
+    model::{Bounds, LayerId, NetId, ObjectId, Zone, ZoneKind},
     task::CancellationToken,
 };
 use std::ops::Range;
@@ -22,6 +22,8 @@ pub struct CopperBatch {
     pub selected_object: pomelo_core::selection::SelectedObject,
     pub layer: LayerId,
     pub net: NetId,
+    /// Source shape behavior; custom pad meshes remain independent of this tag.
+    pub kind: ZoneKind,
     pub source_index: u32,
     pub vertex_start: u32,
     pub vertex_count: u32,
@@ -56,6 +58,7 @@ impl CopperBatch {
             selected_object: pomelo_core::selection::SelectedObject::Zone(zone.id),
             layer: zone.layer,
             net: zone.net,
+            kind: zone.kind,
             source_index: u32::try_from(source_index)
                 .map_err(|_| PrepareError::Invalid(zone.id))?,
             vertex_start: 0,
@@ -97,10 +100,12 @@ pub struct CopperLimits {
 impl Default for CopperLimits {
     fn default() -> Self {
         Self {
-            max_vertices: 16_000_000,
-            max_indices: 48_000_000,
+            // The verified RDIMM source has 19.7M vertices / 57.8M indices.
+            // Keep explicit count and byte ceilings before any output allocation.
+            max_vertices: 32_000_000,
+            max_indices: 96_000_000,
             max_zones: 250_000,
-            max_bytes: 512 * 1024 * 1024,
+            max_bytes: 1024 * 1024 * 1024,
         }
     }
 }
@@ -115,15 +120,15 @@ impl PreparedCopper {
         cancellation: &CancellationToken,
     ) -> Result<Self, PrepareError> {
         check_cancelled(cancellation)?;
-        check_limit(zones.len(), limits.max_zones.min(u32::MAX as usize))?;
+        check_count(zones.len(), limits.max_zones.min(u32::MAX as usize))?;
         let (mut vertices, mut indices) = (0_usize, 0_usize);
         for zone in zones {
             check_cancelled(cancellation)?;
             vertices = vertices.saturating_add(zone.mesh.vertices.len());
             indices = indices.saturating_add(zone.mesh.indices.len());
         }
-        check_limit(vertices, limits.max_vertices.min(u32::MAX as usize))?;
-        check_limit(indices, limits.max_indices.min(u32::MAX as usize))?;
+        check_count(vertices, limits.max_vertices.min(u32::MAX as usize))?;
+        check_count(indices, limits.max_indices.min(u32::MAX as usize))?;
         let bytes = vertices
             .saturating_mul(size_of::<CopperVertex>())
             .saturating_add(indices.saturating_mul(size_of::<u32>()))
@@ -202,6 +207,7 @@ impl PreparedCopper {
                 selected_object: pomelo_core::selection::SelectedObject::Zone(zone.id),
                 layer: zone.layer,
                 net: zone.net,
+                kind: zone.kind,
                 source_index: source_index as u32,
                 vertex_start,
                 vertex_count: mesh.vertices.len() as u32,
@@ -236,6 +242,13 @@ fn check_limit(actual: usize, limit: usize) -> Result<(), PrepareError> {
         Ok(())
     }
 }
+fn check_count(actual: usize, limit: usize) -> Result<(), PrepareError> {
+    if actual > limit {
+        Err(PrepareError::CountLimit { actual, limit })
+    } else {
+        Ok(())
+    }
+}
 fn reserve<T>(count: usize) -> Result<Vec<T>, PrepareError> {
     let mut values = Vec::new();
     values
@@ -263,6 +276,7 @@ mod tests {
     fn zone(id: u32, layer: u32) -> Zone {
         Zone {
             id: ObjectId(id),
+            kind: ZoneKind::Unknown,
             layer: LayerId(layer),
             net: NetId(7),
             paths: vec![],
@@ -278,6 +292,32 @@ mod tests {
             )
             .unwrap(),
         }
+    }
+
+    #[test]
+    fn source_shape_kinds_survive_batch_sorting() {
+        let mut source = [zone(1, 2), zone(2, 0), zone(3, 1)];
+        source[0].kind = ZoneKind::Unknown;
+        source[1].kind = ZoneKind::Static;
+        source[2].kind = ZoneKind::Dynamic;
+        let prepared = PreparedCopper::build(
+            &source,
+            CopperLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared
+                .batches
+                .iter()
+                .map(|batch| (batch.object, batch.kind))
+                .collect::<Vec<_>>(),
+            [
+                (ObjectId(2), ZoneKind::Static),
+                (ObjectId(3), ZoneKind::Dynamic),
+                (ObjectId(1), ZoneKind::Unknown)
+            ]
+        );
     }
 
     #[test]
@@ -337,6 +377,59 @@ mod tests {
                 ),
                 Err(PrepareError::Invalid(ObjectId(42)))
             ));
+        }
+    }
+
+    #[test]
+    fn count_and_byte_limits_have_distinct_localized_units_before_mesh_processing() {
+        let mut source = zone(42, 1);
+        source.mesh.vertices[0].x = f64::NAN;
+        for limits in [
+            CopperLimits {
+                max_vertices: 0,
+                ..CopperLimits::default()
+            },
+            CopperLimits {
+                max_indices: 0,
+                ..CopperLimits::default()
+            },
+            CopperLimits {
+                max_zones: 0,
+                ..CopperLimits::default()
+            },
+        ] {
+            let error = PreparedCopper::build(
+                std::slice::from_ref(&source),
+                limits,
+                &CancellationToken::default(),
+            )
+            .unwrap_err();
+            assert!(matches!(error, PrepareError::CountLimit { .. }));
+            assert_eq!(
+                error.diagnostic().code.as_ref(),
+                "RENDER_PREPARE_COUNT_LIMIT"
+            );
+            for locale in pomelo_core::i18n::Locale::ALL {
+                let message = error.diagnostic().message.display(locale);
+                assert!(
+                    !message.contains(" B"),
+                    "count diagnostic claims bytes: {message}"
+                );
+                assert!(!message.contains("%{"));
+            }
+        }
+        let error = PreparedCopper::build(
+            &[source],
+            CopperLimits {
+                max_bytes: 0,
+                ..CopperLimits::default()
+            },
+            &CancellationToken::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, PrepareError::Limit { .. }));
+        for locale in pomelo_core::i18n::Locale::ALL {
+            assert!(error.diagnostic().message.display(locale).contains(" B"));
         }
     }
 

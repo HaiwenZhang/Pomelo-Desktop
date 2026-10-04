@@ -334,11 +334,7 @@ impl Pipeline {
                 if layer.is_some_and(|layer| batch.layer != layer) {
                     continue;
                 }
-                uniforms.color = frame
-                    .colors
-                    .get(&batch.layer)
-                    .copied()
-                    .unwrap_or(frame.fallback_color);
+                uniforms.color = frame.layer_color(batch.layer);
                 for chunk in &cache.chunks {
                     let start = (batch.start as usize).max(chunk.start);
                     let end = ((batch.start + batch.count) as usize).min(chunk.start + chunk.count);

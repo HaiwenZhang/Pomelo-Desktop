@@ -43,6 +43,7 @@ impl ViewState {
             || self.display.layer_primitives.len() > 4096
             || self.display.layer_order.len() > 4096
             || self.display.priorities.len() > 4096
+            || self.display.appearance.layers.len() > 4096
             || self
                 .display
                 .layer_order
@@ -53,6 +54,8 @@ impl ViewState {
                 != self.display.layer_order.len()
             || !self.display.copper_opacity.is_finite()
             || !(0.0..=1.0).contains(&self.display.copper_opacity)
+            || !self.display.global_opacity.is_finite()
+            || !(0.0..=1.0).contains(&self.display.global_opacity)
         {
             return Err(crate::model::Diagnostic::error(
                 "VIEW_STATE_INVALID",
@@ -148,9 +151,13 @@ mod tests {
         original.display.show_drills = false;
         original.display.show_backdrills = false;
         original.display.show_copper = false;
+        original.display.static_shapes_fill_solid = true;
         original.display.show_texts = false;
         original.display.show_drawings = false;
         original.display.filled = false;
+        original.display.horizontal_pin_names = true;
+        original.display.label_options.bb_labels = false;
+        original.display.label_options.via_names = true;
         original.display.copper_opacity = 0.75;
         original.display.color_mode = crate::display::ColorMode::Net;
         original.display.layer_order = vec![LayerId(4), LayerId(2)];
@@ -167,9 +174,15 @@ mod tests {
         assert!(!restored.display.show_drills);
         assert!(!restored.display.show_backdrills);
         assert!(!restored.display.show_copper);
+        assert!(restored.display.static_shapes_fill_solid);
         assert!(!restored.display.show_texts);
         assert!(!restored.display.show_drawings);
         assert!(!restored.display.filled);
+        assert!(restored.display.horizontal_pin_names);
+        assert_eq!(
+            restored.display.label_options,
+            original.display.label_options
+        );
         assert_eq!(restored.display.copper_opacity, 0.75);
         assert_eq!(restored.display.color_mode, original.display.color_mode);
         assert_eq!(restored.display.layer_order, original.display.layer_order);
@@ -177,6 +190,60 @@ mod tests {
             restored.display.layer_primitives,
             original.display.layer_primitives
         );
+    }
+    #[test]
+    fn appearance_roundtrips_and_legacy_views_keep_source_colors() {
+        use crate::appearance::{ColorTarget, RgbColor};
+        let mut original = state();
+        original
+            .display
+            .appearance
+            .set_color(ColorTarget::Background, Some(RgbColor([0, 0, 0])));
+        original
+            .display
+            .appearance
+            .set_color(ColorTarget::Etch(LayerId(0)), Some(RgbColor([38, 255, 38])));
+        original
+            .display
+            .appearance
+            .set_color(ColorTarget::Pin(LayerId(0)), Some(RgbColor([255, 0, 0])));
+        original
+            .display
+            .appearance
+            .set_color(ColorTarget::Via(LayerId(0)), Some(RgbColor([0, 0, 255])));
+        let json = serde_json::to_value(&original).unwrap();
+        let decoded: ViewState = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            decoded
+                .matching(&original.source)
+                .unwrap()
+                .unwrap()
+                .display
+                .appearance,
+            original.display.appearance
+        );
+        let mut legacy = json;
+        legacy["display"]
+            .as_object_mut()
+            .unwrap()
+            .remove("appearance");
+        let decoded: ViewState = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            decoded.display.appearance,
+            crate::appearance::BoardAppearance::default()
+        );
+    }
+    #[test]
+    fn oversized_color_overrides_return_a_localized_configuration_error() {
+        let mut value = state();
+        value.display.appearance.layers = (0..4097)
+            .map(|id| (LayerId(id), crate::appearance::LayerColors::default()))
+            .collect();
+        let error = value.validate().unwrap_err();
+        assert_eq!(error.code.as_ref(), "VIEW_STATE_INVALID");
+        for locale in crate::i18n::Locale::ALL {
+            assert!(!error.message.display(locale).is_empty());
+        }
     }
     #[test]
     fn content_and_decoding_changes_reject_old_view() {
@@ -259,9 +326,38 @@ mod tests {
         let display: BoardDisplay =
             serde_json::from_str(r#"{"hidden_layers":[],"show_drills":true}"#).unwrap();
         assert_eq!(display.copper_opacity, 0.25);
+        assert_eq!(display.global_opacity, 1.0);
         assert!(display.show_copper);
+        assert!(!display.static_shapes_fill_solid);
         assert!(display.show_backdrills);
         assert!(!display.show_texts);
         assert!(display.show_drawings);
+    }
+
+    #[test]
+    fn global_and_copper_opacity_roundtrip_independently_at_byte_precision() {
+        let mut original = state();
+        original.display.global_opacity = 128.0 / 255.0;
+        original.display.copper_opacity = 99.0 / 255.0;
+        let restored: ViewState =
+            serde_json::from_slice(&serde_json::to_vec(&original).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(
+            restored.display.global_opacity,
+            original.display.global_opacity
+        );
+        assert_eq!(
+            restored.display.copper_opacity,
+            original.display.copper_opacity
+        );
+    }
+
+    #[test]
+    fn global_opacity_rejects_non_finite_and_out_of_range_saved_values() {
+        for opacity in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+            let mut value = state();
+            value.display.global_opacity = opacity;
+            assert!(value.validate().is_err());
+        }
     }
 }

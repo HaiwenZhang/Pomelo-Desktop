@@ -601,8 +601,8 @@ pub struct TextPreparationSummary {
 
 /// Counts font strokes without allocating board-wide transformed geometry.
 /// This is a sizing probe, not geometry or GPU validation.
-pub fn count_text_strokes(
-    texts: &[BoardText],
+pub fn count_text_strokes<'a>(
+    texts: impl IntoIterator<Item = &'a BoardText>,
     font: &impl StrokeGlyphs,
     max_characters: usize,
     cancellation: &CancellationToken,
@@ -710,8 +710,8 @@ impl PreparedTexts {
     /// Visit supported objects in source order while retaining only one object's
     /// transformed strokes. A visitor error is fatal; callers must discard any
     /// partially accumulated result. Missing glyphs skip the whole object.
-    pub fn visit_recovering_missing_glyphs(
-        texts: &[BoardText],
+    pub fn visit_recovering_missing_glyphs<'a>(
+        texts: impl IntoIterator<Item = &'a BoardText>,
         font: &impl StrokeGlyphs,
         max_objects: usize,
         max_characters: usize,
@@ -719,16 +719,19 @@ impl PreparedTexts {
         cancellation: &CancellationToken,
         mut visit: impl FnMut(&BoardText, &[TextStroke]) -> Result<(), Diagnostic>,
     ) -> Result<TextPreparationSummary, Diagnostic> {
+        let mut texts = texts.into_iter().peekable();
+        let mut last_object = None;
         if cancellation.is_cancelled() {
             let mut diagnostic = Diagnostic::error("RENDER_TEXT_CANCELLED", MessageKey::Cancelled);
-            diagnostic.object = texts.first().map(|text| text.id);
+            diagnostic.object = texts.peek().map(|text| text.id);
             return Err(diagnostic);
         }
         let mut characters_count = 0;
         let mut strokes_count = 0;
         let mut objects_count = 0;
         let mut diagnostics = Vec::new();
-        for (index, text) in texts.iter().enumerate() {
+        for (index, text) in texts.enumerate() {
+            last_object = Some(text.id);
             if cancellation.is_cancelled() {
                 return Err(TextBuildError::Cancelled.diagnostic(text.id));
             }
@@ -783,7 +786,7 @@ impl PreparedTexts {
         }
         if cancellation.is_cancelled() {
             let mut diagnostic = Diagnostic::error("RENDER_TEXT_CANCELLED", MessageKey::Cancelled);
-            diagnostic.object = texts.last().map(|text| text.id);
+            diagnostic.object = last_object;
             return Err(diagnostic);
         }
         Ok(TextPreparationSummary {

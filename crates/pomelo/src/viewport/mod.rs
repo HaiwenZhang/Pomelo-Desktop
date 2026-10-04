@@ -1,7 +1,9 @@
 //! Windows native board canvas. Business GPU resources stay in pomelo-render.
 use crate::panels::focus_scroll::FocusScroll;
 use crate::tooltips::ButtonTooltipExt;
+mod appearance;
 mod curves;
+mod opacity;
 mod presentation;
 mod toolbar;
 
@@ -70,6 +72,7 @@ pub struct BoardViewport {
     zone_outlines: Arc<PreparedTracks>,
     drawings: Arc<PreparedTracks>,
     texts: Option<Arc<pomelo_render::text::msdf::PreparedGlyphs>>,
+    source_strokes: Option<Arc<pomelo_render::text::instances::PreparedTextInstances>>,
     label_index: Option<Arc<pomelo_render::text::msdf::LabelIndex>>,
     label_cache: Option<LabelCache>,
     curve_fill: curves::CurveState,
@@ -91,6 +94,11 @@ pub struct BoardViewport {
     file_information_expanded: bool,
     pan_tool: bool,
     copper_slider: Entity<SliderState>,
+    opacity_inputs: BTreeMap<opacity::OpacityTarget, Entity<InputState>>,
+    color_pickers: BTreeMap<
+        pomelo_core::appearance::ColorTarget,
+        Entity<gpui_kit::component::color_picker::ColorPickerState>,
+    >,
     panel_sizes: Entity<ResizableState>,
     panel_layout: Entity<crate::workbench::panel_layout::PanelLayout>,
     search_results: Vec<pomelo_core::search::SearchEntry>,
@@ -136,6 +144,7 @@ pub struct BoardViewport {
     drill_telemetry: Arc<TraceTelemetry>,
     drawing_telemetry: Arc<TraceTelemetry>,
     text_telemetry: Arc<TraceTelemetry>,
+    source_stroke_telemetry: Arc<TraceTelemetry>,
     zone_outline_telemetry: Arc<TraceTelemetry>,
     label_telemetry: Arc<TraceTelemetry>,
     paint_error: Option<String>,
@@ -259,6 +268,7 @@ impl BoardViewport {
         let tracks = Arc::clone(&prepared.tracks);
         let drawings = Arc::clone(&prepared.drawings);
         let texts = prepared.texts.clone();
+        let source_strokes = prepared.source_strokes.clone();
         let copper = Arc::clone(&prepared.copper);
         let pads = Arc::clone(&prepared.pads);
         let drills = Arc::clone(&prepared.drills);
@@ -272,6 +282,7 @@ impl BoardViewport {
         let drill_telemetry = Arc::new(TraceTelemetry::default());
         let drawing_telemetry = Arc::new(TraceTelemetry::default());
         let text_telemetry = Arc::new(TraceTelemetry::default());
+        let source_stroke_telemetry = Arc::new(TraceTelemetry::default());
         let zone_outline_telemetry = Arc::new(TraceTelemetry::default());
         let label_telemetry = Arc::new(TraceTelemetry::default());
         let renderer = window
@@ -285,6 +296,7 @@ impl BoardViewport {
                     Arc::clone(&drawing_telemetry),
                     Arc::clone(&text_telemetry),
                 )
+                .with_source_stroke_telemetry(Arc::clone(&source_stroke_telemetry))
                 .with_custom_outline_telemetry(Arc::clone(&custom_outline_telemetry))
                 .with_zone_outline_telemetry(Arc::clone(&zone_outline_telemetry))
                 .with_label_telemetry(Arc::clone(&label_telemetry)),
@@ -382,6 +394,8 @@ impl BoardViewport {
             panel_sizes: panel_layout.read(cx).sizes.clone(),
             panel_layout,
             copper_slider,
+            opacity_inputs: BTreeMap::new(),
+            color_pickers: BTreeMap::new(),
             search_results: Vec::new(),
             selected_target: None,
             selected_anchor: None,
@@ -441,9 +455,11 @@ impl BoardViewport {
             drill_telemetry,
             drawing_telemetry,
             text_telemetry,
+            source_stroke_telemetry,
             zone_outline_telemetry,
             label_telemetry,
             texts,
+            source_strokes,
             label_index: prepared.label_index.clone(),
             label_cache: None,
             curve_fill: curves::CurveState::default(),
@@ -1328,6 +1344,46 @@ impl Render for BoardViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::workbench::panel_layout::Side;
         let locale = i18n::current(cx);
+        let opacity_controls: Vec<_> = if self.show_display {
+            [
+                opacity::OpacityTarget::Global,
+                opacity::OpacityTarget::Copper,
+            ]
+            .map(|target| self.opacity_control(target, locale, window, cx))
+            .into_iter()
+            .collect()
+        } else {
+            Vec::new()
+        };
+        let appearance_controls = if self.show_display {
+            Some(
+                div()
+                    .px_4()
+                    .py_2()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(
+                        [
+                            (
+                                "canvas-background-color",
+                                pomelo_core::appearance::ColorTarget::Background,
+                            ),
+                            (
+                                "drill-display-color",
+                                pomelo_core::appearance::ColorTarget::Drill,
+                            ),
+                        ]
+                        .map(|(id, target)| {
+                            let control = self.color_control(target, locale, window, cx);
+                            FocusScroll::new(id, &self.inspector_focus.scroll, control)
+                        }),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
         let left_tab_labels: Vec<SharedString> =
             [Key::Layers, Key::SearchNets, Key::SearchComponents]
                 .map(|key| text(locale, key).into())
@@ -1419,6 +1475,11 @@ impl Render for BoardViewport {
                     .iter()
                     .flat_map(|source| source.batches.iter().map(|batch| batch.layer)),
             )
+            .chain(
+                self.source_strokes
+                    .iter()
+                    .flat_map(|source| source.batches.iter().map(|batch| batch.layer)),
+            )
             .chain(self.pads.batches.iter().map(|batch| batch.layer))
             .chain(
                 self.pads
@@ -1471,18 +1532,35 @@ impl Render for BoardViewport {
         }
         let layer_rows = list(
             self.layer_scroll.clone(),
-            cx.processor(move |this, index: usize, _, cx| {
+            cx.processor(move |this, index: usize, window, cx| {
                 let (id, label) = &layers[index];
                 let id = *id;
                 let bottom_order = Arc::clone(&list_order);
                 let top_order = Arc::clone(&list_order);
+                let colors = if this.expanded_layer == Some(id) {
+                    [
+                        pomelo_core::appearance::ColorTarget::Etch(id),
+                        pomelo_core::appearance::ColorTarget::Pin(id),
+                        pomelo_core::appearance::ColorTarget::Via(id),
+                    ]
+                    .map(|target| this.color_control(target, locale, window, cx))
+                    .into_iter()
+                    .collect()
+                } else {
+                    Vec::new()
+                };
                 crate::panels::layers::row(
                     locale,
                     crate::panels::layers::LayerRow {
                         id,
                         label: label.clone(),
                         visible: this.display.layer_visible(id),
-                        color: this.colors.get(&id).copied(),
+                        color: this
+                            .display
+                            .appearance
+                            .material(id, pomelo_core::display::DisplayCategory::Trace)
+                            .or_else(|| this.colors.get(&id).copied()),
+                        colors,
                         function: this
                             .scene
                             .layers
@@ -2430,7 +2508,7 @@ impl Render for BoardViewport {
                         ))
                             })
                             .when(self.show_display, |body| {
-                                body.children(crate::panels::display::controls(
+                                body.when_some(appearance_controls, |body, controls| body.child(controls)).children(opacity_controls).children(crate::panels::display::controls(
                                     locale,
                                     &self.display,
                                     crate::panels::display::DisplayCommands {
@@ -2441,6 +2519,19 @@ impl Render for BoardViewport {
                                                     this.invalidate_hover();
                                                     cx.notify();
                                                 }
+                                            },
+                                        )),
+                                        horizontal_pin_names: Box::new(cx.listener(
+                                            |this, horizontal: &bool, _, cx| {
+                                                Arc::make_mut(&mut this.display).horizontal_pin_names = *horizontal;
+                                                this.invalidate_hover();
+                                                cx.notify();
+                                            },
+                                        )),
+                                        labels: Box::new(cx.listener(
+                                            |this, (kind, enabled): &(pomelo_core::display::LabelKind, bool), _, cx| {
+                                                Arc::make_mut(&mut this.display).label_options.set(*kind, *enabled);
+                                                cx.notify();
                                             },
                                         )),
                                         drills: Box::new(cx.listener(
@@ -2467,6 +2558,12 @@ impl Render for BoardViewport {
                                                 Arc::make_mut(&mut this.display).show_copper =
                                                     *visible;
                                                 this.invalidate_hover();
+                                                cx.notify();
+                                            },
+                                        )),
+                                        static_shapes_fill_solid: Box::new(cx.listener(
+                                            |this, solid: &bool, _, cx| {
+                                                Arc::make_mut(&mut this.display).static_shapes_fill_solid = *solid;
                                                 cx.notify();
                                             },
                                         )),
@@ -2586,6 +2683,7 @@ impl Render for BoardViewport {
         let drill_stats = self.drill_telemetry.snapshot();
         let drawing_stats = self.drawing_telemetry.snapshot();
         let text_stats = self.text_telemetry.snapshot();
+        let source_stroke_stats = self.source_stroke_telemetry.snapshot();
         let label_stats = self.label_telemetry.snapshot();
         let custom_bytes = self
             .pads
@@ -2616,6 +2714,11 @@ impl Render for BoardViewport {
             && text_stats.uploaded_instances
                 == self
                     .texts
+                    .as_ref()
+                    .map_or(0, |source| source.instances.len()) as u64
+            && source_stroke_stats.uploaded_instances
+                == self
+                    .source_strokes
                     .as_ref()
                     .map_or(0, |source| source.instances.len()) as u64;
         let ready = geometry_ready
@@ -2683,9 +2786,12 @@ impl Render for BoardViewport {
                 "drawing_statistics": drawing_stats,
                 "expected_drawing_instances": self.drawings.instances.len(),
                 "text_statistics": text_stats,
+                "source_stroke_statistics": source_stroke_stats,
                 "label_statistics": label_stats,
             });
             let details = serde_json::json!({
+                "expected_source_stroke_instances": self.source_strokes.as_ref().map_or(0, |source| source.instances.len()),
+                "source_stroke_objects": self.source_strokes.as_ref().map_or(&[][..], |source| source.objects.as_slice()),
                 "expected_text_instances": self.texts.as_ref().map_or(0, |source| source.instances.len()),
                 "expected_drills": self.drills.analytic.len(),
                 "adapter": specs.as_ref().map(|specs| &specs.device_name),
@@ -2712,6 +2818,7 @@ impl Render for BoardViewport {
                 "selected_anchor": self.selected_anchor,
                 "panel_layout": panels,
                 "canvas_size": self.navigation.size(),
+                "device_scale_factor": window.scale_factor(),
                 "selection_mode": format!("{:?}", self.selection_mode),
                 "hovered_object": self.hovered.as_ref().filter(|(_, context)| context.matches_view(
                     self.navigation.camera(), self.navigation.size(), &self.display, self.selection_mode,
@@ -2732,11 +2839,16 @@ impl Render for BoardViewport {
                     "show_drills": self.display.show_drills,
                     "show_backdrills": self.display.show_backdrills,
                     "show_copper": self.display.show_copper,
+                    "static_shapes_fill_solid": self.display.static_shapes_fill_solid,
                     "filled": self.display.filled,
+                    "horizontal_pin_names": self.display.horizontal_pin_names,
+                    "label_options": self.display.label_options,
+                    "appearance": self.display.appearance,
                     "show_texts": self.display.show_texts,
                     "show_drawings": self.display.show_drawings,
                     "layer_order": &*layer_order,
                     "copper_opacity": self.display.copper_opacity,
+                    "global_opacity": self.display.global_opacity,
                 },
                 "camera": {
                     "center": self.navigation.camera().center,
@@ -2810,6 +2922,8 @@ impl Render for BoardViewport {
             scale_factor: window.scale_factor(),
             colors: Arc::clone(&self.colors),
             fallback_color: [0.6, 0.68, 0.73, 1.0],
+            material_override: None,
+            opacity: 1.0,
             highlighted_object: self.selected_target.and_then(|target| {
                 if let pomelo_core::selection::SelectionTarget::Object(object) = target {
                     let color: Rgba = theme.primary.into();
@@ -2854,13 +2968,15 @@ impl Render for BoardViewport {
         let drill_telemetry = Arc::clone(&self.drill_telemetry);
         let drawing_telemetry = Arc::clone(&self.drawing_telemetry);
         let text_telemetry = Arc::clone(&self.text_telemetry);
+        let source_stroke_telemetry = Arc::clone(&self.source_stroke_telemetry);
         let zone_outline_telemetry = Arc::clone(&self.zone_outline_telemetry);
         let label_telemetry = Arc::clone(&self.label_telemetry);
         let texts = self.texts.clone();
+        let source_strokes = self.source_strokes.clone();
         let drawings = Arc::clone(&self.drawings);
         let drills = Arc::clone(&self.drills);
         let display = Arc::clone(&self.display);
-        let drill_color: Rgba = crate::theme::canvas_colors().0.into();
+        let drill_color = [0.46, 0.49, 0.51, 1.0];
         let pads = Arc::clone(&self.pads);
         let copper = Arc::clone(&self.copper);
         let zone_outlines = Arc::clone(&self.zone_outlines);
@@ -2913,7 +3029,7 @@ impl Render for BoardViewport {
                                     width,
                                     height,
                                     &this.display,
-                                    pomelo_render::text::msdf::LabelOptions::default(),
+                                    this.display.label_options,
                                     &pomelo_core::task::CancellationToken::default(),
                                 ) {
                                     Ok(source) => {
@@ -2950,14 +3066,14 @@ impl Render for BoardViewport {
                     curves,
                     zone_outlines: Some(zone_outlines),
                     drawings: Some(drawings),
-                    texts: None,
+                    texts: source_strokes,
                     glyphs: texts,
                     labels,
                     traces: frame,
                     display,
                     pads: Some(pads),
                     drills: Some(drills),
-                    drill_color: [drill_color.r, drill_color.g, drill_color.b, drill_color.a],
+                    drill_color,
                     copper,
                     copper_opacity,
                     layer_order,
@@ -2985,6 +3101,8 @@ impl Render for BoardViewport {
                     let before_drills = drill_telemetry.snapshot().uploaded_instances;
                     let before_drawings = drawing_telemetry.snapshot().uploaded_instances;
                     let before_texts = text_telemetry.snapshot().uploaded_instances;
+                    let before_source_strokes =
+                        source_stroke_telemetry.snapshot().uploaded_instances;
                     let before_labels = label_telemetry.snapshot().uploaded_instances;
                     let before_zone_outlines = zone_outline_telemetry.snapshot().uploaded_instances;
                     window.on_next_frame(move |_, cx| {
@@ -3001,6 +3119,8 @@ impl Render for BoardViewport {
                             || before_drills != drill_telemetry.snapshot().uploaded_instances
                             || before_drawings != drawing_telemetry.snapshot().uploaded_instances
                             || before_texts != text_telemetry.snapshot().uploaded_instances
+                            || before_source_strokes
+                                != source_stroke_telemetry.snapshot().uploaded_instances
                             || before_labels != label_telemetry.snapshot().uploaded_instances
                             || before_zone_outlines
                                 != zone_outline_telemetry.snapshot().uploaded_instances
@@ -3091,7 +3211,7 @@ impl Render for BoardViewport {
                                     .overflow_hidden()
                                     .border_1()
                                     .border_color(theme.border)
-                                    .bg(crate::theme::canvas_colors().0)
+                                    .bg(self.canvas_background())
                                     .focus_visible(|style| style.border_color(theme.ring))
                                     .cursor(if self.drag_position.is_some() {
                                         CursorStyle::ClosedHand

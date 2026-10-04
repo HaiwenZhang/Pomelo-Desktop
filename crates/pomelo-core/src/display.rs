@@ -10,6 +10,72 @@ pub enum ColorMode {
     Net,
 }
 
+/// Independent embedded names and via span labels; source board text is separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LabelOptions {
+    pub track_names: bool,
+    pub pin_names: bool,
+    pub via_names: bool,
+    pub thru_labels: bool,
+    pub bb_labels: bool,
+    pub zone_names: bool,
+}
+impl Default for LabelOptions {
+    fn default() -> Self {
+        Self {
+            track_names: true,
+            pin_names: true,
+            via_names: false,
+            thru_labels: true,
+            bb_labels: true,
+            zone_names: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelKind {
+    TrackNames,
+    PinNames,
+    ViaNames,
+    ZoneNames,
+    ThroughSpans,
+    BlindBuriedSpans,
+}
+impl LabelKind {
+    pub const ALL: [Self; 6] = [
+        Self::TrackNames,
+        Self::PinNames,
+        Self::ViaNames,
+        Self::ZoneNames,
+        Self::ThroughSpans,
+        Self::BlindBuriedSpans,
+    ];
+}
+impl LabelOptions {
+    pub fn enabled(self, kind: LabelKind) -> bool {
+        match kind {
+            LabelKind::TrackNames => self.track_names,
+            LabelKind::PinNames => self.pin_names,
+            LabelKind::ViaNames => self.via_names,
+            LabelKind::ZoneNames => self.zone_names,
+            LabelKind::ThroughSpans => self.thru_labels,
+            LabelKind::BlindBuriedSpans => self.bb_labels,
+        }
+    }
+    pub fn set(&mut self, kind: LabelKind, enabled: bool) {
+        *match kind {
+            LabelKind::TrackNames => &mut self.track_names,
+            LabelKind::PinNames => &mut self.pin_names,
+            LabelKind::ViaNames => &mut self.via_names,
+            LabelKind::ZoneNames => &mut self.zone_names,
+            LabelKind::ThroughSpans => &mut self.thru_labels,
+            LabelKind::BlindBuriedSpans => &mut self.bb_labels,
+        } = enabled;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerPrimitive {
     Traces,
@@ -73,6 +139,8 @@ impl LayerPrimitives {
 #[serde(deny_unknown_fields)]
 pub struct BoardDisplay {
     #[serde(default)]
+    pub appearance: crate::appearance::BoardAppearance,
+    #[serde(default)]
     pub priorities: Vec<LayerPriority>,
     #[serde(default)]
     pub active_layer: Option<LayerId>,
@@ -90,12 +158,23 @@ pub struct BoardDisplay {
     pub show_backdrills: bool,
     #[serde(default = "default_visible")]
     pub show_copper: bool,
+    /// Draw confirmed static copper as solid fill instead of the screen-space stipple.
+    #[serde(default)]
+    pub static_shapes_fill_solid: bool,
     #[serde(default)]
     pub show_texts: bool,
+    /// Keep embedded pin net names horizontal, independently of footprint rotation.
+    #[serde(default)]
+    pub horizontal_pin_names: bool,
+    #[serde(default)]
+    pub label_options: LabelOptions,
     #[serde(default = "default_visible")]
     pub show_drawings: bool,
     #[serde(default = "default_copper_opacity")]
     pub copper_opacity: f32,
+    /// Opacity of ordinary objects and labels. Copper fill has its own opacity.
+    #[serde(default = "default_global_opacity")]
+    pub global_opacity: f32,
     /// Explicit drawing order, from bottom to top; empty uses source order.
     #[serde(default)]
     pub layer_order: Vec<LayerId>,
@@ -103,12 +182,16 @@ pub struct BoardDisplay {
 fn default_copper_opacity() -> f32 {
     0.25
 }
+fn default_global_opacity() -> f32 {
+    1.0
+}
 fn default_visible() -> bool {
     true
 }
 impl Default for BoardDisplay {
     fn default() -> Self {
         Self {
+            appearance: crate::appearance::BoardAppearance::default(),
             priorities: Vec::new(),
             active_layer: None,
             filled: true,
@@ -119,9 +202,13 @@ impl Default for BoardDisplay {
             show_drills: true,
             show_backdrills: true,
             show_copper: true,
+            static_shapes_fill_solid: false,
             show_texts: false,
+            horizontal_pin_names: false,
+            label_options: LabelOptions::default(),
             show_drawings: true,
             copper_opacity: default_copper_opacity(),
+            global_opacity: default_global_opacity(),
             layer_order: Vec::new(),
         }
     }
@@ -270,6 +357,48 @@ impl BoardDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn label_categories_restore_independently_and_keep_legacy_defaults() {
+        let mut display: BoardDisplay =
+            serde_json::from_str(r#"{"hidden_layers":[],"show_drills":true}"#).unwrap();
+        let defaults = LabelOptions::default();
+        assert_eq!(display.label_options, defaults);
+        for kind in LabelKind::ALL {
+            display.label_options = defaults;
+            display.label_options.set(kind, !defaults.enabled(kind));
+            let restored: BoardDisplay =
+                serde_json::from_slice(&serde_json::to_vec(&display).unwrap()).unwrap();
+            for other in LabelKind::ALL {
+                assert_eq!(
+                    restored.label_options.enabled(other),
+                    if kind == other {
+                        !defaults.enabled(other)
+                    } else {
+                        defaults.enabled(other)
+                    }
+                );
+            }
+        }
+        let partial: LabelOptions = serde_json::from_str(r#"{"bb_labels":false}"#).unwrap();
+        assert!(!partial.bb_labels);
+        assert!(
+            partial.track_names && partial.pin_names && partial.thru_labels && partial.zone_names
+        );
+        assert!(!partial.via_names);
+    }
+    #[test]
+    fn horizontal_pin_names_preserves_legacy_orientation_and_saved_choice() {
+        let legacy: BoardDisplay =
+            serde_json::from_str(r#"{"hidden_layers":[],"show_drills":true}"#).unwrap();
+        assert!(!legacy.horizontal_pin_names);
+        let horizontal = BoardDisplay {
+            horizontal_pin_names: true,
+            ..legacy
+        };
+        let restored: BoardDisplay =
+            serde_json::from_slice(&serde_json::to_vec(&horizontal).unwrap()).unwrap();
+        assert!(restored.horizontal_pin_names);
+    }
     #[test]
     fn layer_categories_are_independent_sparse_and_compatible_with_legacy_state() {
         let mut display: BoardDisplay =

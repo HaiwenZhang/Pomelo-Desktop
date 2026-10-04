@@ -2,5 +2,6 @@
 pub mod prefs;
 pub mod preview;
 pub mod recent;
+pub mod source_font;
 pub mod startup;
 pub mod startup_error;

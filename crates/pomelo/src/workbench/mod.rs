@@ -32,6 +32,7 @@ use crate::actions::{
 
 mod document_tabs;
 pub(crate) mod panel_layout;
+mod saving;
 
 pub struct Workbench {
     documents: Vec<DocumentSession>,
@@ -49,13 +50,23 @@ pub struct Workbench {
     menu_bar: Entity<AppMenuBar>,
     menu_revision: u64,
     import_options: ImportOptions,
+    source_font: Option<crate::services::source_font::SourceFontConfig>,
     view_save_task: Option<Shared<Task<Result<(), Diagnostic>>>>,
+    view_save_generation: u64,
+    quit_task: Option<Task<()>>,
+    quit_snapshot: Option<(Vec<u8>, u64)>,
+    quit_flushed: bool,
     panel_layout: Entity<panel_layout::PanelLayout>,
     search_locale: Locale,
 }
 
 impl Workbench {
-    pub fn new(import_options: ImportOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        import_options: ImportOptions,
+        source_font: Option<crate::services::source_font::SourceFontConfig>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (panels, panel_error) = match crate::prefs::PanelStore::platform_default() {
             Some(store) => match store.load() {
                 Ok(panels) => (panels, None),
@@ -80,14 +91,20 @@ impl Workbench {
         })
         .detach();
         cx.on_app_quit(|this, cx| {
-            this.queue_view_save(None, cx);
-            let pending = this.view_save_task.take();
+            // Normal exits have already flushed while the event loop was alive.
+            // System shutdown still gets GPUI's bounded best-effort fallback.
+            let pending = if this.quit_flushed {
+                None
+            } else {
+                this.queue_view_save(None, cx);
+                this.view_save_task.take()
+            };
             let locale = i18n::current(cx);
             async move {
                 if let Some(pending) = pending
                     && let Err(error) = pending.await
                 {
-                    eprintln!("{}", error.message.display(locale));
+                    saving::report_save_error(&error, locale);
                 }
             }
         })
@@ -115,7 +132,12 @@ impl Workbench {
             menu_bar: AppMenuBar::new(cx),
             menu_revision: cx.global::<LanguageState>().revision,
             import_options,
+            source_font,
             view_save_task: None,
+            view_save_generation: 0,
+            quit_task: None,
+            quit_snapshot: None,
+            quit_flushed: false,
             panel_layout,
         }
     }
@@ -216,6 +238,7 @@ impl Workbench {
         let options = document.import_options.clone();
         let reload_view = document.reload_view.clone();
         let search_locale = self.search_locale;
+        let source_font = self.source_font.clone();
         let import = cx.background_spawn(async move {
             let board = AllegroImporter.import(
                 &path,
@@ -257,6 +280,27 @@ impl Workbench {
             begin_stage(ImportStage::PreparingTexts)?;
             let mut text_diagnostics = Vec::new();
             let mut prepared_text_ids = std::collections::BTreeSet::new();
+            let source_strokes = if let Some(config) = source_font {
+                match config.prepare(&board.scene, &cancellation) {
+                    Ok(mut source) => {
+                        prepared_text_ids.extend(source.objects.iter().copied());
+                        text_diagnostics.append(&mut source.summary.diagnostics);
+                        Some(std::sync::Arc::new(source))
+                    }
+                    Err(mut diagnostic) => {
+                        if cancellation.is_cancelled() {
+                            return Err(LoadError::Prepare(
+                                pomelo_render::tracks::PrepareError::Cancelled,
+                            ));
+                        }
+                        diagnostic.severity = pomelo_core::model::Severity::Warning;
+                        text_diagnostics.push(diagnostic);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let font = match pomelo_render::text::msdf::MsdfFont::bundled(
                 board
                     .scene
@@ -301,14 +345,18 @@ impl Workbench {
             };
             let texts = if let Some(font) = font {
                 match pomelo_render::text::msdf::PreparedGlyphs::build(
-                    &board.scene.texts,
+                    board
+                        .scene
+                        .texts
+                        .iter()
+                        .filter(|text| !prepared_text_ids.contains(&text.id)),
                     font,
                     512 * 1024 * 1024,
                     &cancellation,
                 ) {
                     Ok(mut source) => {
                         source.bind_drawing_owners(&board.scene);
-                        prepared_text_ids = source.objects.iter().copied().collect();
+                        prepared_text_ids.extend(source.objects.iter().copied());
                         text_diagnostics.append(&mut source.diagnostics);
                         Some(std::sync::Arc::new(source))
                     }
@@ -355,19 +403,30 @@ impl Workbench {
                 .with_locale(search_locale)
                 .map_err(LoadError::Search)?;
             begin_stage(ImportStage::BuildingPicking)?;
+            let mut pick_quads = Vec::new();
+            let quad_count = texts
+                .as_ref()
+                .map_or(0, |source| source.pick_quads.len())
+                .saturating_add(
+                    source_strokes
+                        .as_ref()
+                        .map_or(0, |source| source.pick_quads.len()),
+                );
+            pick_quads
+                .try_reserve_exact(quad_count)
+                .map_err(|_| pomelo_render::tracks::PrepareError::Allocation)?;
+            if let Some(source) = &texts {
+                pick_quads.extend_from_slice(&source.pick_quads);
+            }
+            if let Some(source) = &source_strokes {
+                pick_quads.extend_from_slice(&source.pick_quads);
+            }
             let picking = pomelo_core::picking_index::SegmentIndex::build(
                 board.scene.clone(),
                 pomelo_render::tracks::TraceLimits::default().max_instances,
                 &cancellation,
             )
-            .and_then(|index| {
-                index.with_text_quads(
-                    texts
-                        .as_ref()
-                        .map_or(&[], |texts| texts.pick_quads.as_slice()),
-                    &cancellation,
-                )
-            })
+            .and_then(|index| index.with_text_quads(&pick_quads, &cancellation))
             .map_err(LoadError::Picking)?;
             let restored_view_result = if let Some(state) = reload_view {
                 state
@@ -426,6 +485,7 @@ impl Workbench {
                     text_diagnostics
                 },
                 texts,
+                source_strokes,
                 label_index,
                 board,
                 search: std::sync::Arc::new(search),
@@ -562,6 +622,7 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             if let Err(error) = pending.await {
                 let _ = this.update(cx, |this, cx| {
+                    saving::report_save_error(&error, i18n::current(cx));
                     this.error = Some(error);
                     cx.notify();
                 });
@@ -571,6 +632,15 @@ impl Workbench {
     }
 
     fn queue_view_save(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        let snapshot = self.view_save_snapshot(index, cx);
+        self.enqueue_view_save(snapshot, cx);
+    }
+
+    fn view_save_snapshot(
+        &self,
+        index: Option<usize>,
+        cx: &Context<Self>,
+    ) -> saving::ViewSaveSnapshot {
         #[cfg(target_os = "windows")]
         let entries: Vec<_> = self
             .documents
@@ -594,6 +664,12 @@ impl Workbench {
             Vec::new()
         };
         let panels = self.panel_layout.read(cx).snapshot(cx);
+        saving::ViewSaveSnapshot { entries, panels }
+    }
+
+    fn enqueue_view_save(&mut self, snapshot: saving::ViewSaveSnapshot, cx: &mut Context<Self>) {
+        let saving::ViewSaveSnapshot { entries, panels } = snapshot;
+        self.view_save_generation = self.view_save_generation.wrapping_add(1);
         let panel_store = crate::prefs::PanelStore::platform_default();
         let previous = self.view_save_task.take();
         let store = crate::prefs::ViewStore::platform_default();

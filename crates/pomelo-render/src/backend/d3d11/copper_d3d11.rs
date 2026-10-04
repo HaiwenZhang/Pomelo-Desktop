@@ -34,6 +34,8 @@ pub(super) struct CopperDrawOptions<'a> {
     pub visible: Option<&'a dyn Fn(&crate::copper::CopperBatch) -> bool>,
     pub annotations: Option<&'a mut ZoneAnnotations<'a>>,
     pub overrides: Option<&'a BTreeMap<pomelo_core::model::ObjectId, UploadedCopper>>,
+    pub static_shapes_fill_solid: bool,
+    pub network_selection: Option<pomelo_core::model::NetId>,
 }
 
 pub(super) const UPLOAD_BYTES_PER_FRAME: usize = 4 * 1024 * 1024;
@@ -234,8 +236,27 @@ struct Uniforms {
     view: [f32; 4],
     color: [f32; 4],
     rectangle: [f32; 4],
+    pattern: [u32; 16],
 }
-const _: () = assert!(size_of::<Uniforms>() == 112);
+const _: () = assert!(size_of::<Uniforms>() == 176);
+
+// Logical-pixel 16x16 stipple observed in the local Allegro static-shape view.
+// Rows are bitmap masks, allowing calibration without touching board geometry.
+const STATIC_SHAPE_STIPPLE: [u32; 16] = [
+    0, 0, 0, 0x0108, 0, 0, 0x0801, 0, 0, 0, 0, 0x0801, 0, 0, 0x0108, 0,
+];
+// Recovered from all 256 physical bitmap cells in the Allegro net highlight.
+// Independent screenshot regions reproduce this 109/256 pattern exactly at DPI 1.5.
+const NETWORK_SHAPE_STIPPLE: [u32; 16] = [
+    0, 0x01c0, 0x03e0, 0x07f0, 0x0ff8, 0x1ffc, 0x3ffe, 0x3ffe, 0x3ffe, 0x1ffc, 0x0ff8, 0x07f0,
+    0x03e0, 0x01c0, 0, 0,
+];
+// Minimal physical-period-four candidate from controlled NVL temporary selection.
+// Canvas phase compensates the reference's physical origin (294,144). Only DPI
+// 1.5 has actual Allegro screenshot evidence; other DPI remain policy coverage.
+const DYNAMIC_OBJECT_STIPPLE: [u32; 16] = [
+    0, 0x1111, 0, 0x4444, 0, 0x1111, 0, 0x4444, 0, 0x1111, 0, 0x4444, 0, 0x1111, 0, 0x4444,
+];
 
 struct StencilTarget {
     width: u32,
@@ -486,6 +507,8 @@ impl Pipeline {
             visible,
             mut annotations,
             overrides,
+            static_shapes_fill_solid,
+            network_selection,
         } = options;
         if cache.index_uploaded == 0 {
             return Ok((0, 0));
@@ -553,6 +576,7 @@ impl Pipeline {
             ],
             color: frame.fallback_color,
             rectangle: [0.0; 4],
+            pattern: STATIC_SHAPE_STIPPLE,
         };
         let ctx = context.context;
         let (mut targets, mut old_target, mut old_state, mut old_ref) = ([None], None, None, 0);
@@ -592,6 +616,60 @@ impl Pipeline {
                 if frame.pass != super::board::OverlayPass::Base && overlay.is_none() {
                     continue;
                 }
+                let zone = matches!(
+                    batch.selected_object,
+                    pomelo_core::selection::SelectedObject::Zone(_)
+                );
+                let net_selected =
+                    zone && matches!(
+                        batch.kind,
+                        pomelo_core::model::ZoneKind::Static
+                            | pomelo_core::model::ZoneKind::Dynamic
+                    ) && network_selection
+                        .or_else(|| frame.highlighted_net.map(|(net, _)| net))
+                        .is_some_and(|net| net.0 != 0 && net == batch.net);
+                let object_selected = frame.pass == super::board::OverlayPass::Selection
+                    && !net_selected
+                    && zone
+                    && frame
+                        .highlighted_object
+                        .is_some_and(|(object, _)| object == batch.selected_object);
+                // Solid static shapes retain their fill; unsupported kinds do
+                // not inherit a rule inferred from known static/dynamic shapes.
+                if object_selected
+                    && (batch.kind == pomelo_core::model::ZoneKind::Unknown
+                        || (batch.kind == pomelo_core::model::ZoneKind::Static
+                            && static_shapes_fill_solid))
+                {
+                    continue;
+                }
+                // Custom pads share this pipeline but never inherit static-shape styling.
+                uniforms.view[2] = if net_selected && frame.pass == super::board::OverlayPass::Base
+                {
+                    3.0 // Replace ordinary fill, retaining the full stencil for labels.
+                } else if net_selected && frame.pass == super::board::OverlayPass::Selection {
+                    2.0 // Dedicated physical-pixel persistent network bitmap.
+                } else if object_selected {
+                    if batch.kind == pomelo_core::model::ZoneKind::Static {
+                        4.0 // Recolor the existing logical sparse bitmap.
+                    } else {
+                        5.0 // Original material in gaps, white physical dense points.
+                    }
+                } else {
+                    f32::from(u8::from(
+                        !static_shapes_fill_solid
+                            && frame.pass == super::board::OverlayPass::Base
+                            && batch.kind == pomelo_core::model::ZoneKind::Static
+                            && zone,
+                    ))
+                };
+                uniforms.pattern = if uniforms.view[2] == 2.0 {
+                    NETWORK_SHAPE_STIPPLE
+                } else if uniforms.view[2] == 5.0 {
+                    DYNAMIC_OBJECT_STIPPLE
+                } else {
+                    STATIC_SHAPE_STIPPLE
+                };
                 let outer = batch.outer_indices();
                 let holes = batch.hole_indices();
                 if (batch.parity_rings.is_none() && outer.is_empty())
@@ -645,8 +723,19 @@ impl Pipeline {
                 if let Some(color) = overlay {
                     uniforms.color = color;
                 }
+                if object_selected && batch.kind == pomelo_core::model::ZoneKind::Dynamic {
+                    // Controlled alpha 99/128/255/0 evidence supports a second
+                    // source-over material draw in gaps, not a transparent gap.
+                    uniforms.color = frame.material_color(batch.layer, batch.net);
+                }
                 if frame.pass == super::board::OverlayPass::Base {
                     uniforms.color[3] *= opacity;
+                } else if (net_selected || object_selected)
+                    && frame.pass == super::board::OverlayPass::Selection
+                {
+                    // The observed highlighted shape retains the shapes slider,
+                    // independently of global alpha and ordinary UI selection alpha.
+                    uniforms.color[3] = opacity;
                 }
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 ctx.Map(

@@ -9,17 +9,21 @@ use gpui_kit::{
     },
 };
 use pomelo_core::{
-    display::BoardDisplay,
+    display::{BoardDisplay, LabelKind},
     i18n::{Locale, Message, MessageKey as Key, text},
 };
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type VisibilityHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
+type LabelHandler = Box<dyn Fn(&(LabelKind, bool), &mut Window, &mut App)>;
 pub struct DisplayCommands {
     pub filled: VisibilityHandler,
     pub drills: VisibilityHandler,
     pub backdrills: VisibilityHandler,
     pub copper: VisibilityHandler,
+    pub static_shapes_fill_solid: VisibilityHandler,
     pub texts: VisibilityHandler,
+    pub horizontal_pin_names: VisibilityHandler,
+    pub labels: LabelHandler,
     pub drawings: VisibilityHandler,
     pub decrease_opacity: ClickHandler,
     pub increase_opacity: ClickHandler,
@@ -31,6 +35,7 @@ pub fn controls(
     commands: DisplayCommands,
     scroll: &ScrollHandle,
 ) -> Vec<AnyElement> {
+    let labels = std::rc::Rc::new(commands.labels);
     vec![
         div()
             .px_4()
@@ -83,6 +88,14 @@ pub fn controls(
                     .checked(state.show_copper)
                     .on_change(commands.copper),
             ))
+            .child(FocusScroll::new(
+                "static-shapes-fill-solid",
+                scroll,
+                Checkbox::new("static-shapes-fill-solid")
+                    .label(text(locale, Key::StaticShapesFillSolid))
+                    .checked(state.static_shapes_fill_solid)
+                    .on_change(commands.static_shapes_fill_solid),
+            ))
             .child(
                 Message::new(Key::CopperOpacity)
                     .arg("percent", (state.copper_opacity * 100.0).round() as u32)
@@ -125,6 +138,48 @@ pub fn controls(
                     .checked(state.show_texts)
                     .on_change(commands.texts),
             ))
+            .into_any_element(),
+        div()
+            .px_4()
+            .py_2()
+            .child(FocusScroll::new(
+                "horizontal-pin-names",
+                scroll,
+                Checkbox::new("horizontal-pin-names")
+                    .label(text(locale, Key::HorizontalPinNames))
+                    .checked(state.horizontal_pin_names)
+                    .on_change(commands.horizontal_pin_names),
+            ))
+            .into_any_element(),
+        div()
+            .px_4()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .children(LabelKind::ALL.into_iter().map(|kind| {
+                let (id, key) = match kind {
+                    LabelKind::TrackNames => ("track-net-names", Key::TrackNetNames),
+                    LabelKind::PinNames => ("pin-net-names", Key::PinNetNames),
+                    LabelKind::ViaNames => ("via-net-names", Key::ViaNetNames),
+                    LabelKind::ZoneNames => ("zone-net-names", Key::ZoneNetNames),
+                    LabelKind::ThroughSpans => ("through-via-labels", Key::ThroughViaLabels),
+                    LabelKind::BlindBuriedSpans => {
+                        ("blind-buried-via-labels", Key::BlindBuriedViaLabels)
+                    }
+                };
+                let labels = labels.clone();
+                FocusScroll::new(
+                    id,
+                    scroll,
+                    Checkbox::new(id)
+                        .label(text(locale, key))
+                        .checked(state.label_options.enabled(kind))
+                        .on_change(move |enabled, window, cx| {
+                            labels(&(kind, *enabled), window, cx)
+                        }),
+                )
+            }))
             .into_any_element(),
         div()
             .id("drawing-visibility")

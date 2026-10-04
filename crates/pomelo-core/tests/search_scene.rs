@@ -394,6 +394,7 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
         finger: None,
     });
     board.zones.push(Zone {
+        kind: pomelo_core::model::ZoneKind::Unknown,
         id: ObjectId(0),
         layer: LayerId(1),
         net: NetId(7),
@@ -753,6 +754,7 @@ fn zone_candidates_exclude_holes_and_filter_before_truncation() {
     };
     board.zones = (0..66)
         .map(|id| Zone {
+            kind: pomelo_core::model::ZoneKind::Unknown,
             id: ObjectId(1000 + id),
             layer: LayerId(1),
             net: NetId(if id == 65 { 7 } else { 0 }),

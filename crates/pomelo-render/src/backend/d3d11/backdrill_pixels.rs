@@ -79,6 +79,8 @@ fn hardware_backdrill_patterns_match_web_and_follow_cut_layers_without_reupload(
                 .collect(),
         ),
         fallback_color: [1.0; 4],
+        material_override: None,
+        opacity: 1.0,
         color_mode: pomelo_core::display::ColorMode::Net,
         pass: super::super::super::OverlayPass::Base,
         filled: true,
@@ -112,7 +114,7 @@ fn hardware_backdrill_patterns_match_web_and_follow_cut_layers_without_reupload(
         zone_outlines: None,
         drawings: None,
         texts: None,
-        drill_color: [0.5; 4],
+        drill_color: [0.46, 0.49, 0.51, 1.0],
     };
     frame.traces.color_mode = pomelo_core::display::ColorMode::Layer;
     let pad_stats = Arc::new(TraceTelemetry::default());

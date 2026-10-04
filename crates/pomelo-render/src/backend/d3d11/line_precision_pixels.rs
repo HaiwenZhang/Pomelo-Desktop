@@ -84,6 +84,8 @@ fn hardware_long_lines_match_f64_capsules_at_deep_zoom() {
                     scale_factor: 1.0,
                     colors: Arc::new(BTreeMap::new()),
                     fallback_color: [0.3, 0.7, 0.4, 1.0],
+                    material_override: None,
+                    opacity: 1.0,
                     color_mode: pomelo_core::display::ColorMode::Layer,
                     pass: super::super::super::OverlayPass::Base,
                     filled: true,

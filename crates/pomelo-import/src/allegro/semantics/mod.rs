@@ -10,6 +10,7 @@ pub mod pad;
 pub mod padstack;
 pub mod placement;
 pub mod scene;
+mod shape_kind;
 pub mod text;
 pub mod units;
 

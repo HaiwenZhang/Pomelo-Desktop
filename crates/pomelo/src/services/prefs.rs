@@ -196,21 +196,30 @@ impl LanguageStore {
             .path
             .parent()
             .ok_or_else(|| self.failure(MessageKey::ConfigSaveFailed, "CONFIG_PARENT_MISSING"))?;
-        fs::create_dir_all(parent)
-            .map_err(|error| self.failure(MessageKey::ConfigSaveFailed, &error))?;
+        fs::create_dir_all(parent).map_err(|error| self.save_failure("directory", error))?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)
-            .map_err(|error| self.failure(MessageKey::ConfigSaveFailed, &error))?;
+            .map_err(|error| self.save_failure("temporary_create", error))?;
         serde_json::to_writer_pretty(&mut temporary, value)
-            .map_err(|error| self.failure(MessageKey::ConfigSaveFailed, &error))?;
+            .map_err(|error| self.save_failure("serialize", error))?;
         temporary
             .flush()
-            .and_then(|()| temporary.as_file().sync_all())
-            .map_err(|error| self.failure(MessageKey::ConfigSaveFailed, &error))?;
+            .map_err(|error| self.save_failure("flush", error))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| self.save_failure("sync_all", error))?;
         // tempfile uses MOVEFILE_REPLACE_EXISTING on Windows, unlike std::rename.
         temporary
             .persist(&self.path)
-            .map_err(|error| self.failure(MessageKey::ConfigSaveFailed, &error.error))?;
+            .map_err(|error| self.save_failure("persist", &error.error))?;
         Ok(())
+    }
+
+    fn save_failure(&self, stage: &'static str, details: impl std::fmt::Display) -> Diagnostic {
+        self.failure(
+            MessageKey::ConfigSaveFailed,
+            format!("stage={stage}; {details}"),
+        )
     }
 
     fn preserve_invalid(&self, invalid: bool) -> Result<(), Diagnostic> {
@@ -483,6 +492,60 @@ pub fn remember_relocated(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn atomic_save_failure_identifies_directory_stage_in_all_languages() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocked_parent = directory.path().join("parent-is-a-file");
+        fs::write(&blocked_parent, b"preserved").unwrap();
+        let store = LanguageStore {
+            path: blocked_parent.join("language.json"),
+        };
+        let error = store
+            .save_file(&LanguageFile {
+                schema_version: 1,
+                language: LanguagePreference::System,
+            })
+            .unwrap_err();
+        assert!(
+            error.code.as_ref() == "CONFIG_SAVE_FAILED"
+                && error.path.as_deref() == Some(store.path.as_path())
+                && error
+                    .technical_details
+                    .as_deref()
+                    .is_some_and(|details| details.starts_with("stage=directory; "))
+                && Locale::ALL
+                    .into_iter()
+                    .all(|locale| error.message.render(locale).is_ok())
+                && fs::read(blocked_parent).unwrap() == b"preserved",
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn failed_atomic_replace_preserves_destination_and_cleans_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("language.json");
+        fs::create_dir(&destination).unwrap();
+        let sentinel = destination.join("preserved");
+        fs::write(&sentinel, b"original").unwrap();
+        let store = LanguageStore { path: destination };
+        let error = store
+            .save_file(&LanguageFile {
+                schema_version: 1,
+                language: LanguagePreference::System,
+            })
+            .unwrap_err();
+        assert!(
+            error
+                .technical_details
+                .as_deref()
+                .is_some_and(|details| details.starts_with("stage=persist; "))
+                && fs::read(sentinel).unwrap() == b"original"
+                && fs::read_dir(directory.path()).unwrap().count() == 1,
+            "{error:?}"
+        );
+    }
+
     #[test]
     fn panel_layout_restores_each_side_and_remembered_expanded_width() {
         let directory = tempfile::tempdir().unwrap();

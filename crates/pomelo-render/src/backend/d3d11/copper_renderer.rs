@@ -75,6 +75,8 @@ pub struct CopperRenderer {
     uploaded: Option<UploadedCopper>,
     curves: BTreeMap<pomelo_core::model::ObjectId, UploadedCopper>,
     telemetry: Arc<CopperTelemetry>,
+    static_shapes_fill_solid: bool,
+    network_selection: Option<pomelo_core::model::NetId>,
 }
 impl CopperRenderer {
     fn is_uploaded(&self, source: &Arc<PreparedCopper>) -> bool {
@@ -88,6 +90,9 @@ impl CopperRenderer {
             uploaded: None,
             curves: BTreeMap::new(),
             telemetry,
+            // Standalone geometry callers and custom pad meshes retain solid fill.
+            static_shapes_fill_solid: true,
+            network_selection: None,
         }
     }
 
@@ -262,6 +267,8 @@ impl CopperRenderer {
                     visible,
                     annotations: None,
                     overrides: Some(&self.curves),
+                    static_shapes_fill_solid: self.static_shapes_fill_solid,
+                    network_selection: self.network_selection,
                 },
             )?;
         self.telemetry
@@ -311,6 +318,8 @@ impl CopperRenderer {
                     visible: None,
                     annotations: Some(annotations),
                     overrides: Some(&self.curves),
+                    static_shapes_fill_solid: self.static_shapes_fill_solid,
+                    network_selection: self.network_selection,
                 },
             )?;
         self.telemetry
@@ -375,6 +384,10 @@ impl BoardRenderer {
             drills: super::PadRenderer::new(drills),
         }
     }
+    pub fn with_source_stroke_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
+        self.texts = TraceRenderer::new(telemetry);
+        self
+    }
     pub fn with_label_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
         self.labels = TraceRenderer::new(telemetry);
         self
@@ -387,6 +400,38 @@ impl BoardRenderer {
         self.zone_outlines = TraceRenderer::new(telemetry);
         self
     }
+
+    /// Test-only aggregate of production readiness checks for geometric slots.
+    /// Text, labels and optional curve-LOD caches are intentionally outside this proof.
+    #[cfg(test)]
+    pub(super) fn geometry_is_uploaded(&self, frame: &BoardFrame) -> bool {
+        self.traces.is_uploaded(&frame.traces.tracks)
+            && self.copper.is_uploaded(&frame.copper)
+            && frame.pads.as_ref().is_none_or(|source| {
+                self.pads.is_uploaded(source)
+                    && source
+                        .custom_mesh
+                        .as_ref()
+                        .is_none_or(|mesh| self.custom_pads.is_uploaded(mesh))
+                    && source
+                        .custom_outlines
+                        .as_ref()
+                        .is_none_or(|edges| self.custom_outlines.is_uploaded(edges))
+            })
+            && frame
+                .drills
+                .as_ref()
+                .is_none_or(|source| self.drills.is_uploaded(source))
+            && frame
+                .zone_outlines
+                .as_ref()
+                .is_none_or(|source| self.zone_outlines.is_uploaded(source))
+            && frame
+                .drawings
+                .as_ref()
+                .filter(|source| !source.instances.is_empty())
+                .is_none_or(|source| self.drawings.is_uploaded(source))
+    }
 }
 impl NativeGpuRenderer for BoardRenderer {
     fn draw(
@@ -397,6 +442,14 @@ impl NativeGpuRenderer for BoardRenderer {
         let frame = data
             .downcast_ref::<BoardFrame>()
             .context("GPU_BOARD_PAYLOAD_INVALID")?;
+        self.copper.static_shapes_fill_solid = frame.display.static_shapes_fill_solid;
+        // Keep selection identity separate from base material colors. Standalone
+        // copper tinting and unknown zone styling retain their existing contract.
+        self.copper.network_selection = frame
+            .traces
+            .highlighted_net
+            .filter(|(net, _)| net.0 != 0)
+            .map(|(net, _)| net);
         // Defer copper uploads until this exact trace source is uploaded. Combined application
         // upload traffic remains <= 4 MiB/frame, including scene revisions and device recovery.
         let allow_copper_upload = self.traces.is_uploaded(&frame.traces.tracks);
@@ -455,23 +508,11 @@ impl NativeGpuRenderer for BoardRenderer {
             .texts
             .as_ref()
             .filter(|tracks| !tracks.instances.is_empty())
-            .map(|tracks| TraceFrame {
-                pass: super::board::OverlayPass::Base,
-                filled: true,
-                hover_selection: None,
-                color_mode: pomelo_core::display::ColorMode::Layer,
-                tracks: Arc::clone(tracks),
-                bounds: frame.traces.bounds,
-                camera: frame.traces.camera,
-                scale_factor: frame.traces.scale_factor,
-                colors: Arc::clone(&frame.traces.colors),
-                fallback_color: frame.traces.fallback_color,
-                highlighted_objects: None,
-                highlighted_net: None,
-                highlighted_trace: None,
-                highlighted_object: None,
-                hovered_object: None,
-                highlighted_related_objects: None,
+            .map(|tracks| {
+                let mut text = frame.traces.with_source(Arc::clone(tracks));
+                text.filled = true;
+                text.color_mode = pomelo_core::display::ColorMode::Layer;
+                text
             });
         if text_frame.is_none() {
             self.texts.clear_if_cached();
@@ -480,10 +521,11 @@ impl NativeGpuRenderer for BoardRenderer {
             .glyphs
             .as_ref()
             .map(|source| frame.traces.with_source(Arc::clone(source)));
-        let label_frame = frame
-            .labels
-            .as_ref()
-            .map(|source| frame.traces.base().with_source(Arc::clone(source)));
+        let label_frame = frame.labels.as_ref().map(|source| {
+            let mut labels = frame.traces.base().with_source(Arc::clone(source));
+            labels.opacity = frame.display.global_opacity;
+            labels
+        });
         self.traces.prepare(context, &frame.traces)?;
         let copper_ready = self
             .copper
@@ -613,7 +655,8 @@ impl NativeGpuRenderer for BoardRenderer {
             .store(0, Ordering::Relaxed);
         use super::board::{OverlayPass, TraceScope};
         use pomelo_core::display::{DisplayCategory as Category, LayerPrimitive};
-        let base = frame.traces.base();
+        let mut base = frame.traces.base();
+        base.opacity = frame.display.global_opacity;
         self.traces
             .draw_prepared(context, &base, TraceScope::Outline)?;
         let mut commands: Vec<_> = layers
@@ -659,6 +702,16 @@ impl NativeGpuRenderer for BoardRenderer {
                 if category != Category::Drill && !frame.display.layer_visible(layer) {
                     continue;
                 }
+                traces.material_override = frame.display.appearance.material(layer, category);
+                // Allegro's shapes slider overrides global alpha for shape fill;
+                // ordinary geometry and labels use the independent global value.
+                traces.opacity = if pass != OverlayPass::Base
+                    || matches!(category, Category::Zone | Category::ZoneOutline)
+                {
+                    1.0
+                } else {
+                    frame.display.global_opacity
+                };
                 match category {
                     Category::Zone
                         if copper_ready
@@ -705,11 +758,17 @@ impl NativeGpuRenderer for BoardRenderer {
                         {
                             let mut outline = traces.clone();
                             outline.tracks = Arc::clone(&source.tracks);
-                            self.zone_outlines.draw_prepared(
-                                context,
-                                &outline,
-                                TraceScope::Layer(layer),
-                            )?;
+                            let scope = if pass == OverlayPass::Base {
+                                // Controlled Allegro captures retain Dynamic hairlines at25/255,
+                                // and suppress independent bright boundaries starting at26/255.
+                                TraceScope::ZoneOutlines(
+                                    layer,
+                                    frame.copper_opacity <= 25.0 / 255.0,
+                                )
+                            } else {
+                                TraceScope::Layer(layer)
+                            };
+                            self.zone_outlines.draw_prepared(context, &outline, scope)?;
                         }
                     }
                     Category::Trace
@@ -801,6 +860,8 @@ impl NativeGpuRenderer for BoardRenderer {
                                 &{
                                     let mut drawing = drawing.clone();
                                     drawing.pass = pass;
+                                    drawing.material_override = traces.material_override;
+                                    drawing.opacity = traces.opacity;
                                     drawing
                                 },
                                 TraceScope::Layer(layer),
@@ -816,17 +877,27 @@ impl NativeGpuRenderer for BoardRenderer {
                                 &{
                                     let mut glyph = glyph.clone();
                                     glyph.pass = pass;
+                                    glyph.material_override = traces.material_override;
+                                    glyph.opacity = traces.opacity;
                                     glyph
                                 },
                                 TraceScope::Layer(layer),
                             )?;
                         }
-                        if pass == OverlayPass::Base
-                            && let Some(text) = &text_frame
+                        if let Some(text) = &text_frame
                             && self.texts.is_uploaded(&text.tracks)
                         {
-                            self.texts
-                                .draw_prepared(context, text, TraceScope::Layer(layer))?;
+                            self.texts.draw_prepared(
+                                context,
+                                &{
+                                    let mut text = text.clone();
+                                    text.pass = traces.pass;
+                                    text.material_override = traces.material_override;
+                                    text.opacity = traces.opacity;
+                                    text
+                                },
+                                TraceScope::Layer(layer),
+                            )?;
                         }
                     }
                     Category::Drill => {
@@ -836,8 +907,8 @@ impl NativeGpuRenderer for BoardRenderer {
                         {
                             let mut drill_frame = traces.clone();
                             drill_frame.color_mode = pomelo_core::display::ColorMode::Layer;
-                            drill_frame.colors = Arc::new(std::collections::BTreeMap::new());
-                            drill_frame.fallback_color = [0.46, 0.49, 0.51, 1.0];
+                            drill_frame.material_override =
+                                Some(traces.material_override.unwrap_or(frame.drill_color));
                             drill_frame.filled = true;
                             let visible = |instance: &crate::pads::PadInstance| {
                                 let backdrill = instance.source[3] & 2 != 0;

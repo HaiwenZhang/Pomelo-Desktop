@@ -109,6 +109,7 @@ fn zone_bounds_use_exterior_only_without_hole_or_stroke_expansion() {
     )
     .unwrap();
     scene.zones.push(Zone {
+        kind: pomelo_core::model::ZoneKind::Unknown,
         id: ObjectId(50),
         layer: LayerId(1),
         net: NetId(9),

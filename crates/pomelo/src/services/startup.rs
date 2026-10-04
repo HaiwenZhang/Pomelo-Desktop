@@ -12,6 +12,7 @@ pub struct Startup {
     pub paths: Vec<PathBuf>,
     pub options: ImportOptions,
     pub locale: Option<Locale>,
+    pub source_font: Option<super::source_font::SourceFontConfig>,
 }
 
 impl Startup {
@@ -22,7 +23,7 @@ impl Startup {
             if arg == "--" {
                 break;
             }
-            if arg == "--encoding" {
+            if arg == "--encoding" || arg == "--source-font" || arg == "--source-font-block" {
                 args.next();
             } else if arg == "--locale"
                 && let Some(tag) = args.next()
@@ -40,12 +41,18 @@ impl Startup {
         let mut result = Self::default();
         let mut args = args.into_iter();
         let mut encoding_seen = false;
+        let mut source_font = None;
+        let mut source_block = None;
         while let Some(arg) = args.next() {
             if arg == "--" {
                 result.paths.extend(args.map(PathBuf::from));
                 break;
             }
-            if arg == "--encoding" || arg == "--locale" {
+            if arg == "--encoding"
+                || arg == "--locale"
+                || arg == "--source-font"
+                || arg == "--source-font-block"
+            {
                 let option = arg.to_string_lossy();
                 let value = args.next().ok_or_else(|| {
                     let mut error = Diagnostic::error("CLI_MISSING_VALUE", Key::CliMissingValue);
@@ -53,7 +60,20 @@ impl Startup {
                     error
                 })?;
                 let tag = value.to_string_lossy();
-                if arg == "--encoding" {
+                if arg == "--source-font" {
+                    if source_font.is_some() || value.is_empty() {
+                        return Err(invalid_option(option.as_ref()));
+                    }
+                    source_font = Some(PathBuf::from(value));
+                } else if arg == "--source-font-block" {
+                    if source_block.is_some() {
+                        return Err(invalid_option(option.as_ref()));
+                    }
+                    source_block = Some(
+                        tag.parse::<u8>()
+                            .map_err(|_| invalid_option(option.as_ref()))?,
+                    );
+                } else if arg == "--encoding" {
                     if encoding_seen {
                         return Err(invalid_option(option.as_ref()));
                     }
@@ -91,6 +111,18 @@ impl Startup {
                 result.paths.push(arg.into());
             }
         }
+        result.source_font = match (source_font, source_block) {
+            (Some(path), Some(text_block)) => {
+                Some(super::source_font::SourceFontConfig { path, text_block })
+            }
+            (None, None) => None,
+            _ => {
+                return Err(Diagnostic::error(
+                    "CLI_SOURCE_FONT_OPTIONS",
+                    Key::SourceFontOptions,
+                ));
+            }
+        };
         Ok(result)
     }
 }
@@ -164,6 +196,63 @@ mod tests {
             parse(&["--", "--locale", "ja"]).unwrap().paths,
             [PathBuf::from("--locale"), PathBuf::from("ja")]
         );
+    }
+    #[test]
+    fn explicit_source_font_and_block_do_not_become_board_paths() {
+        let startup = parse(&[
+            "--source-font",
+            "字体 目录/ansi.dat",
+            "--source-font-block",
+            "3",
+            "--locale",
+            "ja",
+            "board.brd",
+        ])
+        .unwrap();
+        let config = startup.source_font.unwrap();
+        assert_eq!(config.path, PathBuf::from("字体 目录/ansi.dat"));
+        assert_eq!(config.text_block, 3);
+        assert_eq!(startup.paths, [PathBuf::from("board.brd")]);
+        assert_eq!(startup.locale, Some(Locale::Japanese));
+        assert!(parse(&["board.brd"]).unwrap().source_font.is_none());
+        assert_eq!(
+            Startup::diagnostic_locale(
+                &["--source-font", "--locale", "ja"].map(OsString::from),
+                Locale::English
+            ),
+            Locale::English
+        );
+    }
+    #[test]
+    fn source_font_requires_a_single_valid_explicit_block_in_all_languages() {
+        for args in [
+            vec!["--source-font", "ansi.dat"],
+            vec!["--source-font-block", "3"],
+            vec!["--source-font"],
+            vec!["--source-font-block", "-1"],
+            vec!["--source-font-block", "256"],
+            vec![
+                "--source-font",
+                "ansi.dat",
+                "--source-font",
+                "other.dat",
+                "--source-font-block",
+                "3",
+            ],
+            vec![
+                "--source-font",
+                "ansi.dat",
+                "--source-font-block",
+                "3",
+                "--source-font-block",
+                "4",
+            ],
+        ] {
+            let error = parse(&args).unwrap_err();
+            for locale in Locale::ALL {
+                assert!(error.message.render(locale).is_ok());
+            }
+        }
     }
     #[test]
     fn invalid_arguments_are_localized_in_all_languages() {

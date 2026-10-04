@@ -25,7 +25,7 @@ pub struct TraceInstance {
     pub ids: [u32; 4],
     /// [kind (0 line / 1 arc), combined source index, width bits, flags].
     /// Flags: full arc=1, long arc=2, board outline=4, zone=8,
-    /// custom pin/via edge=16/32, drawing=64.
+    /// custom pin/via edge=16/32, drawing=64, reliable Dynamic zone=128.
     pub flags: [u32; 4],
 }
 
@@ -68,6 +68,8 @@ pub enum PrepareError {
     Cancelled,
     #[error("RENDER_PREPARE_LIMIT actual={actual} limit={limit}")]
     Limit { actual: usize, limit: usize },
+    #[error("RENDER_PREPARE_COUNT_LIMIT actual={actual} limit={limit}")]
+    CountLimit { actual: usize, limit: usize },
     #[error("RENDER_PREPARE_INVALID object={0:?}")]
     Invalid(ObjectId),
     #[error("RENDER_PREPARE_ALLOCATION")]
@@ -78,6 +80,15 @@ impl PrepareError {
     pub fn diagnostic(&self) -> Diagnostic {
         match self {
             Self::Cancelled => Diagnostic::error("RENDER_PREPARE_CANCELLED", MessageKey::Cancelled),
+            Self::CountLimit { actual, limit } => {
+                let mut diagnostic =
+                    Diagnostic::error("RENDER_PREPARE_COUNT_LIMIT", MessageKey::GeometryCountLimit);
+                diagnostic.message = diagnostic
+                    .message
+                    .arg("actual", *actual)
+                    .arg("limit", *limit);
+                diagnostic
+            }
             Self::Limit { actual, limit } => {
                 let mut diagnostic =
                     Diagnostic::error("RENDER_PREPARE_LIMIT", MessageKey::GeometryLimit);
@@ -116,6 +127,9 @@ impl PreparedTracks {
         limits: TraceLimits,
         cancellation: &CancellationToken,
     ) -> Result<Self, PrepareError> {
+        if cancellation.is_cancelled() {
+            return Err(PrepareError::Cancelled);
+        }
         let count = zones.iter().fold(0usize, |count, zone| {
             count.saturating_add(if zone.paths.is_empty() {
                 zone.mesh.vertices.len()
@@ -123,22 +137,40 @@ impl PreparedTracks {
                 zone.paths.iter().map(Vec::len).sum()
             })
         });
-        if count > limits.max_instances
-            || count.saturating_mul(size_of::<TraceInstance>() + size_of::<Segment>())
-                > limits.max_bytes
-        {
-            return Err(PrepareError::Limit {
+        if count > limits.max_instances {
+            return Err(PrepareError::CountLimit {
                 actual: count,
-                limit: limits
-                    .max_instances
-                    .min(limits.max_bytes / (size_of::<TraceInstance>() + size_of::<Segment>())),
+                limit: limits.max_instances,
+            });
+        }
+        let dynamic_count = zones
+            .iter()
+            .filter(|zone| zone.kind == pomelo_core::model::ZoneKind::Dynamic)
+            .count();
+        let bytes = count
+            .saturating_mul(size_of::<TraceInstance>() + size_of::<Segment>())
+            .saturating_add(dynamic_count.saturating_mul(size_of::<ObjectId>()));
+        if bytes > limits.max_bytes {
+            return Err(PrepareError::Limit {
+                actual: bytes,
+                limit: limits.max_bytes,
             });
         }
         let mut edges = Vec::new();
         edges
             .try_reserve_exact(count)
             .map_err(|_| PrepareError::Allocation)?;
+        let mut dynamic_ids = Vec::new();
+        dynamic_ids
+            .try_reserve_exact(dynamic_count)
+            .map_err(|_| PrepareError::Allocation)?;
         for zone in zones {
+            if cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
+            if zone.kind == pomelo_core::model::ZoneKind::Dynamic {
+                dynamic_ids.push(zone.id);
+            }
             if zone.paths.is_empty() {
                 for range in zone.mesh.ring_offsets.windows(2) {
                     let ring = &zone.mesh.vertices[range[0] as usize..range[1] as usize];
@@ -178,9 +210,20 @@ impl PreparedTracks {
                 }
             }
         }
+        dynamic_ids.sort_unstable();
         let mut prepared = Self::build(&edges, limits, cancellation)?;
-        for instance in &mut prepared.instances {
+        for (index, instance) in prepared.instances.iter_mut().enumerate() {
+            if index % 256 == 0 && cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
             instance.flags[3] |= 8;
+            if dynamic_ids
+                .binary_search(&ObjectId(instance.ids[0]))
+                .is_ok()
+            {
+                // Resident kind metadata lets shape alpha change without re-uploading edges.
+                instance.flags[3] |= 128;
+            }
         }
         Ok(prepared)
     }
@@ -592,6 +635,74 @@ impl PreparedTracks {
 mod tests {
     use super::*;
     use pomelo_core::model::{Arc, NetId};
+
+    #[test]
+    fn zone_outline_kind_survives_layer_reordering_and_analytic_arc_preparation() {
+        use pomelo_core::model::{Zone, ZoneKind};
+        let source = [ZoneKind::Unknown, ZoneKind::Static, ZoneKind::Dynamic]
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                let mut arc = line(index as u32, index as u32);
+                arc.a = Point::new(1.0, 0.0);
+                arc.b = Point::new(0.0, 1.0);
+                arc.arc = Some(Arc {
+                    center: Point::default(),
+                    radius: 1.0,
+                    start: 0.0,
+                    sweep: std::f64::consts::FRAC_PI_2,
+                });
+                Zone {
+                    id: ObjectId(10 + index as u32),
+                    layer: LayerId(2 - index as u32),
+                    net: NetId(1),
+                    kind,
+                    paths: vec![vec![line(index as u32, 0), arc]],
+                    mesh: Default::default(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let prepared = PreparedTracks::build_zone_outlines(
+            &source,
+            TraceLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        assert_eq!(prepared.instances.len(), 6);
+        for instance in prepared.instances {
+            assert_ne!(instance.flags[3] & 8, 0);
+            assert_eq!(instance.flags[3] & 128 != 0, instance.ids[0] == 12);
+        }
+    }
+
+    #[test]
+    fn empty_dynamic_zone_outline_scratch_is_bounded_and_cancellation_wins() {
+        let source = [pomelo_core::model::Zone {
+            id: ObjectId(1),
+            layer: LayerId(0),
+            net: NetId(1),
+            kind: pomelo_core::model::ZoneKind::Dynamic,
+            paths: vec![],
+            mesh: Default::default(),
+        }];
+        let limits = TraceLimits {
+            max_instances: 0,
+            max_bytes: size_of::<ObjectId>() - 1,
+        };
+        assert!(matches!(
+            PreparedTracks::build_zone_outlines(&source, limits, &CancellationToken::default()),
+            Err(PrepareError::Limit {
+                actual: 4,
+                limit: 3
+            })
+        ));
+        let token = CancellationToken::default();
+        token.cancel();
+        assert!(matches!(
+            PreparedTracks::build_zone_outlines(&source, limits, &token),
+            Err(PrepareError::Cancelled)
+        ));
+    }
 
     fn line(id: u32, layer: u32) -> Segment {
         Segment {

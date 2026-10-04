@@ -25,6 +25,7 @@ pub struct LayerRow {
     pub function: Option<LayerFunction>,
     pub expanded: bool,
     pub primitives: LayerPrimitives,
+    pub colors: Vec<AnyElement>,
 }
 type SharedClickHandler = std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -247,6 +248,16 @@ pub fn row(locale: Locale, state: LayerRow, commands: LayerCommands, cx: &App) -
                                 })
                         }),
                     ),
+            )
+            .child(
+                div()
+                    .pl_8()
+                    .pr_2()
+                    .pb_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(state.colors),
             )
         });
     div().w_full().px_3().child(content).into_any_element()

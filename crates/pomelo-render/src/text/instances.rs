@@ -1,4 +1,4 @@
-//! Compact straight-stroke preparation; GPU integration is a separate step.
+//! Source text strokes and picking geometry shared by native backends.
 use crate::{
     split_position,
     text::{PreparedTexts, StrokeGlyphs, TextPreparationSummary},
@@ -9,7 +9,7 @@ use pomelo_core::{
     task::CancellationToken,
 };
 
-/// Four 16-byte vectors. Endpoints retain high/residual precision; a future
+/// Four 16-byte vectors. Endpoints retain high/residual precision; the native
 /// text shader derives its quad from endpoints and width rather than storing
 /// arc data and redundant bounds for every straight font stroke.
 #[derive(Debug, PartialEq)]
@@ -19,7 +19,7 @@ pub struct TextInstance {
     pub b: [f32; 4],
     /// Source object, layer, global source stroke ordinal, width bits.
     pub ids: [u32; 4],
-    /// Reserved for the matching text shader; always initialized to zero.
+    /// Drawing owner and bound flag; remaining slots are reserved.
     pub flags: [u32; 4],
 }
 const _: () = assert!(std::mem::size_of::<TextInstance>() == 64);
@@ -34,32 +34,59 @@ pub struct PreparedTextInstances {
     pub batches: Vec<TextLayerBatch>,
     pub objects: Vec<ObjectId>,
     pub summary: TextPreparationSummary,
+    pub pick_quads: Vec<pomelo_core::picking_index::TextPickQuad>,
 }
 
 impl PreparedTextInstances {
-    /// Explicit CPU experiment. Does not claim shader or viewport support.
-    pub fn build(
-        texts: &[BoardText],
+    pub fn bind_drawing_owners(&mut self, scene: &pomelo_core::model::BoardScene) {
+        let owners: std::collections::BTreeMap<_, _> = scene
+            .drawings
+            .iter()
+            .flat_map(|drawing| drawing.text_ids.iter().map(move |id| (id.0, drawing.id.0)))
+            .collect();
+        for stroke in &mut self.instances {
+            if let Some(&owner) = owners.get(&stroke.ids[0]) {
+                stroke.flags[0] = owner;
+                stroke.flags[1] = 1;
+            }
+        }
+    }
+
+    /// Prepare source text in board coordinates for the native stroke pipeline.
+    pub fn build<'a, I>(
+        texts: I,
         font: &impl StrokeGlyphs,
         max_objects: usize,
         max_characters: usize,
         max_bytes: usize,
         cancellation: &CancellationToken,
-    ) -> Result<Self, Diagnostic> {
+    ) -> Result<Self, Diagnostic>
+    where
+        I: IntoIterator<Item = &'a BoardText>,
+        I::IntoIter: Clone,
+    {
         // Bound instances and the worst case of one layer run per stroke.
         // Object identities, diagnostics and fonts have separate budgets.
-        let stride = std::mem::size_of::<TextInstance>() + std::mem::size_of::<TextLayerBatch>();
+        let stride = std::mem::size_of::<TextInstance>()
+            + std::mem::size_of::<TextLayerBatch>()
+            + std::mem::size_of::<pomelo_core::picking_index::TextPickQuad>();
         let count_limit = (max_bytes / stride).min(u32::MAX as usize);
+        let texts = texts.into_iter();
         let count = crate::text::count_text_strokes(
-            &texts[..texts.len().min(max_objects)],
+            texts.clone().take(max_objects),
             font,
             max_characters,
             cancellation,
         )
-        .map_or(0, |(count, _)| count);
+        .map_or(0, |(count, _)| count)
+        .min(count_limit);
         let mut instances = Vec::new();
         instances
-            .try_reserve_exact(count.min(count_limit))
+            .try_reserve_exact(count)
+            .map_err(|_| PrepareError::Allocation.diagnostic())?;
+        let mut pick_quads = Vec::new();
+        pick_quads
+            .try_reserve_exact(count)
             .map_err(|_| PrepareError::Allocation.diagnostic())?;
         let mut objects = Vec::new();
         let summary = PreparedTexts::visit_recovering_missing_glyphs(
@@ -75,6 +102,9 @@ impl PreparedTextInstances {
                     .map_err(|_| PrepareError::Allocation.diagnostic())?;
                 objects
                     .try_reserve(1)
+                    .map_err(|_| PrepareError::Allocation.diagnostic())?;
+                pick_quads
+                    .try_reserve_exact(strokes.len())
                     .map_err(|_| PrepareError::Allocation.diagnostic())?;
                 for stroke in strokes {
                     if cancellation.is_cancelled() {
@@ -104,6 +134,31 @@ impl PreparedTextInstances {
                     {
                         return Err(PrepareError::Invalid(text.id).diagnostic());
                     }
+                    // Each capsule gets a conservative oriented quad. Pen lifts
+                    // stay outside the narrow phase, and no MSDF metrics leak in.
+                    let dx = stroke.b[0] - stroke.a[0];
+                    let dy = stroke.b[1] - stroke.a[1];
+                    let length = dx.hypot(dy);
+                    let (ux, uy) = if length > 0.0 {
+                        (dx / length, dy / length)
+                    } else {
+                        (1.0, 0.0)
+                    };
+                    let corner = |point: [f64; 2], along: f64, normal: f64| {
+                        pomelo_core::model::Point::new(
+                            point[0] + ux * along - uy * normal,
+                            point[1] + uy * along + ux * normal,
+                        )
+                    };
+                    pick_quads.push(pomelo_core::picking_index::TextPickQuad {
+                        text: text.id,
+                        corners: [
+                            corner(stroke.a, -half_width, -half_width),
+                            corner(stroke.b, half_width, -half_width),
+                            corner(stroke.b, half_width, half_width),
+                            corner(stroke.a, -half_width, half_width),
+                        ],
+                    });
                     instances.push(TextInstance {
                         a,
                         b,
@@ -146,6 +201,7 @@ impl PreparedTextInstances {
             batches,
             objects,
             summary,
+            pick_quads,
         })
     }
 }

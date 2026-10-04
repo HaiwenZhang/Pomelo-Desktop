@@ -74,7 +74,6 @@ pub fn run() -> ExitCode {
             KeyBinding::new("up", viewport::PanUp, Some("BoardViewport")),
             KeyBinding::new("down", viewport::PanDown, Some("BoardViewport")),
         ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -82,9 +81,21 @@ pub fn run() -> ExitCode {
         })
         .detach();
         let result = open_window(crate::main_window::options(cx), cx, |window, cx| {
-            let workbench = cx.new(|cx| Workbench::new(startup.options.clone(), window, cx));
-            window.on_window_should_close(cx, |_, cx| {
-                cx.quit();
+            let workbench = cx.new(|cx| {
+                Workbench::new(
+                    startup.options.clone(),
+                    startup.source_font.clone(),
+                    window,
+                    cx,
+                )
+            });
+            let quit_workbench = workbench.downgrade();
+            cx.on_action(move |_: &Quit, cx| {
+                let _ = quit_workbench.update(cx, |this, cx| this.request_quit(cx));
+            });
+            let close_workbench = workbench.downgrade();
+            window.on_window_should_close(cx, move |_, cx| {
+                let _ = close_workbench.update(cx, |this, cx| this.request_quit(cx));
                 false
             });
             window.focus(&workbench.read(cx).focus_handle(cx), cx);

@@ -8,7 +8,7 @@ use crate::{
 use gpui::NativeGpuRenderer;
 use gpui::{Bounds as ViewBounds, ContentMask, ScaledPixels, point, size};
 use pomelo_core::{
-    model::{Arc as BoardArc, Bounds, NetId, ObjectId, Point, Segment},
+    model::{Arc as BoardArc, Bounds, LayerId, NetId, ObjectId, Point, Segment},
     task::CancellationToken,
 };
 use std::collections::BTreeMap;
@@ -28,6 +28,26 @@ use windows::{
 
 const SIDE: u32 = 128;
 
+#[path = "appearance_pixels.rs"]
+mod appearance;
+
+#[path = "compositor_parity_pixels.rs"]
+mod compositor_parity;
+
+#[path = "static_shape_pixels.rs"]
+mod static_shape;
+
+#[path = "label_opacity_pixels.rs"]
+mod label_opacity;
+#[path = "zone_highlight_pixels.rs"]
+mod zone_highlight;
+
+#[path = "dynamic_outline_pixels.rs"]
+mod dynamic_outline;
+
+#[path = "ansi_text_pixels.rs"]
+mod ansi_text;
+
 #[path = "line_precision_pixels.rs"]
 mod line_precision;
 
@@ -39,6 +59,12 @@ mod die_pad;
 
 #[path = "curve_fill_pixels.rs"]
 mod curve_fill;
+
+#[path = "s5000c_u94_pixels.rs"]
+mod s5000c_u94;
+
+#[path = "s5000c_full_geometry_pixels.rs"]
+mod s5000c_full_geometry;
 
 #[test]
 #[ignore = "requires a Windows hardware D3D11 adapter; diagnostic readback only"]
@@ -210,6 +236,8 @@ fn hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache() {
             (LayerId(1), [0.0, 0.0, 1.0, 1.0]),
         ])),
         fallback_color: [1.0; 4],
+        material_override: None,
+        opacity: 1.0,
         color_mode: pomelo_core::display::ColorMode::Layer,
         pass: super::super::OverlayPass::Base,
         filled: false,
@@ -395,6 +423,8 @@ fn hardware_msdf_atlas_matches_web_sampling_rotation_mirroring_and_dpi() {
         scale_factor: 1.0,
         colors: Arc::new(colors),
         fallback_color: [1.0; 4],
+        material_override: None,
+        opacity: 1.0,
         color_mode: pomelo_core::display::ColorMode::Layer,
         pass: super::super::OverlayPass::Base,
         filled: true,
@@ -579,6 +609,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     };
     let cancellation = CancellationToken::default();
     let zone = Zone {
+        kind: pomelo_core::model::ZoneKind::Unknown,
         id: ObjectId(2),
         layer: LayerId(2),
         net: NetId(1),
@@ -634,6 +665,8 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
             (LayerId(3), [0.0, 0.0, 1.0, 1.0]),
         ])),
         fallback_color: [1.0; 4],
+        material_override: None,
+        opacity: 1.0,
         highlighted_net: None,
         highlighted_objects: None,
         highlighted_related_objects: None,
@@ -864,6 +897,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     assert_eq!(telemetry.snapshot().resets, 1);
 
     let overlay = Zone {
+        kind: pomelo_core::model::ZoneKind::Unknown,
         id: ObjectId(3),
         layer: LayerId(3),
         net: NetId(1),
@@ -940,7 +974,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         display: Arc::new(pomelo_core::display::BoardDisplay::default()),
         pads: None,
         drills: None,
-        drill_color: [1.0; 4],
+        drill_color: [0.46, 0.49, 0.51, 1.0],
         copper: layered,
         copper_opacity: 0.5,
         layer_order: Arc::new(vec![LayerId(2), LayerId(3), LayerId(1)]),
@@ -2337,6 +2371,8 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         scale_factor: 1.0,
         colors: Arc::new(BTreeMap::from([(LayerId(1), [1.0, 0.0, 0.0, 1.0])])),
         fallback_color: [1.0, 0.0, 0.0, 1.0],
+        material_override: None,
+        opacity: 1.0,
         highlighted_objects: None,
         highlighted_net: None,
         highlighted_trace: None,
@@ -2619,6 +2655,8 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
         scale_factor: 1.0,
         colors,
         fallback_color: [1.0; 4],
+        material_override: None,
+        opacity: 1.0,
         highlighted_net: None,
         highlighted_objects: None,
         highlighted_related_objects: None,
@@ -2989,6 +3027,8 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
         scale_factor: 1.0,
         colors: Arc::clone(&frame.colors),
         fallback_color: [1.0; 4],
+        material_override: None,
+        opacity: 1.0,
         highlighted_net: None,
         highlighted_objects: None,
         highlighted_related_objects: None,
@@ -3543,6 +3583,8 @@ fn hardware_real_board_compact_text_upload_draw_and_reset() {
         scale_factor: 1.0,
         colors: Arc::new(BTreeMap::new()),
         fallback_color: [1.0, 0.0, 0.0, 1.0],
+        material_override: None,
+        opacity: 1.0,
         highlighted_objects: None,
         highlighted_net: None,
         highlighted_trace: None,

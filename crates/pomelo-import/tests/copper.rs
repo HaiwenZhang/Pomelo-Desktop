@@ -3,6 +3,9 @@ use pomelo_core::{
     model::{LayerId, NetId, ObjectId, Point},
     task::CancellationToken,
 };
+
+#[path = "copper/kind.rs"]
+mod kind;
 use pomelo_import::{
     ImportContext, ImportError, ImportOptions,
     allegro::{

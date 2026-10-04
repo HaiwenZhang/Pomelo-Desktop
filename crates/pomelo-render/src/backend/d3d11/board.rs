@@ -21,6 +21,8 @@ use std::{
 pub(super) enum TraceScope {
     All,
     Layer(LayerId),
+    /// Base zone boundaries; true retains the low-shape-alpha physical hairline.
+    ZoneOutlines(LayerId, bool),
     Outline,
     /// Custom pad edges filtered by owner category (pin=true / via=false).
     Pads(LayerId, bool),
@@ -46,6 +48,10 @@ pub struct TraceFrame<S: InstanceSource = PreparedTracks> {
     pub scale_factor: f32,
     pub colors: Arc<BTreeMap<LayerId, [f32; 4]>>,
     pub fallback_color: [f32; 4],
+    /// Optional category color selected by the board compositor.
+    pub material_override: Option<[f32; 4]>,
+    /// Base material alpha; selection and hover remain independently readable.
+    pub opacity: f32,
     pub highlighted_objects: Option<(
         Arc<std::collections::BTreeSet<pomelo_core::model::ObjectId>>,
         [f32; 4],
@@ -83,6 +89,8 @@ impl<S: InstanceSource> Clone for TraceFrame<S> {
             scale_factor: self.scale_factor,
             colors: Arc::clone(&self.colors),
             fallback_color: self.fallback_color,
+            material_override: self.material_override,
+            opacity: self.opacity,
             highlighted_objects: self.highlighted_objects.clone(),
             highlighted_net: self.highlighted_net,
             highlighted_trace: self.highlighted_trace,
@@ -106,6 +114,8 @@ impl<S: InstanceSource> TraceFrame<S> {
             scale_factor: self.scale_factor,
             colors: Arc::clone(&self.colors),
             fallback_color: self.fallback_color,
+            material_override: self.material_override,
+            opacity: self.opacity,
             highlighted_objects: self.highlighted_objects.clone(),
             highlighted_net: self.highlighted_net,
             highlighted_trace: self.highlighted_trace,
@@ -148,19 +158,22 @@ impl<S: InstanceSource> TraceFrame<S> {
         base.hover_selection = None;
         base
     }
+    pub(super) fn layer_color(&self, layer: LayerId) -> [f32; 4] {
+        let mut color = self.material_override.unwrap_or_else(|| {
+            self.colors
+                .get(&layer)
+                .copied()
+                .unwrap_or(self.fallback_color)
+        });
+        color[3] *= self.opacity;
+        color
+    }
     pub(super) fn material_color(
         &self,
         layer: LayerId,
         net: pomelo_core::model::NetId,
     ) -> [f32; 4] {
-        crate::scene::colors::copper_color(
-            self.color_mode,
-            self.colors
-                .get(&layer)
-                .copied()
-                .unwrap_or(self.fallback_color),
-            net,
-        )
+        crate::scene::colors::copper_color(self.color_mode, self.layer_color(layer), net)
     }
 
     pub(super) fn object_highlight(

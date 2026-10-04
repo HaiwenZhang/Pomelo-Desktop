@@ -72,6 +72,7 @@ pub(crate) fn zone(id: u32, rings: Vec<Vec<Point>>, paths: Vec<Vec<Segment>>) ->
     )
     .unwrap();
     Zone {
+        kind: pomelo_core::model::ZoneKind::Unknown,
         id: ObjectId(id),
         layer: LayerId(1),
         net: NetId(1),
@@ -107,6 +108,27 @@ fn prepare(
         &CancellationToken::default(),
     )
     .unwrap()
+}
+
+#[test]
+fn refined_curve_cache_keeps_source_static_shape_kind() {
+    let mut shape = disk(123, 0.0);
+    shape.kind = pomelo_core::model::ZoneKind::Static;
+    let scene = board(vec![shape]);
+    let refined = prepare(
+        &scene,
+        view(0.0, 1e-4),
+        &CurveFillCache::default(),
+        CurveCacheLimits::default(),
+    );
+    let batch = &refined.entries[&ObjectId(123)].source.batches[0];
+    assert_eq!(
+        (batch.kind, batch.selected_object),
+        (
+            pomelo_core::model::ZoneKind::Static,
+            pomelo_core::selection::SelectedObject::Zone(ObjectId(123))
+        )
+    );
 }
 #[test]
 fn threshold_is_physical_and_flip_keeps_normalized_view_bounds() {

@@ -1,5 +1,6 @@
 //! Format-independent PCB data, geometry and document task identity.
 
+pub mod appearance;
 pub mod display;
 pub mod geometry;
 pub mod i18n;

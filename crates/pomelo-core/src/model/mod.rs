@@ -293,11 +293,26 @@ pub struct BondFinger {
     pub source_pin: Option<ObjectId>,
 }
 
+/// Source shape identity controls presentation; it does not alter copper geometry.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoneKind {
+    /// Source ownership has not been proved, including older saved scenes.
+    #[default]
+    Unknown,
+    /// A standalone static copper shape, independently confirmed by the importer.
+    Static,
+    /// Computed copper referenced by a dynamic shape boundary.
+    Dynamic,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Zone {
     pub id: ObjectId,
     pub layer: LayerId,
     pub net: NetId,
+    #[serde(default)]
+    pub kind: ZoneKind,
     /// Exact boundaries remain available for curved edge rendering and picking.
     pub paths: Vec<Vec<Segment>>,
     /// Outer coverage and hole coverage must be composed separately on the GPU.

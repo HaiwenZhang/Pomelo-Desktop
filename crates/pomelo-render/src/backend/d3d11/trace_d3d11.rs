@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Context as _, ensure};
 use gpui::NativeGpuContext;
-use pomelo_core::{interaction::Camera, model::LayerId};
+use pomelo_core::interaction::Camera;
 use std::sync::Arc;
 use windows::{
     Win32::{
@@ -92,11 +92,25 @@ impl InstanceSource for crate::text_instances::PreparedTextInstances {
     }
     fn selection_ids(&self, index: usize) -> [u32; 4] {
         [
-            self.instances[index].ids[0],
+            if self.instances[index].flags[1] == 1 {
+                self.instances[index].flags[0]
+            } else {
+                self.instances[index].ids[0]
+            },
             0,
             self.instances[index].ids[1],
             0,
         ]
+    }
+    fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
+        let stroke = &self.instances[index];
+        pomelo_core::selection::SelectedObject::Drawing(pomelo_core::model::ObjectId(
+            if stroke.flags[1] == 1 {
+                stroke.flags[0]
+            } else {
+                u32::MAX
+            },
+        ))
     }
 }
 
@@ -255,6 +269,14 @@ pub(super) struct Pipeline {
     atlas: Option<super::msdf_d3d11::AtlasResources>,
 }
 
+fn msdf_shader_source() -> String {
+    format!(
+        "#define PCB_SOURCE_TEXT_CATEGORY {}u\n{}",
+        pomelo_core::display::DisplayCategory::Text as u32,
+        include_str!("../../shaders/label.hlsl")
+    )
+}
+
 impl Pipeline {
     pub fn new_msdf(
         device: &ID3D11Device,
@@ -262,7 +284,7 @@ impl Pipeline {
     ) -> anyhow::Result<Self> {
         let mut pipeline = Self::new_with_source(
             device,
-            include_str!("../../shaders/label.hlsl"),
+            &msdf_shader_source(),
             s!("pomelo-render/label.hlsl"),
         )?;
         pipeline.atlas = Some(super::msdf_d3d11::AtlasResources::new(device, font)?);
@@ -438,11 +460,20 @@ impl Pipeline {
             view: [
                 camera.pixels_per_mm as f32,
                 if camera.flipped { -1.0 } else { 1.0 },
-                0.0,
+                frame.opacity,
                 frame.pass as u8 as f32,
             ],
             color: frame.fallback_color,
-            batch: [0, selection_id, selection_kind, 0],
+            batch: [
+                0,
+                selection_id,
+                selection_kind,
+                match scope {
+                    super::board::TraceScope::ZoneOutlines(_, true) => 1,
+                    super::board::TraceScope::ZoneOutlines(_, false) => 2,
+                    _ => 0,
+                },
+            ],
             highlight,
         };
         let ctx = context.context;
@@ -463,7 +494,8 @@ impl Pipeline {
             for batch in cache.source.batches() {
                 let selected = match scope {
                     super::board::TraceScope::All => true,
-                    super::board::TraceScope::Layer(layer) => {
+                    super::board::TraceScope::Layer(layer)
+                    | super::board::TraceScope::ZoneOutlines(layer, _) => {
                         !batch.outline && batch.layer == layer
                     }
                     super::board::TraceScope::Outline => batch.outline,
@@ -474,13 +506,11 @@ impl Pipeline {
                     continue;
                 }
                 uniforms.color = if batch.outline {
-                    frame.fallback_color
+                    let mut color = frame.fallback_color;
+                    color[3] *= frame.opacity;
+                    color
                 } else {
-                    frame
-                        .colors
-                        .get(&LayerId(batch.layer.0))
-                        .copied()
-                        .unwrap_or(frame.fallback_color)
+                    frame.layer_color(batch.layer)
                 };
                 let base_color = uniforms.color;
                 for chunk in &cache.chunks {
@@ -548,13 +578,16 @@ impl Pipeline {
                         }
                         uniforms.color = color.unwrap_or(base_color);
                         // Network colors are computed per instance; object overrides still win.
-                        uniforms.view[2] = f32::from(u8::from(
-                            frame.color_mode == pomelo_core::display::ColorMode::Net
-                                && !batch.outline
-                                && !S::COMPACT_TEXT
-                                && !S::MSDF
-                                && color.is_none(),
-                        ));
+                        uniforms.view[2] = if S::MSDF {
+                            frame.opacity
+                        } else {
+                            f32::from(u8::from(
+                                frame.color_mode == pomelo_core::display::ColorMode::Net
+                                    && !batch.outline
+                                    && !S::COMPACT_TEXT
+                                    && color.is_none(),
+                            ))
+                        };
                         uniforms.batch[2] = if color.is_some() { 0 } else { selection_kind };
                         uniforms.batch[0] = (span_start - chunk.start) as u32;
                         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
@@ -613,9 +646,15 @@ mod tests {
     }
     #[test]
     fn web_msdf_label_shader_compiles_for_both_d3d11_stages() {
-        let source = include_str!("../../shaders/label.hlsl");
-        compile_shader(source, s!("label.hlsl"), s!("trace_vertex"), s!("vs_5_0")).unwrap();
-        compile_shader(source, s!("label.hlsl"), s!("trace_fragment"), s!("ps_5_0")).unwrap();
+        let source = msdf_shader_source();
+        compile_shader(&source, s!("label.hlsl"), s!("trace_vertex"), s!("vs_5_0")).unwrap();
+        compile_shader(
+            &source,
+            s!("label.hlsl"),
+            s!("trace_fragment"),
+            s!("ps_5_0"),
+        )
+        .unwrap();
     }
 }
 
