@@ -11,16 +11,24 @@ use pomelo_core::interaction::Camera;
 use std::sync::Arc;
 pub(crate) const CHUNK_INSTANCES: usize = 16384;
 pub(crate) const CHUNKS_PER_FRAME: usize = 2;
+const SPATIAL_CHUNK_INSTANCES: usize = 4096;
 
 struct Chunk {
     start: usize,
     count: usize,
     buffer: Buffer,
 }
+struct ChunkView<'a> {
+    start: usize,
+    count: usize,
+    buffer: &'a Buffer,
+}
 pub(crate) struct UploadedTracks<S: InstanceSource = PreparedTracks> {
     pub source: Arc<S>,
     chunks: Vec<Chunk>,
     uploaded: usize,
+    lifetime_bytes: u64,
+    spatial: Option<crate::scene::residency::ResidencyCache<Buffer>>,
 }
 impl<S: InstanceSource> UploadedTracks<S> {
     pub fn new(source: Arc<S>) -> anyhow::Result<Self> {
@@ -40,13 +48,111 @@ impl<S: InstanceSource> UploadedTracks<S> {
             source,
             chunks: Vec::new(),
             uploaded: 0,
+            lifetime_bytes: 0,
+            spatial: None,
         })
     }
-    pub fn uploaded(&self) -> usize {
-        self.uploaded
+    pub fn enable_residency(&mut self, soft_bytes: usize) -> anyhow::Result<()> {
+        self.spatial = Some(crate::scene::residency::ResidencyCache::new(
+            self.source.instances().len(),
+            SPATIAL_CHUNK_INSTANCES,
+            size_of::<S::Instance>(),
+            soft_bytes,
+            |range| {
+                let mut bounds: Option<pomelo_core::model::Bounds> = None;
+                for index in range {
+                    let next = self.source.bounds(index)?;
+                    if !next.is_valid() {
+                        return None;
+                    }
+                    if let Some(bounds) = &mut bounds {
+                        bounds.include(next.min);
+                        bounds.include(next.max);
+                    } else {
+                        bounds = Some(next);
+                    }
+                }
+                bounds
+            },
+        )?);
+        Ok(())
     }
+    pub fn ready(&self) -> bool {
+        self.spatial
+            .as_ref()
+            .map_or(self.uploaded == self.source.instances().len(), |cache| {
+                cache.ready()
+            })
+    }
+    pub fn lifetime_bytes(&self) -> u64 {
+        self.lifetime_bytes
+    }
+    fn chunks(&self) -> impl Iterator<Item = ChunkView<'_>> {
+        self.chunks
+            .iter()
+            .map(|chunk| ChunkView {
+                start: chunk.start,
+                count: chunk.count,
+                buffer: &chunk.buffer,
+            })
+            .chain(self.spatial.iter().flat_map(|cache| {
+                cache.slots.iter().filter_map(|slot| {
+                    slot.payload.as_ref().map(|buffer| ChunkView {
+                        start: slot.range.start,
+                        count: slot.range.len(),
+                        buffer,
+                    })
+                })
+            }))
+    }
+    pub fn uploaded(&self) -> usize {
+        self.spatial.as_ref().map_or(self.uploaded, |cache| {
+            cache
+                .slots
+                .iter()
+                .filter(|slot| slot.payload.is_some())
+                .map(|slot| slot.range.len())
+                .sum()
+        })
+    }
+    #[cfg(test)]
     pub fn upload_next(&mut self, device: &Device<'_>) -> anyhow::Result<u64> {
+        let mut budget = super::copper::UPLOAD_BYTES_PER_FRAME;
+        self.upload_visible(device, None, &mut budget)
+    }
+    pub fn upload_visible(
+        &mut self,
+        device: &Device<'_>,
+        view: Option<pomelo_core::model::Bounds>,
+        budget: &mut usize,
+    ) -> anyhow::Result<u64> {
         let mut bytes = 0;
+        if let Some(cache) = &mut self.spatial {
+            cache.update(view)?;
+            let max_chunks = budget
+                .checked_div(SPATIAL_CHUNK_INSTANCES * size_of::<S::Instance>())
+                .unwrap_or(0)
+                .saturating_add(1);
+            let mut pending = Vec::new();
+            pending.try_reserve_exact(max_chunks.min(cache.slots.len()))?;
+            pending.extend(cache.pending(max_chunks));
+            for index in pending {
+                let range = cache.slots[index].range.clone();
+                let data = bytemuck::cast_slice(&self.source.instances()[range]);
+                if data.len() > *budget {
+                    break;
+                }
+                if !cache.can_prefetch(index) {
+                    continue;
+                }
+                let buffer = device.structured_buffer(data, size_of::<S::Instance>())?;
+                cache.slots[index].payload = Some(buffer);
+                *budget -= data.len();
+                bytes += data.len() as u64;
+                self.lifetime_bytes += data.len() as u64;
+            }
+            return Ok(bytes);
+        }
         for _ in 0..CHUNKS_PER_FRAME {
             let start = self.uploaded;
             let count = CHUNK_INSTANCES.min(self.source.instances().len() - start);
@@ -54,8 +160,13 @@ impl<S: InstanceSource> UploadedTracks<S> {
                 break;
             }
             let data = bytemuck::cast_slice(&self.source.instances()[start..start + count]);
+            if data.len() > *budget {
+                break;
+            }
             let buffer = device.structured_buffer(data, size_of::<S::Instance>())?;
             bytes += data.len() as u64;
+            self.lifetime_bytes += data.len() as u64;
+            *budget -= data.len();
             self.chunks.push(Chunk {
                 start,
                 count,
@@ -205,8 +316,7 @@ impl Pipeline {
                 selection_id,
                 selection_kind,
                 match scope {
-                    board::TraceScope::ZoneOutlines(_, true) => 1,
-                    board::TraceScope::ZoneOutlines(_, false) => 2,
+                    board::TraceScope::ZoneOutlines(_) => 1,
                     _ => 0,
                 },
             ],
@@ -216,7 +326,7 @@ impl Pipeline {
         for batch in cache.source.batches() {
             let selected = match scope {
                 board::TraceScope::All => true,
-                board::TraceScope::Layer(layer) | board::TraceScope::ZoneOutlines(layer, _) => {
+                board::TraceScope::Layer(layer) | board::TraceScope::ZoneOutlines(layer) => {
                     !batch.outline && batch.layer == layer
                 }
                 board::TraceScope::Outline => batch.outline,
@@ -234,7 +344,7 @@ impl Pipeline {
                 frame.layer_color(batch.layer)
             };
             let base_color = uniforms.color;
-            for chunk in &cache.chunks {
+            for chunk in cache.chunks() {
                 let start = (batch.start as usize).max(chunk.start);
                 let end = ((batch.start + batch.count) as usize).min(chunk.start + chunk.count);
                 if start >= end {
@@ -314,7 +424,7 @@ impl Pipeline {
                         &self.pipeline,
                         Draw {
                             uniforms: bytemuck::bytes_of(&uniforms),
-                            vertices: &chunk.buffer,
+                            vertices: chunk.buffer,
                             indices: None,
                             start: 0,
                             count: 4,

@@ -354,9 +354,9 @@ fn convex_indices(
         if index.is_multiple_of(1024) {
             check_cancelled(token)?;
         }
-        let a = ring[(index + count - 1) % count];
+        let a = ring[if index == 0 { count - 1 } else { index - 1 }];
         let b = ring[index];
-        let c = ring[(index + 1) % count];
+        let c = ring[if index + 1 == count { 0 } else { index + 1 }];
         let left = (b.x - a.x) * (c.y - b.y);
         let right = (b.y - a.y) * (c.x - b.x);
         let turn = left - right;
@@ -394,9 +394,9 @@ fn convex_indices(
             check_cancelled(token)?;
         }
         let next = if forward {
-            (current + 1) % count
+            if current + 1 == count { 0 } else { current + 1 }
         } else {
-            (current + count - 1) % count
+            if current == 0 { count - 1 } else { current - 1 }
         };
         let a = ring[anchor];
         let b = ring[current];

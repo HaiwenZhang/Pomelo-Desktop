@@ -45,6 +45,8 @@ pub struct TraceBatch {
 pub struct PreparedTracks {
     pub instances: Vec<TraceInstance>,
     pub batches: Vec<TraceBatch>,
+    // Keep last: buffers must drop before the shared budget returns their bytes.
+    pub(crate) memory_reservation: Option<pomelo_core::memory::MemoryReservation>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -120,6 +122,17 @@ fn split_point(point: Point) -> [f32; 4] {
 }
 
 impl PreparedTracks {
+    /// Owned heap buffers only; source geometry and GPU buffers are separate.
+    pub fn allocation_bytes(&self) -> usize {
+        self.instances
+            .capacity()
+            .saturating_mul(size_of::<TraceInstance>())
+            .saturating_add(
+                self.batches
+                    .capacity()
+                    .saturating_mul(size_of::<TraceBatch>()),
+            )
+    }
     /// Exact zone boundaries, including holes, retain their owning zone identity.
     /// Compact polygon rings are used only when no analytic paths are retained.
     pub fn build_zone_outlines(
@@ -148,7 +161,7 @@ impl PreparedTracks {
             .filter(|zone| zone.kind == pomelo_core::model::ZoneKind::Dynamic)
             .count();
         let bytes = count
-            .saturating_mul(size_of::<TraceInstance>() + size_of::<Segment>())
+            .saturating_mul(size_of::<TraceInstance>())
             .saturating_add(dynamic_count.saturating_mul(size_of::<ObjectId>()));
         if bytes > limits.max_bytes {
             return Err(PrepareError::Limit {
@@ -156,10 +169,6 @@ impl PreparedTracks {
                 limit: limits.max_bytes,
             });
         }
-        let mut edges = Vec::new();
-        edges
-            .try_reserve_exact(count)
-            .map_err(|_| PrepareError::Allocation)?;
         let mut dynamic_ids = Vec::new();
         dynamic_ids
             .try_reserve_exact(dynamic_count)
@@ -171,47 +180,55 @@ impl PreparedTracks {
             if zone.kind == pomelo_core::model::ZoneKind::Dynamic {
                 dynamic_ids.push(zone.id);
             }
-            if zone.paths.is_empty() {
-                for range in zone.mesh.ring_offsets.windows(2) {
+        }
+        dynamic_ids.sort_unstable();
+        // Stream borrowed paths and compact rings into the final instance allocation.
+        // Retaining an intermediate Segment array doubles geometry residency on large boards.
+        let edges = zones.iter().flat_map(|zone| {
+            let paths = zone.paths.iter().flatten().map(move |edge| Segment {
+                id: zone.id,
+                track_id: ObjectId(0),
+                layer: zone.layer,
+                net: zone.net,
+                a: edge.a,
+                b: edge.b,
+                width: 0.0,
+                arc: edge.arc,
+                bond_wire: None,
+            });
+            let rings = zone
+                .mesh
+                .ring_offsets
+                .windows(2)
+                .filter(move |_| zone.paths.is_empty())
+                .flat_map(move |range| {
                     let ring = &zone.mesh.vertices[range[0] as usize..range[1] as usize];
-                    for (index, &a) in ring.iter().enumerate() {
-                        if cancellation.is_cancelled() {
-                            return Err(PrepareError::Cancelled);
-                        }
-                        edges.push(Segment {
-                            id: zone.id,
-                            track_id: ObjectId(0),
-                            layer: zone.layer,
-                            net: zone.net,
-                            a,
-                            b: ring[(index + 1) % ring.len()],
-                            width: 0.0,
-                            arc: None,
-                            bond_wire: None,
-                        });
-                    }
-                }
-            } else {
-                for edge in zone.paths.iter().flatten() {
-                    if cancellation.is_cancelled() {
-                        return Err(PrepareError::Cancelled);
-                    }
-                    edges.push(Segment {
+                    ring.iter().enumerate().map(move |(index, &a)| Segment {
                         id: zone.id,
                         track_id: ObjectId(0),
                         layer: zone.layer,
                         net: zone.net,
-                        a: edge.a,
-                        b: edge.b,
+                        a,
+                        b: ring[(index + 1) % ring.len()],
                         width: 0.0,
-                        arc: edge.arc,
+                        arc: None,
                         bond_wire: None,
-                    });
-                }
-            }
-        }
-        dynamic_ids.sort_unstable();
-        let mut prepared = Self::build(&edges, limits, cancellation)?;
+                    })
+                });
+            paths.chain(rings)
+        });
+        let mut prepared = Self::build_segments(
+            edges,
+            count,
+            usize::MAX,
+            TraceLimits {
+                max_bytes: limits
+                    .max_bytes
+                    .saturating_sub(dynamic_count.saturating_mul(size_of::<ObjectId>())),
+                ..limits
+            },
+            cancellation,
+        )?;
         for (index, instance) in prepared.instances.iter_mut().enumerate() {
             if index % 256 == 0 && cancellation.is_cancelled() {
                 return Err(PrepareError::Cancelled);
@@ -459,8 +476,8 @@ impl PreparedTracks {
                 Ok(())
             },
         )?;
-        let tracks =
-            Self::finish_instances(instances, cancellation).map_err(|error| error.diagnostic())?;
+        let tracks = Self::finish_instances(instances, limits.max_bytes, cancellation)
+            .map_err(|error| error.diagnostic())?;
         Ok((tracks, objects, summary))
     }
 
@@ -481,10 +498,10 @@ impl PreparedTracks {
                 limit: count_limit,
             });
         }
-        // Bound the worst case: every instance belongs to a different layer.
-        // Sorting is in-place and does not allocate a second instance array.
+        // Check instances first; exact batch metadata is charged after in-place sorting.
+        // Millions of strokes on a few layers do not need millions of batch slots.
         let bytes = count
-            .checked_mul(std::mem::size_of::<TraceInstance>() + std::mem::size_of::<TraceBatch>())
+            .checked_mul(std::mem::size_of::<TraceInstance>())
             .ok_or(PrepareError::Limit {
                 actual: usize::MAX,
                 limit: limits.max_bytes,
@@ -574,11 +591,12 @@ impl PreparedTracks {
                 ],
             });
         }
-        Self::finish_instances(instances, cancellation)
+        Self::finish_instances(instances, limits.max_bytes, cancellation)
     }
 
     fn finish_instances(
         mut instances: Vec<TraceInstance>,
+        max_bytes: usize,
         cancellation: &CancellationToken,
     ) -> Result<Self, PrepareError> {
         let mut batches: Vec<TraceBatch> = Vec::new();
@@ -592,7 +610,7 @@ impl PreparedTracks {
         });
         // Allocate batch metadata for actual layer/outline runs, rather than
         // one slot per stroke (millions of strokes can share a few layers).
-        let mut batch_count = 0;
+        let mut batch_count = 0usize;
         let mut previous_key = None;
         for instance in &instances {
             if cancellation.is_cancelled() {
@@ -603,6 +621,16 @@ impl PreparedTracks {
                 batch_count += 1;
                 previous_key = Some(key);
             }
+        }
+        let bytes = instances
+            .capacity()
+            .saturating_mul(size_of::<TraceInstance>())
+            .saturating_add(batch_count.saturating_mul(size_of::<TraceBatch>()));
+        if bytes > max_bytes {
+            return Err(PrepareError::Limit {
+                actual: bytes,
+                limit: max_bytes,
+            });
         }
         batches
             .try_reserve_exact(batch_count)
@@ -627,7 +655,11 @@ impl PreparedTracks {
                 });
             }
         }
-        Ok(Self { instances, batches })
+        Ok(Self {
+            instances,
+            batches,
+            memory_reservation: None,
+        })
     }
 }
 

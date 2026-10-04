@@ -1,6 +1,6 @@
 //! Existing Windows FXC and hardware pixel regressions exercise common rendering.
 use super::shaders::{compile_shader, msdf_shader_source};
-use crate::backend::common::trace::{CHUNK_INSTANCES, CHUNKS_PER_FRAME, Pipeline, UploadedTracks};
+use crate::backend::common::trace::{CHUNK_INSTANCES, Pipeline, UploadedTracks};
 use crate::backend::*;
 use crate::tracks::PreparedTracks;
 use pomelo_core::interaction::Camera;

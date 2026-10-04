@@ -6,6 +6,33 @@ use pomelo_import::{
 
 const START: usize = 0x1200;
 
+#[test]
+fn small_index_still_reports_completion_and_observes_callback_cancellation() {
+    let mut bytes = board(174, 0);
+    bytes.extend(record(4, 174, 7, 24));
+    let completed = std::cell::RefCell::new(Vec::new());
+    let cancellation = CancellationToken::default();
+    let context = ImportContext {
+        cancellation: &cancellation,
+        progress: &|progress| {
+            completed.borrow_mut().push(progress.completed);
+            if progress.completed == bytes.len() as u64 {
+                cancellation.cancel();
+            }
+        },
+    };
+    assert!(matches!(
+        BrdIndex::read(
+            &bytes,
+            &ImportOptions::default(),
+            &IndexLimits::default(),
+            &context
+        ),
+        Err(ImportError::Cancelled)
+    ));
+    assert_eq!(*completed.borrow(), [START as u64, bytes.len() as u64]);
+}
+
 fn put32(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
@@ -445,6 +472,67 @@ fn cli_index_evidence_contains_exact_fields_and_never_changes_the_source() {
     );
     assert_eq!(&evidence[40..], b"GND");
     assert_eq!(std::fs::read(source).unwrap(), bytes);
+}
+
+#[test]
+fn source_loading_avoids_tail_slack_and_still_reads_files_growing_after_metadata() {
+    use std::io::Write;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("growth.brd");
+    let bytes = vec![0x5a; 3 * 1024 * 1024 + 17];
+    std::fs::write(&path, &bytes).unwrap();
+    let token = CancellationToken::default();
+    let options = ImportOptions::default();
+    let output = pomelo_import::source::read_path(
+        &path,
+        &options,
+        &ImportContext {
+            cancellation: &token,
+            progress: &|_| {},
+        },
+    )
+    .unwrap();
+    assert_eq!(output, bytes);
+    assert!(output.capacity() < 4 * 1024 * 1024);
+
+    let appended = vec![0x6b; 2 * 1024 * 1024];
+    let grow = |progress: pomelo_core::task::ImportProgress| {
+        if progress.completed == 0 {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .write_all(&appended)
+                .unwrap();
+        }
+    };
+    let output = pomelo_import::source::read_path(
+        &path,
+        &options,
+        &ImportContext {
+            cancellation: &token,
+            progress: &grow,
+        },
+    )
+    .unwrap();
+    assert_eq!(&output[..bytes.len()], &bytes);
+    assert_eq!(&output[bytes.len()..], &appended);
+
+    let options = ImportOptions {
+        max_file_bytes: output.len() as u64,
+        ..options
+    };
+    assert!(matches!(
+        pomelo_import::source::read_path(
+            &path,
+            &options,
+            &ImportContext {
+                cancellation: &token,
+                progress: &grow,
+            }
+        ),
+        Err(ImportError::ResourceLimit { .. })
+    ));
 }
 
 #[test]

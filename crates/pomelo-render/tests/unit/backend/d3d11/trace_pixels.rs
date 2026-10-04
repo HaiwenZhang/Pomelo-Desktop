@@ -33,6 +33,14 @@ mod appearance;
 
 #[path = "compositor_parity_pixels.rs"]
 mod compositor_parity;
+#[path = "copper_direct_pixels.rs"]
+mod copper_direct;
+#[path = "frame_profile.rs"]
+mod frame_profile;
+#[path = "pad_range_pixels.rs"]
+mod pad_range;
+#[path = "residency_pixels.rs"]
+mod residency;
 
 #[path = "static_shape_pixels.rs"]
 mod static_shape;
@@ -746,7 +754,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     target.bind(&context);
     traces.draw(&gpu, &frame).unwrap();
     annotated
-        .draw_annotated(&gpu, &frame, 0.5, zone.layer, &mut |_| {
+        .draw_annotated(&gpu, &frame, 0.5, zone.layer, None, &mut |_| {
             glyph_renderer.draw_prepared(
                 &gpu,
                 &glyph_frame,
@@ -2433,6 +2441,8 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
 }
 
 struct Target {
+    width: u32,
+    height: u32,
     texture: ID3D11Texture2D,
     staging: ID3D11Texture2D,
     view: ID3D11RenderTargetView,
@@ -2440,9 +2450,12 @@ struct Target {
 
 impl Target {
     fn new(device: &ID3D11Device) -> Self {
+        Self::with_size(device, SIDE, SIDE)
+    }
+    fn with_size(device: &ID3D11Device, width: u32, height: u32) -> Self {
         let descriptor = D3D11_TEXTURE2D_DESC {
-            Width: SIDE,
-            Height: SIDE,
+            Width: width,
+            Height: height,
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -2477,6 +2490,8 @@ impl Target {
                 .unwrap();
         }
         Self {
+            width,
+            height,
             texture: texture.unwrap(),
             staging: staging.unwrap(),
             view: view.unwrap(),
@@ -2488,8 +2503,8 @@ impl Target {
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(self.view.clone())]), None);
             context.RSSetViewports(Some(&[D3D11_VIEWPORT {
-                Width: SIDE as f32,
-                Height: SIDE as f32,
+                Width: self.width as f32,
+                Height: self.height as f32,
                 MaxDepth: 1.0,
                 ..Default::default()
             }]));
@@ -2498,7 +2513,7 @@ impl Target {
     }
 
     fn read(&self, context: &ID3D11DeviceContext) -> Vec<u8> {
-        let mut pixels = vec![0; (SIDE * SIDE * 4) as usize];
+        let mut pixels = vec![0; (self.width * self.height * 4) as usize];
         // SAFETY: Map READ synchronizes the copy. Only valid row bytes are read; row pitch
         // is honored, and staging remains mapped until all rows have been copied.
         unsafe {
@@ -2507,15 +2522,15 @@ impl Target {
             context
                 .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
                 .unwrap();
-            for row in 0..SIDE as usize {
+            for row in 0..self.height as usize {
                 let source = std::slice::from_raw_parts(
                     mapped
                         .pData
                         .cast::<u8>()
                         .add(row * mapped.RowPitch as usize),
-                    SIDE as usize * 4,
+                    self.width as usize * 4,
                 );
-                pixels[row * SIDE as usize * 4..(row + 1) * SIDE as usize * 4]
+                pixels[row * self.width as usize * 4..(row + 1) * self.width as usize * 4]
                     .copy_from_slice(source);
             }
             context.Unmap(&self.staging, 0);

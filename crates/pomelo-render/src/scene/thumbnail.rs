@@ -350,13 +350,12 @@ impl Raster<'_> {
             }
             let Some(bounds) = batch.bounds else { continue };
             let rect = self.projection.rect(bounds, 0.0);
+            // The triangle quota bounds this conversion even for source-backed copper.
+            let batch_indices = copper.index_block(outer.start as usize..holes.end as usize)?;
             let mut cost = rect.area().saturating_mul(2);
             // Reserve a complete batch, including all holes, before changing the image.
             // A limited thumbnail never fills a hole just because its budget ran out.
-            for indices in copper.indices[outer.start as usize..holes.end as usize]
-                .as_chunks::<3>()
-                .0
-            {
+            for indices in batch_indices.as_chunks::<3>().0 {
                 check_cancelled(self.cancel)?;
                 cost = cost.saturating_add(self.triangle(copper, indices, batch.object)?.1.area());
                 if cost > self.remaining {
@@ -371,7 +370,8 @@ impl Raster<'_> {
                 mask[y * WIDTH + rect.x0..y * WIDTH + rect.x1].fill(0);
             }
             for (indices, subtract) in [(outer, false), (holes, true)] {
-                for triangle in copper.indices[indices.start as usize..indices.end as usize]
+                for triangle in batch_indices[(indices.start - batch.outer_indices().start) as usize
+                    ..(indices.end - batch.outer_indices().start) as usize]
                     .as_chunks::<3>()
                     .0
                 {
@@ -423,8 +423,7 @@ impl Raster<'_> {
         let mut points = [Point::default(); 3];
         for (destination, index) in points.iter_mut().zip(indices) {
             let vertex = copper
-                .vertices
-                .get(*index as usize)
+                .vertex_at(*index as usize)
                 .ok_or(PrepareError::Invalid(object))?;
             *destination = point(vertex.position);
         }

@@ -37,6 +37,7 @@ pub struct SegmentIndex {
     pins: super::spatial::BoundsIndex,
     vias: super::spatial::BoundsIndex,
     zone_bounds: super::spatial::BoundsIndex,
+    zone_paths: Vec<Vec<Option<Bounds>>>,
     drawing_budget: usize,
 }
 
@@ -220,15 +221,27 @@ impl SegmentIndex {
                 (a, b) => a.or(b),
             };
         }
+        let contour_bytes = scene.zones.iter().fold(0usize, |bytes, zone| {
+            bytes
+                .saturating_add(size_of::<Vec<Option<Bounds>>>())
+                .saturating_add(zone.paths.len().saturating_mul(size_of::<Option<Bounds>>()))
+        });
+        let peak_bytes = peak_bytes.saturating_add(contour_bytes);
+        if peak_bytes > max_bytes {
+            return Err(IndexError::ByteLimit {
+                actual: peak_bytes,
+                limit: max_bytes,
+            });
+        }
         let zones =
             crate::zone_index::ZoneFillIndex::build(&scene, max_bytes - peak_bytes, cancel)?;
-        let owner_count = scene
-            .pins
-            .len()
-            .saturating_add(scene.vias.len())
-            .saturating_add(scene.zones.len());
-        // Includes hierarchy nodes, entries and capacity growth during construction.
-        let owner_bytes = owner_count.saturating_mul(384);
+        // Bound each hierarchy's actual entry/node layout. BoundsIndex reserves
+        // these buffers once instead of retaining geometric growth slack.
+        let owner_bytes = [scene.pins.len(), scene.vias.len(), scene.zones.len()]
+            .into_iter()
+            .fold(0usize, |bytes, count| {
+                bytes.saturating_add(super::spatial::BoundsIndex::max_allocation_bytes(count))
+            });
         let used = peak_bytes
             .saturating_add(zones.bytes)
             .saturating_add(owner_bytes);
@@ -274,11 +287,29 @@ impl SegmentIndex {
                 .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, p.drill_shape)),
             cancel,
         )?;
+        let mut zone_paths = Vec::new();
+        zone_paths
+            .try_reserve_exact(scene.zones.len())
+            .map_err(|_| IndexError::Allocation)?;
+        for zone in &scene.zones {
+            let mut paths = Vec::new();
+            paths
+                .try_reserve_exact(zone.paths.len())
+                .map_err(|_| IndexError::Allocation)?;
+            for path in &zone.paths {
+                if cancel.is_cancelled() {
+                    return Err(PathError::Cancelled.into());
+                }
+                paths.push(crate::geometry::path_bounds(path));
+            }
+            zone_paths.push(paths);
+        }
         let zone_bounds = super::spatial::BoundsIndex::build(
-            scene.zones.iter().map(|z| {
-                z.paths
+            scene.zones.iter().zip(&zone_paths).map(|(z, paths)| {
+                paths
                     .first()
-                    .and_then(|p| crate::geometry::path_bounds(p))
+                    .copied()
+                    .flatten()
                     .or_else(|| z.mesh.ring_bounds.first().copied())
             }),
             cancel,
@@ -290,6 +321,7 @@ impl SegmentIndex {
             pins,
             vias,
             zone_bounds,
+            zone_paths,
             drawing_budget,
             scene,
             order,

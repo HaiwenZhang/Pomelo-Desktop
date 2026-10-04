@@ -5,6 +5,7 @@ pub mod display;
 pub mod geometry;
 pub mod i18n;
 pub mod interaction;
+pub mod memory;
 pub mod model;
 pub mod search;
 pub mod task;

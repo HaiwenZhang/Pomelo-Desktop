@@ -34,6 +34,7 @@ fn source(paths: Vec<Vec<Segment>>, category: u32) -> PreparedPads {
         mirrored: true,
     };
     PreparedPads {
+        memory_reservation: None,
         analytic: vec![],
         custom: vec![CustomPadInstance {
             object: ObjectId(42),

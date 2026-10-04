@@ -106,7 +106,6 @@ float4 fragment_color(Out input) {
     // Only reliable Dynamic Base boundaries use this rule. Static, Unknown,
     // selection and hover retain their existing analytic outline coverage.
     bool dynamic_base = (input.flags.w & 128u) != 0u && view.w < 0.5 && batch.w != 0u;
-    if (dynamic_base && batch.w == 2u) discard;
     float2 screen = (screen_px - canvas.xy - canvas.zw * 0.5) * float2(view.y, -1) / view.x;
     float4 a = delta(screen, input.a);
     float4 b = delta(screen, input.b);

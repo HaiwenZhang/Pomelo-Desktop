@@ -15,6 +15,9 @@ pub struct PadRenderer {
     telemetry: Arc<TraceTelemetry>,
 }
 impl PadRenderer {
+    pub(super) fn statistics(&self) -> super::board::TraceStatistics {
+        self.telemetry.snapshot()
+    }
     pub(super) fn is_uploaded(&self, source: &Arc<PreparedPads>) -> bool {
         self.uploaded.as_ref().is_some_and(|cache| {
             Arc::ptr_eq(&cache.source, source) && cache.uploaded() == source.analytic.len()
@@ -40,6 +43,15 @@ impl PadRenderer {
         context: &NativeGpuContext<'_>,
         source: &Arc<PreparedPads>,
     ) -> anyhow::Result<()> {
+        let mut budget = super::copper_pipeline::UPLOAD_BYTES_PER_FRAME;
+        self.prepare_with_budget(context, source, &mut budget)
+    }
+    pub(super) fn prepare_with_budget(
+        &mut self,
+        context: &NativeGpuContext<'_>,
+        source: &Arc<PreparedPads>,
+        budget: &mut usize,
+    ) -> anyhow::Result<()> {
         if self
             .uploaded
             .as_ref()
@@ -53,7 +65,7 @@ impl PadRenderer {
         }
         let cache = self.uploaded.as_mut().context("GPU_PAD_CACHE_MISSING")?;
         let before = cache.uploaded();
-        let result = cache.upload_next(&context.device);
+        let result = cache.upload_next(&context.device, budget);
         self.telemetry.uploaded_bytes.fetch_add(
             ((cache.uploaded() - before) * std::mem::size_of::<crate::pads::PadInstance>()) as u64,
             Ordering::Relaxed,
@@ -86,12 +98,29 @@ impl PadRenderer {
         layer: Option<LayerId>,
         visible: Option<&dyn Fn(&crate::pads::PadInstance) -> bool>,
     ) -> anyhow::Result<()> {
+        self.draw_scoped(
+            context,
+            frame,
+            layer,
+            visible.map_or(
+                super::pad_pipeline::Visibility::All,
+                super::pad_pipeline::Visibility::Predicate,
+            ),
+        )
+    }
+    pub(super) fn draw_scoped(
+        &self,
+        context: &NativeGpuContext<'_>,
+        frame: &TraceFrame,
+        layer: Option<LayerId>,
+        visibility: super::pad_pipeline::Visibility<'_>,
+    ) -> anyhow::Result<()> {
         let cache = self.uploaded.as_ref().context("GPU_PAD_CACHE_MISSING")?;
         let draws = self
             .pipeline
             .as_ref()
             .context("GPU_PAD_PIPELINE_MISSING")?
-            .draw(context, frame, cache, layer, visible)?;
+            .draw_scoped(context, frame, cache, layer, visibility)?;
         self.telemetry
             .draw_calls
             .fetch_add(draws, Ordering::Relaxed);

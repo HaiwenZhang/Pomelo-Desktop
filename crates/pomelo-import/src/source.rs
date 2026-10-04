@@ -61,8 +61,15 @@ pub fn read_path(
             return Err(ImportError::ResourceLimit { actual, limit });
         }
         if actual > bytes.capacity() as u64 {
-            // Grow geometrically after a successful read, capped by the input budget.
-            let target = actual.max((bytes.capacity() as u64).saturating_mul(2).min(limit));
+            // Grow only after a successful read. Metadata caps spare capacity
+            // near EOF, but never truncates a file that grew after the stat.
+            let growth_limit = if actual <= expected { expected } else { limit };
+            let target = actual.max(
+                (bytes.capacity() as u64)
+                    .saturating_mul(2)
+                    .min(growth_limit)
+                    .min(limit),
+            );
             bytes.reserve_exact(target as usize - bytes.len());
         }
         bytes.extend_from_slice(&chunk[..count]);

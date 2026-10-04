@@ -253,6 +253,8 @@ fn prepare_zone(
     cancel: &CancellationToken,
 ) -> Result<PreparedCopper, PrepareError> {
     let mut source = PreparedCopper {
+        memory_reservation: None,
+        source: None,
         vertices: Vec::new(),
         indices: Vec::new(),
         batches: Vec::new(),

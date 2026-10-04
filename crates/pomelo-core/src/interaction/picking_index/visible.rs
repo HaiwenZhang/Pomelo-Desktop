@@ -223,10 +223,11 @@ impl SegmentIndex {
             {
                 continue;
             }
-            let bounds = zone
-                .paths
+            let paths_bounds = &self.zone_paths[source];
+            let bounds = paths_bounds
                 .first()
-                .and_then(|path| crate::geometry::path_bounds(path))
+                .copied()
+                .flatten()
                 .or_else(|| zone.mesh.ring_bounds.first().copied());
             if bounds.is_none_or(|bounds| !broad.intersects(bounds)) {
                 continue;
@@ -238,11 +239,13 @@ impl SegmentIndex {
             } else {
                 let mut covered =
                     crate::geometry::path_contains(&zone.paths[0], query.point, cancel)?;
-                for path in zone.paths.iter().skip(1) {
+                for (path, bounds) in zone.paths.iter().zip(paths_bounds).skip(1) {
                     if !covered {
                         break;
                     }
-                    if crate::geometry::path_contains(path, query.point, cancel)? {
+                    if bounds.is_none_or(|bounds| point_in_bounds(query.point, bounds))
+                        && crate::geometry::path_contains(path, query.point, cancel)?
+                    {
                         covered = false;
                     }
                 }
@@ -259,7 +262,24 @@ impl SegmentIndex {
                         cancel,
                     )?
                 } else {
-                    paths_distance(&zone.paths, query.point, cancel)?
+                    let nearby = PickQuery {
+                        point: query.point,
+                        tolerance_mm: query.tolerance_mm + 0.65 * px,
+                    };
+                    let mut distance = f64::INFINITY;
+                    for (path, bounds) in zone.paths.iter().zip(paths_bounds) {
+                        if cancel.is_cancelled() {
+                            return Err(PathError::Cancelled);
+                        }
+                        if bounds.is_none_or(|bounds| nearby.intersects(bounds)) {
+                            distance = distance.min(paths_distance(
+                                std::slice::from_ref(path),
+                                query.point,
+                                cancel,
+                            )?);
+                        }
+                    }
+                    distance
                 };
                 (distance - 0.65 * px, DisplayCategory::ZoneOutline)
             };
@@ -437,6 +457,13 @@ impl SegmentIndex {
 pub(crate) fn centerline_distance(segment: &Segment, point: Point) -> Result<f64, PathError> {
     crate::picking::segment_centerline_distance_mm(segment, point)
 }
+fn point_in_bounds(point: Point, bounds: Bounds) -> bool {
+    point.x >= bounds.min.x
+        && point.x <= bounds.max.x
+        && point.y >= bounds.min.y
+        && point.y <= bounds.max.y
+}
+
 fn paths_distance(
     paths: &[Vec<Segment>],
     point: Point,
@@ -516,4 +543,103 @@ fn signed_pad_distance(
         .map_err(|_| PathError::Invalid(id))?
         .unwrap_or(false);
     Ok(if inside { -distance } else { distance })
+}
+
+#[cfg(test)]
+mod contour_tests {
+    use super::*;
+
+    #[test]
+    fn contour_bounds_preserve_exact_curves_holes_and_outline_hit_order() {
+        use crate::model::{Arc as Curve, NetId, Zone, ZoneKind};
+        let circle = |id, center: Point, radius| {
+            vec![Segment {
+                id: ObjectId(id),
+                track_id: ObjectId(id),
+                layer: LayerId(1),
+                net: NetId(7),
+                a: Point::new(center.x + radius, center.y),
+                b: Point::new(center.x + radius, center.y),
+                width: 0.0,
+                bond_wire: None,
+                arc: Some(Curve {
+                    center,
+                    radius,
+                    start: 0.0,
+                    sweep: std::f64::consts::TAU,
+                }),
+            }]
+        };
+        let bounds = Bounds {
+            min: Point::new(-20.0, -20.0),
+            max: Point::new(20.0, 20.0),
+        };
+        let scene = Arc::new(BoardScene {
+            layers: vec![],
+            special_layers: vec![],
+            nets: Default::default(),
+            segments: vec![],
+            pins: vec![],
+            components: vec![],
+            vias: vec![],
+            zones: vec![Zone {
+                id: ObjectId(1),
+                layer: LayerId(1),
+                net: NetId(7),
+                kind: ZoneKind::Unknown,
+                paths: vec![
+                    circle(1, Point::default(), 10.0),
+                    circle(2, Point::new(4.0, 0.0), 2.0),
+                    circle(3, Point::new(-4.0, 0.0), 1.0),
+                ],
+                mesh: Default::default(),
+            }],
+            outline: vec![],
+            texts: vec![],
+            drawing_layers: vec![],
+            drawings: vec![],
+            bounds,
+            diagnostics: vec![],
+        });
+        let cancel = CancellationToken::default();
+        let cached = SegmentIndex::build(Arc::clone(&scene), 1, &cancel).unwrap();
+        let mut unpruned = SegmentIndex::build(scene, 1, &cancel).unwrap();
+        unpruned.zone_paths[0].fill(Some(bounds));
+        for opacity in [0.0, 0.25] {
+            let display = BoardDisplay {
+                copper_opacity: opacity,
+                ..Default::default()
+            };
+            for scale in [1.0, 100.0] {
+                for x in -24..=24 {
+                    for y in -24..=24 {
+                        let query =
+                            PickQuery::new(Point::new(f64::from(x) * 0.5, f64::from(y) * 0.5), 0.1)
+                                .unwrap();
+                        let values = |index: &SegmentIndex| {
+                            index
+                                .query_visible_hits(
+                                    query,
+                                    scale,
+                                    PickFilter::all(),
+                                    &display,
+                                    64,
+                                    &cancel,
+                                )
+                                .unwrap()
+                                .into_iter()
+                                .map(|hit| (format!("{:?}", hit.anchor), hit.distance_mm.to_bits()))
+                                .collect::<Vec<_>>()
+                        };
+                        assert_eq!(
+                            values(&cached),
+                            values(&unpruned),
+                            "point={:?} opacity={opacity} scale={scale}",
+                            query.point
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

@@ -15,6 +15,7 @@ struct Out {
  let lo = clamp(low.xy + low.zw - vec2f(2.0 * u.viewport.z / u.view.x), -limit, limit);
  let hi = clamp(high.xy + high.zw + vec2f(2.0 * u.viewport.z / u.view.x), -limit, limit);
  var o: Out; o.position = screen_position(u.canvas.xy + u.canvas.zw * 0.5 + mix(lo, hi, quad_corner(vid)) * vec2f(u.view.y, -1.0) * u.view.x);
+ if u.batch.w == 2u && p.ids.z != u.batch.y { o.position = vec4f(2.0, 2.0, 0.0, 1.0); }
  o.center = relative(p.center); o.shape = p.shape; o.rotation = p.rotation.xy; o.kind = p.ids.w; o.source_flags = p.source.w;
  var material = u.color; if u.view.z != 0.0 && p.ids.z != 0u {material = vec4f(pcb_net_color(p.ids.z), material.a);}
  o.tint = select(material, u.highlight, u.batch.w != 0u || (u.batch.z != 0u && p.ids.z == u.batch.y)); return o;

@@ -8,6 +8,9 @@ pub trait InstanceSource: Send + Sync + 'static {
     fn instances(&self) -> &[Self::Instance];
     fn batches(&self) -> &[crate::tracks::TraceBatch];
     fn selection_ids(&self, index: usize) -> [u32; 4];
+    fn bounds(&self, _index: usize) -> Option<pomelo_core::model::Bounds> {
+        None
+    }
     fn font(&self) -> Option<&crate::text::msdf::MsdfFont> {
         None
     }
@@ -34,6 +37,13 @@ impl InstanceSource for PreparedTracks {
     }
     fn selection_ids(&self, index: usize) -> [u32; 4] {
         self.instances[index].ids
+    }
+    fn bounds(&self, index: usize) -> Option<pomelo_core::model::Bounds> {
+        let instance = &self.instances[index];
+        Some(pomelo_core::model::Bounds {
+            min: split_point(instance.bounds_min),
+            max: split_point(instance.bounds_max),
+        })
     }
     fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
         let instance = &self.instances[index];
@@ -72,6 +82,16 @@ impl InstanceSource for crate::text_instances::PreparedTextInstances {
             0,
         ]
     }
+    fn bounds(&self, index: usize) -> Option<pomelo_core::model::Bounds> {
+        let instance = &self.instances[index];
+        let a = split_point(instance.a);
+        let b = split_point(instance.b);
+        let radius = f64::from(f32::from_bits(instance.ids[3])) * 0.5;
+        Some(pomelo_core::model::Bounds {
+            min: pomelo_core::model::Point::new(a.x.min(b.x) - radius, a.y.min(b.y) - radius),
+            max: pomelo_core::model::Point::new(a.x.max(b.x) + radius, a.y.max(b.y) + radius),
+        })
+    }
     fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
         let stroke = &self.instances[index];
         pomelo_core::selection::SelectedObject::Drawing(pomelo_core::model::ObjectId(
@@ -98,6 +118,26 @@ impl InstanceSource for crate::text::msdf::PreparedGlyphs {
         let ids = self.instances[index].ids;
         [ids[0], 0, ids[2], ids[3]]
     }
+    fn bounds(&self, index: usize) -> Option<pomelo_core::model::Bounds> {
+        let glyph = &self.instances[index];
+        let x = f64::from(glyph.xywh[0]) + f64::from(glyph.low[0]);
+        let y = f64::from(glyph.xywh[1]) + f64::from(glyph.low[1]);
+        let [cos, sin, mirror, _] = glyph.rotation.map(f64::from);
+        pomelo_core::model::Bounds::from_points(
+            [
+                (0.0, 0.0),
+                (f64::from(glyph.xywh[2]), 0.0),
+                (0.0, f64::from(glyph.xywh[3])),
+                (f64::from(glyph.xywh[2]), f64::from(glyph.xywh[3])),
+            ]
+            .map(|(dx, dy)| {
+                pomelo_core::model::Point::new(
+                    x + (dx * cos - dy * sin) * mirror,
+                    y + dx * sin + dy * cos,
+                )
+            }),
+        )
+    }
     fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
         pomelo_core::selection::SelectedObject::Drawing(pomelo_core::model::ObjectId(
             if self.instances[index].low[2] == 1.0 {
@@ -116,4 +156,11 @@ impl InstanceSource for crate::text::msdf::PreparedGlyphs {
     fn label_category(&self, index: usize) -> u32 {
         self.instances[index].ids[1]
     }
+}
+
+fn split_point(point: [f32; 4]) -> pomelo_core::model::Point {
+    pomelo_core::model::Point::new(
+        f64::from(point[0]) + f64::from(point[2]),
+        f64::from(point[1]) + f64::from(point[3]),
+    )
 }

@@ -41,6 +41,7 @@ Out pad_vertex(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID) {
     float2 screen = canvas.xy + canvas.zw * 0.5 + lerp(lo, hi, corner) * float2(view.y,-1) * view.x;
     Out output;
     output.position = float4(screen / viewport.xy * float2(2,-2) + float2(-1,1), 0, 1);
+    if (batch.w == 2u && pad.ids.z != batch.y) output.position = float4(2, 2, 0, 1);
     output.center = relative(pad.center);
     output.shape = pad.shape; output.rotation = pad.rotation.xy; output.kind = pad.ids.w;
     output.source_flags = pad.source.w;

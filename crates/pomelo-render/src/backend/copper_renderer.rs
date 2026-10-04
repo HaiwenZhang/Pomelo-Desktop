@@ -9,7 +9,7 @@ use crate::copper::PreparedCopper;
 use anyhow::Context as _;
 use std::{
     any::Any,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -116,6 +116,16 @@ impl CopperRenderer {
         source: &Arc<PreparedCopper>,
         allow_upload: bool,
     ) -> anyhow::Result<bool> {
+        let mut budget = super::copper_pipeline::UPLOAD_BYTES_PER_FRAME;
+        self.prepare_with_budget(context, source, allow_upload, &mut budget)
+    }
+    fn prepare_with_budget(
+        &mut self,
+        context: &NativeGpuContext<'_>,
+        source: &Arc<PreparedCopper>,
+        allow_upload: bool,
+        budget: &mut usize,
+    ) -> anyhow::Result<bool> {
         let changed = self
             .uploaded
             .as_ref()
@@ -143,7 +153,7 @@ impl CopperRenderer {
         let cache = self.uploaded.as_mut().context("GPU_COPPER_CACHE_MISSING")?;
         if allow_upload {
             let before = cache.uploaded_bytes();
-            let result = cache.upload_next(context);
+            let result = cache.upload_with_budget(context, budget);
             self.telemetry
                 .lifetime_uploaded_bytes
                 .fetch_add((cache.uploaded_bytes() - before) as u64, Ordering::Relaxed);
@@ -152,7 +162,7 @@ impl CopperRenderer {
                 .store(cache.uploaded_bytes() as u64, Ordering::Release);
             result?;
         }
-        if source.indices.is_empty() {
+        if source.index_count() == 0 {
             return Ok(false);
         }
         if self.pipeline.is_none() {
@@ -173,11 +183,22 @@ impl CopperRenderer {
     ) -> anyhow::Result<()> {
         self.draw_filtered(context, frame, opacity, layer, None)
     }
+    #[cfg(test)]
     pub(super) fn prepare_curves(
         &mut self,
         context: &NativeGpuContext<'_>,
         source: Option<&crate::scene::curves::CurveFillCache>,
         allow_upload: bool,
+    ) -> anyhow::Result<()> {
+        let mut budget = super::copper_pipeline::UPLOAD_BYTES_PER_FRAME;
+        self.prepare_curves_with_budget(context, source, allow_upload, &mut budget)
+    }
+    pub(super) fn prepare_curves_with_budget(
+        &mut self,
+        context: &NativeGpuContext<'_>,
+        source: Option<&crate::scene::curves::CurveFillCache>,
+        allow_upload: bool,
+        budget: &mut usize,
     ) -> anyhow::Result<()> {
         for entry in self.curves.values_mut() {
             entry.active = false;
@@ -189,7 +210,6 @@ impl CopperRenderer {
                     .get(id)
                     .is_some_and(|cpu| Arc::ptr_eq(&gpu.source, &cpu.source))
             });
-            let mut budget = super::copper_pipeline::UPLOAD_BYTES_PER_FRAME;
             for id in &source.active {
                 let cpu = source.entries.get(id).context("GPU_CURVE_ENTRY_MISSING")?;
                 if !self.curves.contains_key(id) && allow_upload {
@@ -205,7 +225,7 @@ impl CopperRenderer {
                     gpu.active = true;
                     if allow_upload {
                         let before = gpu.uploaded_bytes();
-                        gpu.upload_with_budget(context, &mut budget)?;
+                        gpu.upload_with_budget(context, budget)?;
                         self.telemetry
                             .curve_lifetime_uploaded_bytes
                             .fetch_add((gpu.uploaded_bytes() - before) as u64, Ordering::Relaxed);
@@ -266,6 +286,7 @@ impl CopperRenderer {
                     layer,
                     visible,
                     annotations: None,
+                    annotation_owners: None,
                     overrides: Some(&self.curves),
                     static_shapes_fill_solid: self.static_shapes_fill_solid,
                     network_selection: self.network_selection,
@@ -301,6 +322,7 @@ impl CopperRenderer {
         frame: &TraceFrame,
         opacity: f32,
         layer: pomelo_core::model::LayerId,
+        annotation_owners: Option<&BTreeSet<pomelo_core::model::ObjectId>>,
         annotations: &mut dyn FnMut(&crate::copper::CopperBatch) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         let cache = self.uploaded.as_ref().context("GPU_COPPER_CACHE_MISSING")?;
@@ -317,6 +339,7 @@ impl CopperRenderer {
                     layer: Some(layer),
                     visible: None,
                     annotations: Some(annotations),
+                    annotation_owners,
                     overrides: Some(&self.curves),
                     static_shapes_fill_solid: self.static_shapes_fill_solid,
                     network_selection: self.network_selection,
@@ -361,6 +384,17 @@ pub struct BoardRenderer {
     drills: super::PadRenderer,
 }
 impl BoardRenderer {
+    /// Bound offscreen trace/text caching while keeping visible chunks pinned.
+    pub fn with_trace_residency(mut self, soft_bytes_per_source: usize) -> Self {
+        self.traces = self.traces.with_residency(soft_bytes_per_source);
+        self.zone_outlines = self.zone_outlines.with_residency(soft_bytes_per_source);
+        self.drawings = self.drawings.with_residency(soft_bytes_per_source);
+        self.texts = self.texts.with_residency(soft_bytes_per_source);
+        self.glyphs = self.glyphs.with_residency(soft_bytes_per_source);
+        self.labels = self.labels.with_residency(soft_bytes_per_source);
+        self.custom_outlines = self.custom_outlines.with_residency(soft_bytes_per_source);
+        self
+    }
     pub fn new(
         traces: Arc<TraceTelemetry>,
         copper: Arc<CopperTelemetry>,
@@ -385,19 +419,19 @@ impl BoardRenderer {
         }
     }
     pub fn with_source_stroke_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
-        self.texts = TraceRenderer::new(telemetry);
+        self.texts.set_telemetry(telemetry);
         self
     }
     pub fn with_label_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
-        self.labels = TraceRenderer::new(telemetry);
+        self.labels.set_telemetry(telemetry);
         self
     }
     pub fn with_custom_outline_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
-        self.custom_outlines = TraceRenderer::new(telemetry);
+        self.custom_outlines.set_telemetry(telemetry);
         self
     }
     pub fn with_zone_outline_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
-        self.zone_outlines = TraceRenderer::new(telemetry);
+        self.zone_outlines.set_telemetry(telemetry);
         self
     }
 
@@ -442,6 +476,8 @@ impl NativeGpuRenderer for BoardRenderer {
         let frame = data
             .downcast_ref::<BoardFrame>()
             .context("GPU_BOARD_PAYLOAD_INVALID")?;
+        let timing = crate::frame_timing::begin();
+        let mut category_us = [[0u64; 10]; 3];
         self.copper.static_shapes_fill_solid = frame.display.static_shapes_fill_solid;
         // Keep selection identity separate from base material colors. Standalone
         // copper tinting and unknown zone styling retain their existing contract.
@@ -526,12 +562,26 @@ impl NativeGpuRenderer for BoardRenderer {
             labels.opacity = frame.display.global_opacity;
             labels
         });
-        self.traces.prepare(context, &frame.traces)?;
-        let copper_ready = self
-            .copper
-            .prepare(context, &frame.copper, allow_copper_upload)?;
+        // Most zones have no embedded labels. Resolve owners once per frame,
+        // rather than entering stencil and scanning all glyphs for every zone.
+        let zone_label_owners: BTreeSet<_> = label_frame
+            .iter()
+            .flat_map(|label| &label.tracks.instances)
+            .filter(|glyph| glyph.ids[1] == Category::Zone as u32)
+            .map(|glyph| pomelo_core::model::ObjectId(glyph.ids[0]))
+            .collect();
+        let mut upload_budget = super::copper_pipeline::UPLOAD_BYTES_PER_FRAME;
+        self.traces
+            .prepare_with_budget(context, &frame.traces, &mut upload_budget)?;
+        let copper_ready = self.copper.prepare_with_budget(
+            context,
+            &frame.copper,
+            allow_copper_upload,
+            &mut upload_budget,
+        )?;
         if allow_pad_upload && let Some(pads) = &frame.pads {
-            self.pads.prepare(context, pads)?;
+            self.pads
+                .prepare_with_budget(context, pads, &mut upload_budget)?;
         }
         let pads_ready = frame
             .pads
@@ -542,46 +592,57 @@ impl NativeGpuRenderer for BoardRenderer {
             .as_ref()
             .and_then(|pads| pads.custom_mesh.as_ref());
         let custom_ready = if let Some(source) = custom_source {
-            self.custom_pads
-                .prepare(context, source, allow_custom_upload)?
+            self.custom_pads.prepare_with_budget(
+                context,
+                source,
+                allow_custom_upload,
+                &mut upload_budget,
+            )?
         } else {
             false
         };
         if allow_custom_outline_upload && let Some(source) = &custom_outline_frame {
-            self.custom_outlines.prepare(context, source)?;
+            self.custom_outlines
+                .prepare_with_budget(context, source, &mut upload_budget)?;
         }
         if custom_outline_frame.is_none() {
             self.custom_outlines.clear_if_cached();
         }
         let mut seen = std::collections::BTreeSet::new();
         if allow_drill_upload && let Some(drills) = &frame.drills {
-            self.drills.prepare(context, drills)?;
+            self.drills
+                .prepare_with_budget(context, drills, &mut upload_budget)?;
         }
         if allow_outline_upload && let Some(outline_frame) = &outline_frame {
-            self.zone_outlines.prepare(context, outline_frame)?;
+            self.zone_outlines
+                .prepare_with_budget(context, outline_frame, &mut upload_budget)?;
         }
         if outline_frame.is_none() {
             self.zone_outlines.clear_if_cached();
         }
         if allow_drawing_upload && let Some(drawing_frame) = &drawing_frame {
-            self.drawings.prepare(context, drawing_frame)?;
+            self.drawings
+                .prepare_with_budget(context, drawing_frame, &mut upload_budget)?;
         }
         if allow_text_upload && let Some(text_frame) = &text_frame {
-            self.texts.prepare(context, text_frame)?;
+            self.texts
+                .prepare_with_budget(context, text_frame, &mut upload_budget)?;
         }
         let allow_glyph_upload = allow_text_upload
             && text_frame
                 .as_ref()
                 .is_none_or(|text| self.texts.is_uploaded(&text.tracks));
         if allow_glyph_upload && let Some(glyph) = &glyph_frame {
-            self.glyphs.prepare(context, glyph)?;
+            self.glyphs
+                .prepare_with_budget(context, glyph, &mut upload_budget)?;
         }
         let allow_label_upload = allow_glyph_upload
             && glyph_frame
                 .as_ref()
                 .is_none_or(|glyph| self.glyphs.is_uploaded(&glyph.tracks));
         if allow_label_upload && let Some(label) = &label_frame {
-            self.labels.prepare(context, label)?;
+            self.labels
+                .prepare_with_budget(context, label, &mut upload_budget)?;
         }
         if glyph_frame.is_none() {
             self.glyphs.clear_if_cached();
@@ -593,8 +654,12 @@ impl NativeGpuRenderer for BoardRenderer {
             && label_frame
                 .as_ref()
                 .is_none_or(|label| self.labels.is_uploaded(&label.tracks));
-        self.copper
-            .prepare_curves(context, frame.curves.as_deref(), allow_curve_upload)?;
+        self.copper.prepare_curves_with_budget(
+            context,
+            frame.curves.as_deref(),
+            allow_curve_upload,
+            &mut upload_budget,
+        )?;
         let mut layers = Vec::new();
         for layer in frame
             .layer_order
@@ -684,6 +749,9 @@ impl NativeGpuRenderer for BoardRenderer {
             OverlayPass::Selection,
             OverlayPass::Hover,
         ] {
+            if !frame.traces.has_overlay(pass) {
+                continue;
+            }
             let mut traces = if pass == OverlayPass::Base {
                 base.clone()
             } else {
@@ -703,6 +771,7 @@ impl NativeGpuRenderer for BoardRenderer {
                     continue;
                 }
                 traces.material_override = frame.display.appearance.material(layer, category);
+                let command_started = timing.map(|_| std::time::Instant::now());
                 // Allegro's shapes slider overrides global alpha for shape fill;
                 // ordinary geometry and labels use the independent global value.
                 traces.opacity = if pass != OverlayPass::Base
@@ -716,7 +785,7 @@ impl NativeGpuRenderer for BoardRenderer {
                     Category::Zone
                         if copper_ready
                             && frame.display.show_copper
-                            && frame.copper_opacity > 0.0
+                            && (frame.copper_opacity > 0.0 || pass == OverlayPass::Selection)
                             && pass != OverlayPass::Hover =>
                     {
                         if pass == OverlayPass::Base
@@ -728,6 +797,7 @@ impl NativeGpuRenderer for BoardRenderer {
                                 &traces,
                                 frame.copper_opacity,
                                 layer,
+                                Some(&zone_label_owners),
                                 &mut |batch| {
                                     self.labels.draw_prepared(
                                         context,
@@ -759,12 +829,7 @@ impl NativeGpuRenderer for BoardRenderer {
                             let mut outline = traces.clone();
                             outline.tracks = Arc::clone(&source.tracks);
                             let scope = if pass == OverlayPass::Base {
-                                // Controlled Allegro captures retain Dynamic hairlines at25/255,
-                                // and suppress independent bright boundaries starting at26/255.
-                                TraceScope::ZoneOutlines(
-                                    layer,
-                                    frame.copper_opacity <= 25.0 / 255.0,
-                                )
+                                TraceScope::ZoneOutlines(layer)
                             } else {
                                 TraceScope::Layer(layer)
                             };
@@ -806,16 +871,14 @@ impl NativeGpuRenderer for BoardRenderer {
                         }
                         let pin = category != Category::Via;
                         if pads_ready {
-                            let visible = |instance: &crate::pads::PadInstance| {
-                                (instance.source[0] == 0) == pin
-                                    && (instance.source[3] & 4 == 0
-                                        || !frame.display.show_backdrills)
-                            };
-                            self.pads.draw_filtered(
+                            self.pads.draw_scoped(
                                 context,
                                 &traces,
                                 Some(layer),
-                                Some(&visible),
+                                super::pad_pipeline::Visibility::Pads {
+                                    pin,
+                                    show_backdrills: frame.display.show_backdrills,
+                                },
                             )?;
                         }
                         if custom_ready && frame.display.filled {
@@ -910,36 +973,11 @@ impl NativeGpuRenderer for BoardRenderer {
                             drill_frame.material_override =
                                 Some(traces.material_override.unwrap_or(frame.drill_color));
                             drill_frame.filled = true;
-                            let visible = |instance: &crate::pads::PadInstance| {
-                                let backdrill = instance.source[3] & 2 != 0;
-                                let scopes = if backdrill {
-                                    &source.backdrill_scopes
-                                } else {
-                                    &source.drill_scopes
-                                };
-                                let scope = if instance.source[0] == 0 {
-                                    None
-                                } else {
-                                    Some(
-                                        scopes
-                                            .as_ref()
-                                            .and_then(|scopes| {
-                                                scopes.get(instance.source[1] as usize)
-                                            })
-                                            .map_or(&[][..], Vec::as_slice),
-                                    )
-                                };
-                                if backdrill {
-                                    frame.display.backdrill_visible(scope.unwrap_or(&[]))
-                                } else {
-                                    frame.display.drill_visible(scope)
-                                }
-                            };
-                            self.drills.draw_filtered(
+                            self.drills.draw_scoped(
                                 context,
                                 &drill_frame,
                                 None,
-                                Some(&visible),
+                                super::pad_pipeline::Visibility::Drills(&frame.display),
                             )?;
                         }
                         if pass == OverlayPass::Base
@@ -973,6 +1011,10 @@ impl NativeGpuRenderer for BoardRenderer {
                         )?;
                     }
                 }
+                if let Some(started) = command_started {
+                    category_us[pass as usize][category as usize] +=
+                        started.elapsed().as_micros() as u64;
+                }
             }
         }
         self.copper
@@ -983,6 +1025,24 @@ impl NativeGpuRenderer for BoardRenderer {
             .telemetry
             .visible_zones
             .store(custom_zones, Ordering::Relaxed);
+        crate::frame_timing::record("native_board", timing, || {
+            serde_json::json!({
+                "camera": frame.traces.camera,
+                "viewport": context.viewport,
+                "segments": frame.traces.tracks.instances.len(),
+                "zones": frame.copper.batches.len(),
+                "net": frame.traces.highlighted_net.map(|(id, _)|id.0),
+                "visible_layers": frame.layer_order.iter().filter(|&&id|frame.display.layer_visible(id)).map(|id|id.0).collect::<Vec<_>>(),
+                "category_order":["outline","drawing","zone","zone_outline","trace","bond_wire","text","pin","via","drill"],
+                "category_us": category_us,
+                "trace_stats":self.traces.statistics(),
+                "pad_stats":self.pads.statistics(),
+                "drill_stats":self.drills.statistics(),
+                "label_stats":self.labels.statistics(),
+                "copper_stats":self.copper.telemetry.snapshot(),
+                "labels": frame.labels.as_ref().map_or(0, |source|source.instances.len()),
+            })
+        });
         Ok(())
     }
     fn reset(&mut self) {

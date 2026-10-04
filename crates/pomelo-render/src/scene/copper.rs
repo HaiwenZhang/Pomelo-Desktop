@@ -7,6 +7,8 @@ use pomelo_core::{
     task::CancellationToken,
 };
 use std::ops::Range;
+mod source;
+use source::CopperSource;
 
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -83,10 +85,16 @@ impl CopperBatch {
 
 #[derive(Debug)]
 pub struct PreparedCopper {
+    pub(crate) source: Option<CopperSource>,
+    /// Materialized GPU-format vertices. Source-backed preparations leave this
+    /// empty; use `vertex_count` for the logical geometry size.
     pub vertices: Vec<CopperVertex>,
-    /// Global vertex indices. Access via each batch's explicitly named coverage ranges.
+    /// Materialized global vertex indices; empty for source-backed preparations.
+    /// Use `index_count` and each batch's explicitly named coverage ranges.
     pub indices: Vec<u32>,
     pub batches: Vec<CopperBatch>,
+    // Keep last: buffers must drop before the shared budget returns their bytes.
+    pub(crate) memory_reservation: Option<pomelo_core::memory::MemoryReservation>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,13 +119,39 @@ impl Default for CopperLimits {
 }
 
 impl PreparedCopper {
+    /// Owned heap capacities, including batch metadata and allocation slack.
+    pub fn allocation_bytes(&self) -> usize {
+        self.vertices
+            .capacity()
+            .saturating_mul(size_of::<CopperVertex>())
+            .saturating_add(self.indices.capacity().saturating_mul(size_of::<u32>()))
+            .saturating_add(
+                self.batches
+                    .capacity()
+                    .saturating_mul(size_of::<CopperBatch>()),
+            )
+            .saturating_add(self.batches.iter().fold(0usize, |bytes, batch| {
+                bytes.saturating_add(batch.parity_rings.as_ref().map_or(0, |rings| {
+                    rings.capacity().saturating_mul(size_of::<ParityRing>())
+                }))
+            }))
+            .saturating_add(self.source_allocation_bytes())
+    }
     pub fn upload_bytes(&self) -> usize {
-        self.vertices.len() * size_of::<CopperVertex>() + self.indices.len() * size_of::<u32>()
+        self.vertex_count() * size_of::<CopperVertex>() + self.index_count() * size_of::<u32>()
     }
     pub fn build(
         zones: &[Zone],
         limits: CopperLimits,
         cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        Self::build_impl(zones, limits, cancellation, true)
+    }
+    fn build_impl(
+        zones: &[Zone],
+        limits: CopperLimits,
+        cancellation: &CancellationToken,
+        materialize: bool,
     ) -> Result<Self, PrepareError> {
         check_cancelled(cancellation)?;
         check_count(zones.len(), limits.max_zones.min(u32::MAX as usize))?;
@@ -129,17 +163,26 @@ impl PreparedCopper {
         }
         check_count(vertices, limits.max_vertices.min(u32::MAX as usize))?;
         check_count(indices, limits.max_indices.min(u32::MAX as usize))?;
-        let bytes = vertices
-            .saturating_mul(size_of::<CopperVertex>())
-            .saturating_add(indices.saturating_mul(size_of::<u32>()))
-            .saturating_add(zones.len().saturating_mul(size_of::<CopperBatch>()));
+        let bytes = zones
+            .len()
+            .saturating_mul(size_of::<CopperBatch>())
+            .saturating_add(if materialize {
+                vertices
+                    .saturating_mul(size_of::<CopperVertex>())
+                    .saturating_add(indices.saturating_mul(size_of::<u32>()))
+            } else {
+                source::metadata_bytes(zones.len())
+            });
         check_limit(bytes, limits.max_bytes)?;
         // Every limit is checked before allocating an output array.
         let mut result = Self {
-            vertices: reserve(vertices)?,
-            indices: reserve(indices)?,
+            source: None,
+            memory_reservation: None,
+            vertices: reserve(if materialize { vertices } else { 0 })?,
+            indices: reserve(if materialize { indices } else { 0 })?,
             batches: reserve(zones.len())?,
         };
+        let (mut next_vertex, mut next_index) = (0u32, 0u32);
         for (source_index, zone) in zones.iter().enumerate() {
             check_cancelled(cancellation)?;
             let mesh = &zone.mesh;
@@ -170,8 +213,8 @@ impl PreparedCopper {
                 }
                 end as usize
             };
-            let vertex_start = result.vertices.len() as u32;
-            let index_start = result.indices.len() as u32;
+            let vertex_start = next_vertex;
+            let index_start = next_index;
             for (index, point) in mesh.vertices.iter().enumerate() {
                 if index.is_multiple_of(1024) {
                     check_cancelled(cancellation)?;
@@ -185,7 +228,9 @@ impl PreparedCopper {
                 if !position.into_iter().all(f32::is_finite) {
                     return Err(invalid());
                 }
-                result.vertices.push(CopperVertex { position });
+                if materialize {
+                    result.vertices.push(CopperVertex { position });
+                }
             }
             for (position, &index) in mesh.indices.iter().enumerate() {
                 if position.is_multiple_of(1024) {
@@ -198,9 +243,10 @@ impl PreparedCopper {
                 {
                     return Err(invalid());
                 }
-                result
-                    .indices
-                    .push(vertex_start.checked_add(index).ok_or_else(invalid)?);
+                let index = vertex_start.checked_add(index).ok_or_else(invalid)?;
+                if materialize {
+                    result.indices.push(index);
+                }
             }
             result.batches.push(CopperBatch {
                 object: zone.id,
@@ -218,6 +264,8 @@ impl PreparedCopper {
                 curved: mesh.curved,
                 parity_rings: None,
             });
+            next_vertex += mesh.vertices.len() as u32;
+            next_index += mesh.indices.len() as u32;
         }
         // Preserve source order within a layer without copying vertex/index buffers.
         result

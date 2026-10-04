@@ -13,7 +13,7 @@ fn stipple(sample: vec2f) -> f32 {
  if u.view.w > 1.5 {return vec4f(0.63, 1.0, 0.85, 0.18);}
  if u.view.w > 0.5 && u.view.z > 3.5 {
  let dynamic = u.view.z > 4.5; let sample = (position.xy - u.canvas.xy) / select(u.viewport.z, 1.0, dynamic); let ink = stipple(sample);
- if dynamic {return vec4f(mix(u.color.rgb, vec3f(1.0), ink), u.color.a);} return vec4f(u.color.rgb, u.color.a * ink);
+ if dynamic {let screen = position.xy / u.viewport.z; let cell = screen - floor(screen / 5.0) * 5.0 - vec2f(2.5); return vec4f(1.0, 1.0, 1.0, (1.0 - smoothstep(0.65, 1.25, length(cell))) * 0.9);} return vec4f(u.color.rgb, u.color.a * ink);
  }
  if u.view.w > 0.5 && u.view.z > 1.5 {return vec4f(u.color.rgb, u.color.a * stipple(position.xy - u.canvas.xy));}
  if u.view.w > 0.5 {let screen = position.xy / u.viewport.z; let cell = screen - floor(screen / 5.0) * 5.0 - vec2f(2.5); return vec4f(1.0, 1.0, 1.0, (1.0 - smoothstep(0.65, 1.25, length(cell))) * 0.8);}

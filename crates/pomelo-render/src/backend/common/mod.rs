@@ -1,6 +1,8 @@
 //! Shared native GPU context and pipeline scheduling.
 pub(super) mod copper;
 pub(super) mod pad;
+mod pad_ranges;
+mod pad_visibility;
 pub(super) mod probe;
 pub(super) mod trace;
 use super::Shader;

@@ -227,6 +227,7 @@ impl PreparedDrills {
         }
         Ok(Self {
             geometry: PreparedPads {
+                memory_reservation: None,
                 analytic,
                 custom: vec![],
                 batches,

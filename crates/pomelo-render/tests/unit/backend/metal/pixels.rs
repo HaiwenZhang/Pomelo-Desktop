@@ -65,7 +65,7 @@ fn metal_many_batches_complete_in_one_render_pass() {
 }
 #[test]
 #[ignore = "requires a GPU adapter; synthetic pixel readback"]
-fn metal_dynamic_zone_border_obeys_shape_opacity_policy() {
+fn metal_dynamic_zone_border_remains_visible() {
     trace_draws(1, Some(1));
     trace_draws(1, Some(2));
 }
@@ -133,8 +133,7 @@ fn trace_draws(draw_count: usize, zone_mode: Option<u32>) {
     let pixels = pixels(command, &color);
     let middle = sample(&pixels, 64, 64);
     let expected_red = match zone_mode {
-        Some(1) => 64,
-        Some(2) => 0,
+        Some(_) => 64,
         _ if draw_count == 1 => 127,
         _ => 255,
     };
@@ -284,6 +283,8 @@ fn metal_empty_curve_override_preserves_background_without_missing_buffers() {
     original.upload_next(&context).unwrap();
     let mut empty = UploadedCopper::new(
         Arc::new(crate::copper::PreparedCopper {
+            memory_reservation: None,
+            source: None,
             vertices: vec![],
             indices: vec![],
             batches: vec![],
@@ -333,6 +334,7 @@ fn metal_empty_curve_override_preserves_background_without_missing_buffers() {
                 layer: None,
                 visible: None,
                 annotations: None,
+                annotation_owners: None,
                 overrides: Some(&overrides),
                 static_shapes_fill_solid: false,
                 network_selection: None,

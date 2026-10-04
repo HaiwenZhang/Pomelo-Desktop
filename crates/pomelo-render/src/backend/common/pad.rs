@@ -2,22 +2,176 @@
 use super::super::{TraceFrame, board};
 use super::Rect;
 use super::driver::{Buffer, Draw, Pipeline as GpuPipeline, StencilMode};
+use super::pad_ranges::PadRanges;
+use super::pad_visibility::Accepted;
 use super::trace::{CHUNK_INSTANCES, CHUNKS_PER_FRAME};
 use super::{Device, NativeGpuContext};
 use crate::pads::{PadInstance, PreparedPads};
 use crate::split_position;
 use anyhow::ensure;
 use pomelo_core::{interaction::Camera, model::LayerId};
-use std::sync::Arc;
+use std::{
+    cell::{Cell, RefCell},
+    sync::Arc,
+};
+#[derive(Clone, Copy)]
+pub(crate) enum Visibility<'a> {
+    All,
+    Predicate(&'a dyn Fn(&PadInstance) -> bool),
+    Pads { pin: bool, show_backdrills: bool },
+    Drills(&'a Arc<pomelo_core::display::BoardDisplay>),
+}
+impl Visibility<'_> {
+    fn accepts(self, source: &PreparedPads, instance: &PadInstance) -> bool {
+        match self {
+            Self::All => true,
+            Self::Predicate(predicate) => predicate(instance),
+            Self::Pads {
+                pin,
+                show_backdrills,
+            } => {
+                (instance.source[0] == 0) == pin
+                    && (instance.source[3] & 4 == 0 || !show_backdrills)
+            }
+            Self::Drills(display) => {
+                let backdrill = instance.source[3] & 2 != 0;
+                let scopes = if backdrill {
+                    &source.backdrill_scopes
+                } else {
+                    &source.drill_scopes
+                };
+                let scope = (instance.source[0] != 0).then(|| {
+                    scopes
+                        .as_ref()
+                        .and_then(|scopes| scopes.get(instance.source[1] as usize))
+                        .map_or(&[][..], Vec::as_slice)
+                });
+                if backdrill {
+                    display.backdrill_visible(scope.unwrap_or(&[]))
+                } else {
+                    display.drill_visible(scope)
+                }
+            }
+        }
+    }
+}
+struct DrillVisibility {
+    display: Arc<pomelo_core::display::BoardDisplay>,
+    accepted: Accepted,
+}
+#[derive(Clone, Copy)]
+struct SelectedNetSummary {
+    net: u32,
+    count: usize,
+    runs: usize,
+}
 struct Chunk {
     start: usize,
     count: usize,
     buffer: Buffer,
+    ranges: PadRanges,
+    selected_net: Cell<Option<SelectedNetSummary>>,
+    pad_visibility: RefCell<[Option<Accepted>; 4]>,
+    drill_visibility: RefCell<Option<DrillVisibility>>,
+}
+impl Chunk {
+    fn visible(
+        &self,
+        source: &PreparedPads,
+        visibility: Visibility<'_>,
+        range: std::ops::Range<usize>,
+        legacy: bool,
+        mut emit: impl FnMut(std::ops::Range<usize>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let build = || {
+            Accepted::build(
+                source.analytic[self.start..self.start + self.count]
+                    .iter()
+                    .map(|instance| visibility.accepts(source, instance)),
+            )
+        };
+        if !legacy {
+            match visibility {
+                Visibility::All => return emit(range),
+                Visibility::Pads {
+                    pin,
+                    show_backdrills,
+                } => {
+                    let slot = usize::from(pin) + usize::from(show_backdrills) * 2;
+                    let mut entries = self.pad_visibility.borrow_mut();
+                    if entries[slot].is_none() {
+                        entries[slot] = Some(build()?);
+                    }
+                    return entries[slot]
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("GPU_PAD_VISIBILITY_MISSING"))?
+                        .visible(range, emit);
+                }
+                Visibility::Drills(display) => {
+                    let mut entry = self.drill_visibility.borrow_mut();
+                    if entry
+                        .as_ref()
+                        .is_none_or(|entry| !Arc::ptr_eq(&entry.display, display))
+                    {
+                        *entry = Some(DrillVisibility {
+                            display: Arc::clone(display),
+                            accepted: build()?,
+                        });
+                    }
+                    return entry
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("GPU_DRILL_VISIBILITY_MISSING"))?
+                        .accepted
+                        .visible(range, emit);
+                }
+                Visibility::Predicate(_) => {}
+            }
+        }
+        let mut cursor = range.start;
+        while cursor < range.end {
+            while cursor < range.end
+                && !visibility.accepts(source, &source.analytic[self.start + cursor])
+            {
+                cursor += 1;
+            }
+            let start = cursor;
+            while cursor < range.end
+                && visibility.accepts(source, &source.analytic[self.start + cursor])
+            {
+                cursor += 1;
+            }
+            if start < cursor {
+                emit(start..cursor)?;
+            }
+        }
+        Ok(())
+    }
+    fn selected_net_summary(&self, source: &[PadInstance], net: u32) -> SelectedNetSummary {
+        if let Some(summary) = self.selected_net.get().filter(|summary| summary.net == net) {
+            return summary;
+        }
+        let mut count = 0;
+        let mut runs = 0;
+        let mut previous = false;
+        for instance in &source[self.start..self.start + self.count] {
+            let selected = instance.ids[2] == net;
+            count += usize::from(selected);
+            runs += usize::from(selected && !previous);
+            previous = selected;
+        }
+        let summary = SelectedNetSummary { net, count, runs };
+        self.selected_net.set(Some(summary));
+        summary
+    }
 }
 pub(crate) struct UploadedPads {
     pub source: Arc<PreparedPads>,
     chunks: Vec<Chunk>,
     uploaded: usize,
+    #[cfg(test)]
+    cpu_net_selection: bool,
+    #[cfg(test)]
+    pub legacy_visibility: bool,
 }
 impl UploadedPads {
     pub fn new(source: Arc<PreparedPads>) -> anyhow::Result<Self> {
@@ -37,12 +191,35 @@ impl UploadedPads {
             source,
             chunks: Vec::new(),
             uploaded: 0,
+            #[cfg(test)]
+            cpu_net_selection: false,
+            #[cfg(test)]
+            legacy_visibility: false,
         })
     }
     pub fn uploaded(&self) -> usize {
         self.uploaded
     }
-    pub fn upload_next(&mut self, device: &Device<'_>) -> anyhow::Result<u64> {
+    #[cfg(test)]
+    pub(crate) fn use_cpu_net_selection(&mut self) {
+        self.cpu_net_selection = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn disable_range_culling(&mut self) -> anyhow::Result<()> {
+        for chunk in &mut self.chunks {
+            chunk.ranges = PadRanges::build(std::iter::repeat_n(
+                [
+                    f64::NEG_INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::INFINITY,
+                    f64::INFINITY,
+                ],
+                chunk.count,
+            ))?;
+        }
+        Ok(())
+    }
+    pub fn upload_next(&mut self, device: &Device<'_>, budget: &mut usize) -> anyhow::Result<u64> {
         let mut bytes = 0;
         for _ in 0..CHUNKS_PER_FRAME {
             let start = self.uploaded;
@@ -51,12 +228,32 @@ impl UploadedPads {
                 break;
             }
             let data = bytemuck::cast_slice(&self.source.analytic[start..start + count]);
+            if data.len() > *budget {
+                break;
+            }
             let buffer = device.structured_buffer(data, size_of::<PadInstance>())?;
+            let ranges = PadRanges::build(self.source.analytic[start..start + count].iter().map(
+                |pad| {
+                    let low = pad.bounds_min;
+                    let high = pad.bounds_max;
+                    [
+                        f64::from(low[0]) + f64::from(low[2]),
+                        f64::from(low[1]) + f64::from(low[3]),
+                        f64::from(high[0]) + f64::from(high[2]),
+                        f64::from(high[1]) + f64::from(high[3]),
+                    ]
+                },
+            ))?;
             bytes += data.len() as u64;
+            *budget -= data.len();
             self.chunks.push(Chunk {
                 start,
                 count,
                 buffer,
+                ranges,
+                selected_net: Cell::new(None),
+                pad_visibility: RefCell::new([None, None, None, None]),
+                drill_visibility: RefCell::new(None),
             });
             self.uploaded += count;
         }
@@ -87,6 +284,7 @@ impl Pipeline {
             pipeline: device.pipeline(super::Shader::Pad)?,
         })
     }
+    #[cfg(test)]
     pub fn draw(
         &self,
         context: &NativeGpuContext<'_>,
@@ -94,6 +292,22 @@ impl Pipeline {
         cache: &UploadedPads,
         layer: Option<LayerId>,
         visible: Option<&dyn Fn(&PadInstance) -> bool>,
+    ) -> anyhow::Result<u64> {
+        self.draw_scoped(
+            context,
+            frame,
+            cache,
+            layer,
+            visible.map_or(Visibility::All, Visibility::Predicate),
+        )
+    }
+    pub(crate) fn draw_scoped(
+        &self,
+        context: &NativeGpuContext<'_>,
+        frame: &TraceFrame,
+        cache: &UploadedPads,
+        layer: Option<LayerId>,
+        visibility: Visibility<'_>,
     ) -> anyhow::Result<u64> {
         let bounds = context.bounds;
         let width = bounds.size.width.0;
@@ -143,6 +357,14 @@ impl Pipeline {
         if rect.right <= rect.left || rect.bottom <= rect.top {
             return Ok(0);
         }
+        let half_width = f64::from(width) * 0.5 / camera.pixels_per_mm;
+        let half_height = f64::from(height) * 0.5 / camera.pixels_per_mm;
+        // Fit views benefit from the original contiguous submission; range pruning
+        // can fragment source ranges for pads extending beyond the board outline.
+        let covers_board = camera.center.x - half_width <= frame.bounds.min.x
+            && camera.center.x + half_width >= frame.bounds.max.x
+            && camera.center.y - half_height <= frame.bounds.min.y
+            && camera.center.y + half_height >= frame.bounds.max.y;
         let mut uniforms = Uniforms {
             viewport: [
                 context.viewport[0],
@@ -179,6 +401,25 @@ impl Pipeline {
             highlight: frame.highlighted_net.map_or([0.0; 4], |(_, color)| color),
         };
         let mut draws = 0;
+        #[cfg(not(test))]
+        let legacy = false;
+        #[cfg(test)]
+        let legacy = cache.legacy_visibility;
+        let uniform_base = !legacy
+            && frame.pass == board::OverlayPass::Base
+            && frame.highlighted_object.is_none()
+            && frame
+                .highlighted_objects
+                .as_ref()
+                .is_none_or(|(objects, _)| objects.is_empty())
+            && frame
+                .highlighted_related_objects
+                .as_ref()
+                .is_none_or(|(objects, _)| objects.is_empty())
+            && frame.hovered_object.is_none();
+        let selected_net = frame.selected_net_only();
+        #[cfg(test)]
+        let selected_net = selected_net.filter(|_| !cache.cpu_net_selection);
         for batch in &cache.source.batches {
             if layer.is_some_and(|layer| batch.layer != layer) {
                 continue;
@@ -190,62 +431,110 @@ impl Pipeline {
                 if start >= end {
                     continue;
                 }
-                let selected = |index: usize| {
-                    let instance = &cache.source.analytic[index];
-                    let object = if instance.source[0] == 0 {
-                        pomelo_core::selection::SelectedObject::Pin(pomelo_core::model::ObjectId(
-                            instance.ids[0],
-                        ))
-                    } else {
-                        pomelo_core::selection::SelectedObject::Via(pomelo_core::model::ObjectId(
-                            instance.ids[0],
-                        ))
+                let summary = selected_net
+                    .map(|net| chunk.selected_net_summary(&cache.source.analytic, net.0));
+                if summary.is_some_and(|summary| summary.count == 0) {
+                    continue;
+                }
+                // Avoid streaming sparse nets through the GPU merely to reject them.
+                // Dense, fragmented chunks amortize one instanced submission instead.
+                let shader_net =
+                    summary.filter(|summary| summary.count >= 128 && summary.runs >= 32);
+                let magnitude = chunk
+                    .ranges
+                    .coordinate_magnitude()
+                    .max(camera.center.x.abs())
+                    .max(camera.center.y.abs());
+                let padding = 2.0 * f64::from(frame.scale_factor) / camera.pixels_per_mm
+                    + magnitude * f64::from(f32::EPSILON).powi(2) * 8.0
+                    + half_width.max(half_height) * f64::from(f32::EPSILON) * 8.0;
+                let view = [
+                    camera.center.x - half_width - padding,
+                    camera.center.y - half_height - padding,
+                    camera.center.x + half_width + padding,
+                    camera.center.y + half_height + padding,
+                ];
+                let mut draw_range = |range: std::ops::Range<usize>| {
+                    let start = range.start + chunk.start;
+                    let end = range.end + chunk.start;
+                    let selected = |index: usize| {
+                        let instance = &cache.source.analytic[index];
+                        let object = if instance.source[0] == 0 {
+                            pomelo_core::selection::SelectedObject::Pin(
+                                pomelo_core::model::ObjectId(instance.ids[0]),
+                            )
+                        } else {
+                            pomelo_core::selection::SelectedObject::Via(
+                                pomelo_core::model::ObjectId(instance.ids[0]),
+                            )
+                        };
+                        frame.object_highlight(
+                            object,
+                            pomelo_core::model::NetId(instance.ids[2]),
+                            None,
+                        )
                     };
-                    frame.object_highlight(object, pomelo_core::model::NetId(instance.ids[2]), None)
+                    let mut cursor = start;
+                    while cursor < end {
+                        let start = cursor;
+                        let highlighted = if shader_net.is_some() {
+                            Some([1.0, 1.0, 1.0, 0.9])
+                        } else if uniform_base {
+                            None
+                        } else {
+                            (cursor < end).then(|| selected(cursor)).flatten()
+                        };
+                        if uniform_base || shader_net.is_some() {
+                            cursor = end;
+                        } else {
+                            while cursor < end && selected(cursor) == highlighted {
+                                cursor += 1;
+                            }
+                        }
+                        let end = cursor;
+                        if start == end {
+                            continue;
+                        }
+                        if frame.pass != board::OverlayPass::Base && highlighted.is_none() {
+                            continue;
+                        }
+                        // Mode 2 preserves source order in one instanced range and
+                        // collapses nonmatching net quads before rasterization.
+                        uniforms.batch[3] = if shader_net.is_some() {
+                            2
+                        } else {
+                            u32::from(highlighted.is_some())
+                        };
+                        uniforms.highlight = highlighted.unwrap_or_else(|| {
+                            frame.highlighted_net.map_or([0.0; 4], |(_, color)| color)
+                        });
+                        uniforms.batch[0] = (start - chunk.start) as u32;
+                        context.device.draw(
+                            &self.pipeline,
+                            Draw {
+                                uniforms: bytemuck::bytes_of(&uniforms),
+                                vertices: &chunk.buffer,
+                                indices: None,
+                                start: 0,
+                                count: 4,
+                                instances: (end - start) as u32,
+                                rect,
+                                stencil: StencilMode::Inherited,
+                                atlas: None,
+                            },
+                        )?;
+                        draws += 1;
+                    }
+                    Ok(())
                 };
-                let mut cursor = start;
-                while cursor < end {
-                    while cursor < end
-                        && visible
-                            .is_some_and(|predicate| !predicate(&cache.source.analytic[cursor]))
-                    {
-                        cursor += 1;
-                    }
-                    let start = cursor;
-                    let highlighted = (cursor < end).then(|| selected(cursor)).flatten();
-                    while cursor < end
-                        && selected(cursor) == highlighted
-                        && visible.is_none_or(|predicate| predicate(&cache.source.analytic[cursor]))
-                    {
-                        cursor += 1;
-                    }
-                    let end = cursor;
-                    if start == end {
-                        continue;
-                    }
-                    if frame.pass != board::OverlayPass::Base && highlighted.is_none() {
-                        continue;
-                    }
-                    uniforms.batch[3] = u32::from(highlighted.is_some());
-                    uniforms.highlight = highlighted.unwrap_or_else(|| {
-                        frame.highlighted_net.map_or([0.0; 4], |(_, color)| color)
-                    });
-                    uniforms.batch[0] = (start - chunk.start) as u32;
-                    context.device.draw(
-                        &self.pipeline,
-                        Draw {
-                            uniforms: bytemuck::bytes_of(&uniforms),
-                            vertices: &chunk.buffer,
-                            indices: None,
-                            start: 0,
-                            count: 4,
-                            instances: (end - start) as u32,
-                            rect,
-                            stencil: StencilMode::Inherited,
-                            atlas: None,
-                        },
-                    )?;
-                    draws += 1;
+                let range = start - chunk.start..end - chunk.start;
+                let mut visible_range = |range| {
+                    chunk.visible(&cache.source, visibility, range, legacy, &mut draw_range)
+                };
+                if covers_board {
+                    visible_range(range)?;
+                } else {
+                    chunk.ranges.visible(view, range, visible_range)?;
                 }
             }
         }

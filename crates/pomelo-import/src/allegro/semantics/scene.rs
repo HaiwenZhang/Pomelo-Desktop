@@ -99,6 +99,22 @@ impl<'a> SceneBuilder<'a> {
 
     /// No partial scene is published after cancellation, a reference failure, or a resource limit.
     pub fn build(self, context: &ImportContext<'_>) -> Result<BoardScene, ImportError> {
+        self.build_with_stage_observer(context, &|_, _| {})
+    }
+
+    /// Observe coarse scene-building wall times without per-record instrumentation.
+    /// The observer runs synchronously and must avoid expensive work.
+    pub fn build_with_stage_observer(
+        self,
+        context: &ImportContext<'_>,
+        observer: &dyn Fn(&'static str, std::time::Duration),
+    ) -> Result<BoardScene, ImportError> {
+        let mut checkpoint = std::time::Instant::now();
+        let mut stage = |name| {
+            let now = std::time::Instant::now();
+            observer(name, now.duration_since(checkpoint));
+            checkpoint = std::time::Instant::now();
+        };
         context.check_cancelled()?;
         let database = self.database;
         let mut budget = OutputBudget {
@@ -118,12 +134,14 @@ impl<'a> SceneBuilder<'a> {
             },
         );
         budget.charge(layer_bytes, layers.len(), 0)?;
+        stage("layers");
         let networks = NetworkMap::build(database, &self.limits.networks, context)?;
         for name in networks.nets.values() {
             context.check_cancelled()?;
             budget.charge(128usize.saturating_add(name.capacity()), 1, 0)?;
         }
         let layer_count = layers.len() as u32;
+        stage("networks");
         let mut scene = BoardScene {
             layers,
             special_layers: Vec::new(),
@@ -166,6 +184,7 @@ impl<'a> SceneBuilder<'a> {
             }
             scene.segments.extend(segments);
         }
+        stage("tracks");
         for record in database.records_of_type(0x33, context) {
             let record = record?;
             let offset = record.span.offset.0 as usize;
@@ -194,6 +213,7 @@ impl<'a> SceneBuilder<'a> {
                 scene.vias.push(via);
             }
         }
+        stage("vias");
         for record in database.records_of_type(0x2d, context) {
             let record = record?;
             let offset = record.span.offset.0 as usize;
@@ -228,6 +248,7 @@ impl<'a> SceneBuilder<'a> {
         }
         budget.diagnostics(placement.take_diagnostics(), &mut scene.diagnostics)?;
         drop(placement);
+        stage("footprints");
         let mut copper = CopperDecoder::new(database, &networks, layer_count, self.limits.copper)?;
         for record in database.records_of_type(0x28, context) {
             let record = record?;
@@ -295,6 +316,7 @@ impl<'a> SceneBuilder<'a> {
         }
         budget.diagnostics(copper.take_diagnostics(), &mut scene.diagnostics)?;
         drop(copper);
+        stage("copper");
         scene.nets = networks.nets;
         scene.bounds = bounds
             .filter(|b: &Bounds| b.is_valid())
@@ -318,6 +340,7 @@ impl<'a> SceneBuilder<'a> {
         budget.diagnostics(texts.diagnostics, &mut scene.diagnostics)?;
         scene.texts = texts.texts;
         scene.drawing_layers = texts.drawing_layers;
+        stage("texts");
         let mut drawing_limits = self.limits.drawing;
         drawing_limits.objects.max_bytes = drawing_limits.objects.max_bytes.min(budget.available());
         let drawings =
@@ -357,6 +380,7 @@ impl<'a> SceneBuilder<'a> {
                 .sort_by_key(|l| (!l.default_visible, l.id));
         }
         context.check_cancelled()?;
+        stage("drawings");
         (context.progress)(ImportProgress {
             stage: ImportStage::BuildingGeometry,
             completed: budget.objects as u64,

@@ -4,7 +4,7 @@ use super::{header::BrdHeader, reader::Reader, record_scan::scan_record};
 use crate::{ImportContext, ImportError, ImportOptions};
 use pomelo_core::task::{ImportProgress, ImportStage};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, hash_map::Entry};
 use std::time::{Duration, Instant};
 
 /// Record identity is independent of its position in the source file.
@@ -92,9 +92,10 @@ impl BrdIndex {
             context.check_cancelled()?;
             let offset = reader.offset();
             let key = reader.u32()?;
-            if strings.contains_key(&key) {
-                return Err(ImportError::DuplicateString { key, offset });
-            }
+            let entry = match strings.entry(key) {
+                Entry::Occupied(_) => return Err(ImportError::DuplicateString { key, offset }),
+                Entry::Vacant(entry) => entry,
+            };
             reserve_budget(&mut accounted_bytes, 128, limits)?;
             let remaining = limits.max_index_bytes - accounted_bytes;
             let max_text = limits
@@ -102,7 +103,7 @@ impl BrdIndex {
                 .min((remaining / 3).min(usize::MAX as u64) as usize);
             let value = reader.bounded_cstring(max_text, context)?;
             reserve_budget(&mut accounted_bytes, 3 * value.len() as u64, limits)?;
-            strings.insert(key, value);
+            entry.insert(value);
             progress.emit(reader.offset(), false)?;
         }
         let object_offset = FileOffset(reader.offset() as u32);
@@ -143,14 +144,21 @@ impl BrdIndex {
             }
             let key = scan_record(&mut reader, record_type, &index.header, limits, context)?;
             let key = RecordKey(key.unwrap_or(0));
-            if key.0 != 0 && index.by_key.contains_key(&key) {
-                return Err(ImportError::DuplicateRecord { key: key.0, offset });
-            }
+            let entry = if key.0 == 0 {
+                None
+            } else {
+                match index.by_key.entry(key) {
+                    Entry::Occupied(_) => {
+                        return Err(ImportError::DuplicateRecord { key: key.0, offset });
+                    }
+                    Entry::Vacant(entry) => Some(entry),
+                }
+            };
             // Allow Vec doubling and HashMap load-factor slack for all three indexes.
             reserve_budget(&mut index.accounted_bytes, 96, limits)?;
             let record_index = index.records.len() as u32;
-            if key.0 != 0 {
-                index.by_key.insert(key, record_index);
+            if let Some(entry) = entry {
+                entry.insert(record_index);
             }
             index.by_type[usize::from(record_type)].push(record_index);
             index.records.push(RecordSpan {
@@ -223,6 +231,7 @@ struct Progress<'a, 'b> {
     context: &'a ImportContext<'b>,
     total: usize,
     last: Instant,
+    last_checked_offset: usize,
 }
 
 impl<'a, 'b> Progress<'a, 'b> {
@@ -231,10 +240,17 @@ impl<'a, 'b> Progress<'a, 'b> {
             context,
             total,
             last: Instant::now(),
+            last_checked_offset: 0,
         }
     }
     fn emit(&mut self, offset: usize, force: bool) -> Result<(), ImportError> {
         self.context.check_cancelled()?;
+        // Cancellation stays per-record. Reading the OS clock for each tiny
+        // record is unnecessary for a progress callback capped at 10 Hz.
+        if !force && offset.saturating_sub(self.last_checked_offset) < 64 * 1024 {
+            return Ok(());
+        }
+        self.last_checked_offset = offset;
         if force || self.last.elapsed() >= Duration::from_millis(100) {
             (self.context.progress)(ImportProgress {
                 stage: ImportStage::Indexing,

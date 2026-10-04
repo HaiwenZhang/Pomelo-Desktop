@@ -15,13 +15,28 @@ pub(crate) struct BoundsIndex {
     nodes: Vec<Node>,
 }
 impl BoundsIndex {
+    /// Upper bound when every source item has valid bounds. Entries and tree
+    /// nodes are reserved once, so construction needs no overlapping growth buffers.
+    pub(crate) fn max_allocation_bytes(count: usize) -> usize {
+        count
+            .saturating_mul(size_of::<Entry>())
+            .saturating_add(node_count(count).saturating_mul(size_of::<Node>()))
+    }
+
     pub fn build(
         bounds: impl IntoIterator<Item = Option<Bounds>>,
         cancel: &CancellationToken,
     ) -> Result<Self, super::picking_index::IndexError> {
         use super::picking_index::IndexError;
+        if cancel.is_cancelled() {
+            return Err(PathError::Cancelled.into());
+        }
+        let bounds = bounds.into_iter();
         let mut entries = Vec::new();
-        for (index, bounds) in bounds.into_iter().enumerate() {
+        entries
+            .try_reserve_exact(bounds.size_hint().0)
+            .map_err(|_| IndexError::Allocation)?;
+        for (index, bounds) in bounds.enumerate() {
             if cancel.is_cancelled() {
                 return Err(PathError::Cancelled.into());
             }
@@ -34,6 +49,9 @@ impl BoundsIndex {
             }
         }
         let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(node_count(entries.len()))
+            .map_err(|_| IndexError::Allocation)?;
         fn build(
             entries: &mut [Entry],
             base: usize,
@@ -118,5 +136,63 @@ impl BoundsIndex {
         }
         result.sort_unstable();
         Ok(result)
+    }
+}
+
+fn node_count(entries: usize) -> usize {
+    if entries == 0 {
+        0
+    } else if entries <= 16 {
+        1
+    } else {
+        let left = entries / 2;
+        let left_nodes = node_count(left);
+        let right_nodes = if entries.is_multiple_of(2) {
+            left_nodes
+        } else {
+            node_count(entries - left)
+        };
+        1usize
+            .saturating_add(left_nodes)
+            .saturating_add(right_nodes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Point;
+
+    #[test]
+    fn large_owner_hierarchies_fit_the_budget_and_preserve_source_candidates() {
+        let cancel = CancellationToken::default();
+        for count in [0, 1, 16, 17, 33, 1024, 4097] {
+            let source: Vec<_> = (0..count)
+                .map(|index| {
+                    (index % 5 != 0).then_some(Bounds {
+                        min: Point::new(index as f64, 0.0),
+                        max: Point::new(index as f64 + 2.0, 1.0),
+                    })
+                })
+                .collect();
+            let index = BoundsIndex::build(source.iter().copied(), &cancel).unwrap();
+            let bytes = index.entries.capacity() * size_of::<Entry>()
+                + index.nodes.capacity() * size_of::<Node>();
+            assert!(bytes <= BoundsIndex::max_allocation_bytes(count));
+            let query = Bounds {
+                min: Point::new(12.5, -1.0),
+                max: Point::new(25.5, 2.0),
+            };
+            let expected: Vec<_> = source
+                .iter()
+                .enumerate()
+                .filter_map(|(position, bounds)| {
+                    bounds
+                        .filter(|bounds| bounds.min.x <= query.max.x && bounds.max.x >= query.min.x)
+                        .map(|_| position)
+                })
+                .collect();
+            assert_eq!(index.query(query, &cancel).unwrap(), expected);
+        }
     }
 }

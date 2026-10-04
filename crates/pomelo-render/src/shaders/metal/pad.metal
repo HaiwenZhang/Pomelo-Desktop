@@ -300,6 +300,9 @@ vertex vertex_mainOutput vertex_main(
     float _e87 = u.view.x;
     metal::float4 _e90 = screen_position((_e66.xy + (_e70.zw * 0.5)) + ((metal::mix(lo, hi, _e75) * metal::float2(_e80, -1.0)) * _e87), u);
     o.position = _e90;
+    if (u.batch.w == 2u && p_4.ids.z != u.batch.y) {
+        o.position = metal::float4(2.0, 2.0, 0.0, 1.0);
+    }
     metal::float4 _e93 = relative(p_4.center, u);
     o.center = _e93;
     o.shape = p_4.shape;

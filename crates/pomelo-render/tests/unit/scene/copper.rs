@@ -34,6 +34,91 @@ fn zone(id: u32, layer: u32) -> Zone {
 }
 
 #[test]
+fn source_backed_upload_blocks_preserve_exact_vertices_rebased_indices_and_lifetime() {
+    use std::sync::Arc;
+    let mut empty = zone(4, 4);
+    empty.mesh = CopperMesh::default();
+    let scene = Arc::new(pomelo_core::model::BoardScene {
+        layers: vec![],
+        special_layers: vec![],
+        nets: Default::default(),
+        segments: vec![],
+        pins: vec![],
+        components: vec![],
+        vias: vec![],
+        zones: vec![zone(1, 2), empty, zone(2, 0)],
+        outline: vec![],
+        texts: vec![],
+        drawing_layers: vec![],
+        drawings: vec![],
+        bounds: Bounds {
+            min: Point::default(),
+            max: Point::new(1.0, 1.0),
+        },
+        diagnostics: vec![],
+    });
+    let cancel = CancellationToken::default();
+    let eager = PreparedCopper::build(&scene.zones, CopperLimits::default(), &cancel).unwrap();
+    let source =
+        PreparedCopper::build_scene(Arc::clone(&scene), CopperLimits::default(), &cancel).unwrap();
+    assert!(source.vertices.is_empty() && source.indices.is_empty());
+    assert!(source.allocation_bytes() < eager.allocation_bytes());
+    assert_eq!(source.upload_bytes(), eager.upload_bytes());
+    assert_eq!(
+        source
+            .batches
+            .iter()
+            .map(|b| (
+                b.object,
+                b.layer,
+                b.vertex_start,
+                b.outer_indices(),
+                b.hole_indices()
+            ))
+            .collect::<Vec<_>>(),
+        eager
+            .batches
+            .iter()
+            .map(|b| (
+                b.object,
+                b.layer,
+                b.vertex_start,
+                b.outer_indices(),
+                b.hole_indices()
+            ))
+            .collect::<Vec<_>>()
+    );
+    let lifetime = Arc::downgrade(&scene);
+    drop(scene);
+    assert!(lifetime.upgrade().is_some());
+    for size in [1, 3, 7, 13, 64] {
+        let mut vertices = Vec::new();
+        for start in (0..source.vertex_count()).step_by(size) {
+            vertices.extend_from_slice(
+                &source
+                    .vertex_block(start..(start + size).min(source.vertex_count()))
+                    .unwrap(),
+            );
+        }
+        let mut indices = Vec::new();
+        for start in (0..source.index_count()).step_by(size) {
+            indices.extend_from_slice(
+                &source
+                    .index_block(start..(start + size).min(source.index_count()))
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&vertices),
+            bytemuck::cast_slice::<_, u8>(&eager.vertices)
+        );
+        assert_eq!(indices, eager.indices);
+    }
+    drop(source);
+    assert!(lifetime.upgrade().is_none());
+}
+
+#[test]
 fn source_shape_kinds_survive_batch_sorting() {
     let mut source = [zone(1, 2), zone(2, 0), zone(3, 1)];
     source[0].kind = ZoneKind::Unknown;

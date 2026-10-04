@@ -149,6 +149,48 @@ fn line(id: u32, a: Point, b: Point, width: f64) -> Segment {
 }
 
 #[test]
+fn source_backed_copper_thumbnail_matches_materialized_pixels_and_holes() {
+    let mut empty = zone(3, &[rectangle(0.0, 0.0, 1.0, 1.0)]);
+    empty.mesh = CopperMesh::default();
+    let zones = vec![
+        zone(1, &[rectangle(0.0, 0.0, 10.0, 10.0)]),
+        empty,
+        zone(
+            2,
+            &[rectangle(1.0, 1.0, 9.0, 9.0), rectangle(3.0, 3.0, 7.0, 7.0)],
+        ),
+    ];
+    let mut batches = Batches::new(bounds(), &[], &[], &[], &zones);
+    let eager = batches.render();
+    let scene = Shared::new(pomelo_core::model::BoardScene {
+        layers: vec![],
+        special_layers: vec![],
+        nets: Default::default(),
+        segments: vec![],
+        pins: vec![],
+        components: vec![],
+        vias: vec![],
+        zones,
+        outline: vec![],
+        texts: vec![],
+        drawing_layers: vec![],
+        drawings: vec![],
+        bounds: bounds(),
+        diagnostics: vec![],
+    });
+    batches.copper = PreparedCopper::build_scene(
+        scene,
+        CopperLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    let source = batches.render();
+    assert_eq!(source.rgba, eager.rgba);
+    assert_eq!(source.summary.copper, eager.summary.copper);
+    assert_eq!(source.summary.limited, eager.summary.limited);
+}
+
+#[test]
 fn copper_subtracts_union_of_overlapping_holes_without_erasing_lower_coverage() {
     let perforated = zone(
         1,

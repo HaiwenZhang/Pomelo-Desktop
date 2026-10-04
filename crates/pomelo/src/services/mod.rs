@@ -1,5 +1,6 @@
 //! Persistence and startup services.
 pub mod prefs;
+pub mod preparation_memory;
 pub mod preview;
 pub mod recent;
 pub mod source_font;

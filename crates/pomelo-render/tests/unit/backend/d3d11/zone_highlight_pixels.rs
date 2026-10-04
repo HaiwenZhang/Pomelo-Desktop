@@ -337,7 +337,7 @@ fn hardware_stipple_static_object_selection_recolors_existing_points_without_den
 
 #[test]
 #[ignore = "requires Windows hardware D3D11; controlled temporary dynamic selection"]
-fn hardware_dynamic_object_selection_composites_material_gaps_and_dense_points() {
+fn hardware_dynamic_object_selection_uses_trace_style_white_dots() {
     verify_temporary_selection(ZoneKind::Dynamic);
 }
 
@@ -426,31 +426,27 @@ fn verify_temporary_selection(kind: ZoneKind) {
                 }
                 let sx = x as f32 + 0.5 - origin[0];
                 let sy = y as f32 + 0.5 - origin[1];
+                let dynamic_alpha = trace_dot_alpha(x, y, scale);
                 let dot = if kind == ZoneKind::Static {
                     let mx = ((sx / scale).floor() as i32) & 15;
                     let my = ((sy / scale).floor() as i32) & 15;
                     matches!((mx, my), (3 | 8, 3 | 14) | (0 | 11, 6 | 11))
                 } else {
-                    // Physical period four, with canvas-local phase recovered
-                    // from the controlled Windows reference (DPI 1.5).
-                    matches!(
-                        ((sx.floor() as i32) & 3, (sy.floor() as i32) & 3),
-                        (0, 1) | (2, 3)
-                    )
+                    dynamic_alpha > 0.0
                 };
-                let expected = if void {
+                let expected = if kind == ZoneKind::Dynamic {
+                    white_over(rgb(&baseline, x, y), if void { 0.0 } else { dynamic_alpha })
+                } else if void {
                     [0, 0, 99]
                 } else if dot {
                     [160, 99, 136]
-                } else if kind == ZoneKind::Dynamic {
-                    [160, 0, 37]
                 } else {
                     [0, 0, 99]
                 };
-                assert_eq!(
-                    rgb(&selected, x, y),
-                    expected,
-                    "temporary {kind:?} scale={scale} at {x},{y} p={p:?} dot={dot}"
+                let actual = rgb(&selected, x, y);
+                assert!(
+                    actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 2),
+                    "temporary {kind:?} scale={scale} at {x},{y} p={p:?} dot={dot} actual={actual:?} expected={expected:?}"
                 );
                 if void {
                     holes += 1;
@@ -484,7 +480,7 @@ fn verify_temporary_selection(kind: ZoneKind) {
 
 #[test]
 #[ignore = "requires Windows hardware D3D11; controlled shape alpha slope"]
-fn hardware_dynamic_object_selection_alpha_endpoints_and_midpoint_preserve_gap_compositing() {
+fn hardware_dynamic_object_selection_trace_dots_ignore_shape_opacity() {
     let (device, context) = device();
     let gpu = gpu_context(&device, &context);
     let target = Target::new(&device);
@@ -534,16 +530,16 @@ fn hardware_dynamic_object_selection_alpha_endpoints_and_midpoint_preserve_gap_c
                 if !inside || (!void && near_void) {
                     continue;
                 }
-                let dot = matches!((x & 3, y & 3), (0, 1) | (2, 3));
+                let dot_alpha = trace_dot_alpha(x, y, 1.0);
                 let expected = if void {
                     lower
                 } else {
-                    over(base, if dot { [255; 3] } else { [255, 0, 0] })
+                    white_over(base, dot_alpha)
                 };
-                assert_eq!(
-                    rgb(&pixels, x, y),
-                    expected,
-                    "shape alpha={alpha} at {x},{y} dot={dot}"
+                let actual = rgb(&pixels, x, y);
+                assert!(
+                    actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 2),
+                    "shape alpha={alpha} at {x},{y} actual={actual:?} expected={expected:?}"
                 );
                 samples += 1;
             }
@@ -555,6 +551,17 @@ fn hardware_dynamic_object_selection_alpha_endpoints_and_midpoint_preserve_gap_c
         telemetry.snapshot().lifetime_uploaded_bytes
     );
     eprintln!(
-        "ZONE_OBJECT_ALPHA_GPU samples={samples} shape_alpha_cases=0,128,255 global_zero=true material_gap_source_over=true reupload=false"
+        "ZONE_OBJECT_ALPHA_GPU samples={samples} shape_alpha_cases=0,128,255 global_zero=true trace_style_dots=true gaps_unchanged=true reupload=false"
     );
+}
+
+// Match the existing trace selection's logical five-pixel grid and 0.9 alpha.
+fn trace_dot_alpha(x: usize, y: usize, scale: f32) -> f64 {
+    let cell = |p: usize| ((p as f64 + 0.5) / f64::from(scale)).rem_euclid(5.0) - 2.5;
+    let distance = cell(x).hypot(cell(y));
+    let t = ((distance - 0.65) / 0.6).clamp(0.0, 1.0);
+    (1.0 - t * t * (3.0 - 2.0 * t)) * 0.9
+}
+fn white_over(base: [u8; 3], alpha: f64) -> [u8; 3] {
+    base.map(|value| (255.0 * alpha + f64::from(value) * (1.0 - alpha)).round() as u8)
 }

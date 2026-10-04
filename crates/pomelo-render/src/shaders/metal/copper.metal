@@ -194,9 +194,9 @@ metal::float4 fragment_color(
         metal::float2 sample_1 = (position_3.xy - _e39.xy) / metal::float2(dynamic ? 1.0 : _e45);
         float _e50 = stipple(sample_1, u);
         if (dynamic) {
-            metal::float4 _e53 = u.color;
-            float _e61 = u.color.w;
-            return metal::float4(metal::mix(_e53.xyz, metal::float3(1.0), _e50), _e61);
+            metal::float2 screen = position_3.xy / metal::float2(u.viewport.z);
+            metal::float2 cell = screen - metal::floor(screen / metal::float2(5.0)) * 5.0 - metal::float2(2.5);
+            return metal::float4(1.0, 1.0, 1.0, (1.0 - metal::smoothstep(0.65, 1.25, metal::length(cell))) * 0.9);
         }
         metal::float4 _e65 = u.color;
         float _e70 = u.color.w;

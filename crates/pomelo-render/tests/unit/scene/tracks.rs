@@ -2,6 +2,51 @@ use super::*;
 use pomelo_core::model::{Arc, NetId};
 
 #[test]
+fn compact_zone_rings_stream_holes_with_no_segment_scratch_budget() {
+    use pomelo_core::model::{Zone, ZoneKind};
+    let zone = Zone {
+        id: ObjectId(42),
+        layer: LayerId(3),
+        net: NetId(7),
+        kind: ZoneKind::Dynamic,
+        paths: vec![],
+        mesh: pomelo_core::copper::CopperMesh {
+            vertices: vec![
+                Point::new(0.0, 0.0),
+                Point::new(10.0, 0.0),
+                Point::new(0.0, 10.0),
+                Point::new(1.0, 1.0),
+                Point::new(2.0, 1.0),
+                Point::new(1.0, 2.0),
+            ],
+            ring_offsets: vec![0, 3, 6],
+            ..Default::default()
+        },
+    };
+    let limit = 6 * (size_of::<TraceInstance>() + size_of::<TraceBatch>()) + size_of::<ObjectId>();
+    let prepared = PreparedTracks::build_zone_outlines(
+        &[zone],
+        TraceLimits {
+            max_instances: 6,
+            max_bytes: limit,
+        },
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    assert_eq!(prepared.instances.len(), 6);
+    assert_eq!(prepared.batches.len(), 1);
+    assert!(
+        prepared
+            .instances
+            .iter()
+            .all(|instance| instance.ids == [42, 0, 3, 7] && instance.flags[3] == 136)
+    );
+    // Exterior and hole each close to their own first vertex.
+    assert_eq!(prepared.instances[2].b, split_point(Point::new(0.0, 0.0)));
+    assert_eq!(prepared.instances[5].b, split_point(Point::new(1.0, 1.0)));
+}
+
+#[test]
 fn zone_outline_kind_survives_layer_reordering_and_analytic_arc_preparation() {
     use pomelo_core::model::{Zone, ZoneKind};
     let source = [ZoneKind::Unknown, ZoneKind::Static, ZoneKind::Dynamic]
@@ -313,6 +358,25 @@ fn byte_budget_is_checked_before_allocating_instances() {
             &CancellationToken::default()
         ),
         Err(PrepareError::Limit { .. })
+    ));
+}
+
+#[test]
+fn shared_layer_budget_charges_actual_batches_and_rejects_extra_layer() {
+    let limits = TraceLimits {
+        max_instances: 2,
+        max_bytes: 2 * size_of::<TraceInstance>() + size_of::<TraceBatch>(),
+    };
+    let prepared = PreparedTracks::build(
+        &[line(1, 3), line(2, 3)],
+        limits,
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    assert_eq!(prepared.batches.len(), 1);
+    assert!(matches!(
+        PreparedTracks::build(&[line(1, 3), line(2, 4)], limits, &CancellationToken::default()),
+        Err(PrepareError::Limit { actual, limit }) if actual == limits.max_bytes + size_of::<TraceBatch>() && limit == limits.max_bytes
     ));
 }
 

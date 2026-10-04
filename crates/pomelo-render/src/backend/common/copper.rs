@@ -7,7 +7,10 @@ use crate::{
     split_position,
 };
 use anyhow::{Context as _, ensure};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 pub(crate) type ZoneAnnotations<'a> =
     dyn FnMut(&crate::copper::CopperBatch) -> anyhow::Result<()> + 'a;
 pub(crate) struct CopperDrawOptions<'a> {
@@ -15,6 +18,8 @@ pub(crate) struct CopperDrawOptions<'a> {
     pub layer: Option<pomelo_core::model::LayerId>,
     pub visible: Option<&'a dyn Fn(&crate::copper::CopperBatch) -> bool>,
     pub annotations: Option<&'a mut ZoneAnnotations<'a>>,
+    /// None conservatively means that every batch may have annotations.
+    pub annotation_owners: Option<&'a BTreeSet<pomelo_core::model::ObjectId>>,
     pub overrides: Option<&'a BTreeMap<pomelo_core::model::ObjectId, UploadedCopper>>,
     pub static_shapes_fill_solid: bool,
     pub network_selection: Option<pomelo_core::model::NetId>,
@@ -29,31 +34,31 @@ pub(crate) struct UploadedCopper {
     index_buffer: Option<Buffer>,
     vertex_uploaded: usize,
     index_uploaded: usize,
+    #[cfg(test)]
+    pub force_stencil: bool,
 }
 impl UploadedCopper {
     pub fn new(source: Arc<PreparedCopper>, device: &Device<'_>) -> anyhow::Result<Self> {
-        let vertex_buffer = if source.vertices.is_empty() {
+        let vertex_buffer = if source.vertex_count() == 0 {
             None
         } else {
             Some(
                 device.buffer_empty(
                     source
-                        .vertices
-                        .len()
+                        .vertex_count()
                         .checked_mul(size_of::<CopperVertex>())
                         .context("GPU_COPPER_BUFFER_SIZE")?,
                     false,
                 )?,
             )
         };
-        let index_buffer = if source.indices.is_empty() {
+        let index_buffer = if source.index_count() == 0 {
             None
         } else {
             Some(
                 device.buffer_empty(
                     source
-                        .indices
-                        .len()
+                        .index_count()
                         .checked_mul(4)
                         .context("GPU_COPPER_BUFFER_SIZE")?,
                     true,
@@ -67,11 +72,14 @@ impl UploadedCopper {
             index_buffer,
             vertex_uploaded: 0,
             index_uploaded: 0,
+            #[cfg(test)]
+            force_stencil: false,
         })
     }
     pub fn uploaded_bytes(&self) -> usize {
         self.vertex_uploaded * size_of::<CopperVertex>() + self.index_uploaded * 4
     }
+    #[cfg(all(test, target_os = "macos"))]
     pub fn upload_next(&mut self, context: &NativeGpuContext<'_>) -> anyhow::Result<()> {
         let mut budget = UPLOAD_BYTES_PER_FRAME;
         self.upload_with_budget(context, &mut budget)
@@ -85,40 +93,46 @@ impl UploadedCopper {
             upload_slice(
                 &context.device,
                 buffer,
-                &self.source.vertices,
+                self.source.vertex_count(),
                 &mut self.vertex_uploaded,
                 budget,
+                |range| self.source.vertex_block(range),
             )?;
         }
         if let Some(buffer) = &self.index_buffer {
             upload_slice(
                 &context.device,
                 buffer,
-                &self.source.indices,
+                self.source.index_count(),
                 &mut self.index_uploaded,
                 budget,
+                |range| self.source.index_block(range),
             )?;
         }
         Ok(())
     }
 }
-fn upload_slice<T: bytemuck::Pod>(
+fn upload_slice<'a, T: bytemuck::Pod + 'a>(
     device: &Device<'_>,
     buffer: &Buffer,
-    source: &[T],
+    total: usize,
     uploaded: &mut usize,
     budget: &mut usize,
+    block: impl FnOnce(
+        std::ops::Range<usize>,
+    ) -> Result<std::borrow::Cow<'a, [T]>, crate::tracks::PrepareError>,
 ) -> anyhow::Result<()> {
-    let count = (source.len() - *uploaded).min(*budget / size_of::<T>());
+    let count = (total - *uploaded).min(*budget / size_of::<T>());
     if count != 0 {
-        let data = bytemuck::cast_slice(&source[*uploaded..*uploaded + count]);
+        let source = block(*uploaded..*uploaded + count)?;
+        let data = bytemuck::cast_slice(source.as_ref());
         device.write_buffer(buffer, *uploaded * size_of::<T>(), data)?;
         *uploaded += count;
         *budget -= data.len();
     }
     Ok(())
 }
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 struct Uniforms {
     viewport: [f32; 4],
@@ -143,15 +157,41 @@ const NETWORK_SHAPE_STIPPLE: [u32; 16] = [
     0, 0x01c0, 0x03e0, 0x07f0, 0x0ff8, 0x1ffc, 0x3ffe, 0x3ffe, 0x3ffe, 0x1ffc, 0x0ff8, 0x07f0,
     0x03e0, 0x01c0, 0, 0,
 ];
-// Minimal physical-period-four candidate from controlled NVL temporary selection.
-// Canvas phase compensates the reference's physical origin (294,144). Only DPI
-// 1.5 has actual Allegro screenshot evidence; other DPI remain policy coverage.
-const DYNAMIC_OBJECT_STIPPLE: [u32; 16] = [
-    0, 0x1111, 0, 0x4444, 0, 0x1111, 0, 0x4444, 0, 0x1111, 0, 0x4444, 0, 0x1111, 0, 0x4444,
-];
-
 pub(crate) struct Pipeline {
     pipeline: GpuPipeline,
+}
+struct DirectRun<'a> {
+    cache: &'a UploadedCopper,
+    indices: std::ops::Range<u32>,
+    uniforms: Uniforms,
+    rect: Rect,
+}
+impl DirectRun<'_> {
+    fn draw(self, context: &NativeGpuContext<'_>, pipeline: &GpuPipeline) -> anyhow::Result<()> {
+        context.device.draw(
+            pipeline,
+            Draw {
+                uniforms: bytemuck::bytes_of(&self.uniforms),
+                vertices: self
+                    .cache
+                    .vertex_buffer
+                    .as_ref()
+                    .context("GPU_COPPER_VERTEX_MISSING")?,
+                indices: Some(
+                    self.cache
+                        .index_buffer
+                        .as_ref()
+                        .context("GPU_COPPER_INDEX_MISSING")?,
+                ),
+                start: self.indices.start,
+                count: self.indices.end - self.indices.start,
+                instances: 1,
+                rect: self.rect,
+                stencil: StencilMode::Inherited,
+                atlas: None,
+            },
+        )
+    }
 }
 impl Pipeline {
     pub fn new(device: &Device<'_>) -> anyhow::Result<Self> {
@@ -171,6 +211,7 @@ impl Pipeline {
             layer,
             visible,
             mut annotations,
+            annotation_owners,
             overrides,
             static_shapes_fill_solid,
             network_selection,
@@ -211,7 +252,6 @@ impl Pipeline {
                 && (0.0..=1.0).contains(&opacity),
             "GPU_COPPER_FRAME_INVALID"
         );
-        let _mask = context.device.stencil_scope(context.viewport)?;
         let clip = bounds.intersect(&context.content_mask.bounds);
         let mut uniforms = Uniforms {
             viewport: [
@@ -239,6 +279,7 @@ impl Pipeline {
             pattern: STATIC_SHAPE_STIPPLE,
         };
         let (mut draws, mut zones) = (0, 0);
+        let mut pending: Option<DirectRun<'_>> = None;
         for batch in &cache.source.batches {
             if layer.is_some_and(|layer| batch.layer != layer)
                 || visible.is_some_and(|test| !test(batch))
@@ -253,7 +294,7 @@ impl Pipeline {
             // A clipped curve can have no filled geometry. Its empty override
             // intentionally suppresses the original mesh; it needs no GPU buffers.
             if replacement.is_some_and(|entry| {
-                entry.source.vertices.is_empty() || entry.source.indices.is_empty()
+                entry.source.vertex_count() == 0 || entry.source.index_count() == 0
             }) {
                 continue;
             }
@@ -282,6 +323,12 @@ impl Pipeline {
                 && frame
                     .highlighted_object
                     .is_some_and(|(object, _)| object == batch.selected_object);
+            if zone
+                && opacity <= 0.0
+                && !(object_selected && batch.kind == pomelo_core::model::ZoneKind::Dynamic)
+            {
+                continue;
+            }
             // Solid static shapes retain their fill; unsupported kinds do
             // not inherit a rule inferred from known static/dynamic shapes.
             if object_selected
@@ -300,7 +347,7 @@ impl Pipeline {
                 if batch.kind == pomelo_core::model::ZoneKind::Static {
                     4.0 // Recolor the existing logical sparse bitmap.
                 } else {
-                    5.0 // Original material in gaps, white physical dense points.
+                    5.0 // Trace-style white dots, independent of shape opacity.
                 }
             } else {
                 f32::from(u8::from(
@@ -312,8 +359,6 @@ impl Pipeline {
             };
             uniforms.pattern = if uniforms.view[2] == 2.0 {
                 NETWORK_SHAPE_STIPPLE
-            } else if uniforms.view[2] == 5.0 {
-                DYNAMIC_OBJECT_STIPPLE
             } else {
                 STATIC_SHAPE_STIPPLE
             };
@@ -370,14 +415,10 @@ impl Pipeline {
             if let Some(color) = overlay {
                 uniforms.color = color;
             }
-            if object_selected && batch.kind == pomelo_core::model::ZoneKind::Dynamic {
-                // Controlled alpha 99/128/255/0 evidence supports a second
-                // source-over material draw in gaps, not a transparent gap.
-                uniforms.color = frame.material_color(batch.layer, batch.net);
-            }
             if frame.pass == board::OverlayPass::Base {
                 uniforms.color[3] *= opacity;
-            } else if (net_selected || object_selected)
+            } else if (net_selected
+                || (object_selected && batch.kind == pomelo_core::model::ZoneKind::Static))
                 && frame.pass == board::OverlayPass::Selection
             {
                 // The observed highlighted shape retains the shapes slider,
@@ -411,6 +452,52 @@ impl Pipeline {
                     },
                 )
             };
+            let annotated = annotations.is_some()
+                && annotation_owners.is_none_or(|owners| owners.contains(&batch.object));
+            let direct = batch.parity_rings.is_none() && holes.is_empty() && !annotated;
+            #[cfg(test)]
+            let direct = direct && !cache.force_stencil;
+            if direct {
+                // The original earcut exterior is also the shade mesh. Without
+                // holes or clipped labels its coverage needs no private stencil.
+                // Keep inherited coverage if the caller already has a mask.
+                // Indexed copper vertices do not read the clear-quad rectangle.
+                // Merge only contiguous original indices with identical material
+                // and view uniforms, preserving primitive and blending order.
+                let mut direct_uniforms = uniforms;
+                direct_uniforms.rectangle = [0.0; 4];
+                if let Some(run) = pending.as_mut()
+                    && std::ptr::eq(run.cache, cache)
+                    && run.indices.end == outer.start
+                    && run.uniforms == direct_uniforms
+                {
+                    run.indices.end = outer.end;
+                    run.rect.left = run.rect.left.min(rect.left);
+                    run.rect.top = run.rect.top.min(rect.top);
+                    run.rect.right = run.rect.right.max(rect.right);
+                    run.rect.bottom = run.rect.bottom.max(rect.bottom);
+                } else {
+                    if let Some(run) = pending.take() {
+                        run.draw(context, &self.pipeline)?;
+                        draws += 1;
+                    }
+                    pending = Some(DirectRun {
+                        cache,
+                        indices: outer,
+                        uniforms: direct_uniforms,
+                        rect,
+                    });
+                }
+                zones += 1;
+                continue;
+            }
+            if let Some(run) = pending.take() {
+                run.draw(context, &self.pipeline)?;
+                draws += 1;
+            }
+            // End this private coverage scope before a subsequent direct batch,
+            // otherwise it would inherit this zone's stale stencil contents.
+            let _mask = context.device.stencil_scope(context.viewport)?;
             encode(StencilMode::Clear, None)?;
             draws += 1;
             if let Some(rings) = &batch.parity_rings {
@@ -444,10 +531,14 @@ impl Pipeline {
                 },
             )?;
             draws += 1;
-            if let Some(labels) = annotations.as_mut() {
+            if annotated && let Some(labels) = annotations.as_mut() {
                 labels(batch)?;
             }
             zones += 1;
+        }
+        if let Some(run) = pending {
+            run.draw(context, &self.pipeline)?;
+            draws += 1;
         }
         Ok((draws, zones))
     }

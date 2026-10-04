@@ -172,7 +172,6 @@ metal::float4 fragment_color(
 ) {
     bool local_11 = {};
     bool local_12 = {};
-    bool local_13 = {};
     float distance = {};
     bool local_14 = {};
     bool local_15 = {};
@@ -197,16 +196,6 @@ metal::float4 fragment_color(
         local_12 = false;
     }
     bool dynamic_base = local_12;
-    if (dynamic_base) {
-        uint _e35 = u.batch.w;
-        local_13 = _e35 == 2u;
-    } else {
-        local_13 = false;
-    }
-    bool _e39 = local_13;
-    if (_e39) {
-        metal::discard_fragment();
-    }
     metal::float2 _e42 = board_position(i_1.position.xy, u);
     metal::float4 _e44 = delta(_e42, i_1.a);
     metal::float4 _e46 = delta(_e42, i_1.b);

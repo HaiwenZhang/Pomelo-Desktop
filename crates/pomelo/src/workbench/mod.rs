@@ -36,6 +36,7 @@ pub(crate) mod panel_layout;
 mod saving;
 
 pub struct Workbench {
+    preparation_budget: pomelo_core::memory::MemoryBudget,
     documents: Vec<DocumentSession>,
     document_scroll: ScrollHandle,
     active: Option<usize>,
@@ -111,6 +112,7 @@ impl Workbench {
         })
         .detach();
         Self {
+            preparation_budget: pomelo_core::memory::MemoryBudget::new(0),
             search_locale: sys_locale::get_locale()
                 .as_deref()
                 .and_then(Locale::from_system_tag)
@@ -240,7 +242,10 @@ impl Workbench {
         let reload_view = document.reload_view.clone();
         let search_locale = self.search_locale;
         let source_font = self.source_font.clone();
+        let preparation_budget = self.preparation_budget.clone();
         let import = cx.background_spawn(async move {
+            let mut preparation_memory =
+                crate::services::preparation_memory::PreparationMemory::new(preparation_budget);
             let board = AllegroImporter.import(
                 &path,
                 &options,
@@ -262,21 +267,45 @@ impl Workbench {
                 Ok(())
             };
             begin_stage(ImportStage::PreparingTracks)?;
-            let tracks = PreparedTracks::build_with_outline(
-                &board.scene.segments,
-                &board.scene.outline,
-                TraceLimits::default(),
-                &cancellation,
+            let tracks = preparation_memory.prepare(
+                |bytes| {
+                    PreparedTracks::build_with_outline(
+                        &board.scene.segments,
+                        &board.scene.outline,
+                        TraceLimits {
+                            max_instances: u32::MAX as usize,
+                            max_bytes: bytes,
+                        },
+                        &cancellation,
+                    )
+                },
+                PreparedTracks::allocation_bytes,
             )?;
-            let drawings = PreparedTracks::build_drawings(
-                &board.scene.drawings,
-                TraceLimits::default(),
-                &cancellation,
+            let drawings = preparation_memory.prepare(
+                |bytes| {
+                    PreparedTracks::build_drawings(
+                        &board.scene.drawings,
+                        TraceLimits {
+                            max_instances: u32::MAX as usize,
+                            max_bytes: bytes,
+                        },
+                        &cancellation,
+                    )
+                },
+                PreparedTracks::allocation_bytes,
             )?;
-            let zone_outlines = PreparedTracks::build_zone_outlines(
-                &board.scene.zones,
-                TraceLimits::default(),
-                &cancellation,
+            let zone_outlines = preparation_memory.prepare(
+                |bytes| {
+                    PreparedTracks::build_zone_outlines(
+                        &board.scene.zones,
+                        TraceLimits {
+                            max_instances: u32::MAX as usize,
+                            max_bytes: bytes,
+                        },
+                        &cancellation,
+                    )
+                },
+                PreparedTracks::allocation_bytes,
             )?;
             begin_stage(ImportStage::PreparingTexts)?;
             let mut text_diagnostics = Vec::new();
@@ -376,26 +405,65 @@ impl Workbench {
                 None
             };
             begin_stage(ImportStage::PreparingCopper)?;
-            let copper =
-                PreparedCopper::build(&board.scene.zones, CopperLimits::default(), &cancellation)?;
-            begin_stage(ImportStage::PreparingPads)?;
-            let mut pads = pomelo_render::pads::PreparedPads::build(
-                &board.scene.pins,
-                &board.scene.vias,
-                pomelo_render::pads::PadLimits::default(),
-                &cancellation,
+            let copper = preparation_memory.prepare(
+                |bytes| {
+                    PreparedCopper::build_scene(
+                        std::sync::Arc::clone(&board.scene),
+                        CopperLimits {
+                            max_vertices: u32::MAX as usize,
+                            max_indices: u32::MAX as usize,
+                            max_zones: u32::MAX as usize,
+                            max_bytes: bytes,
+                        },
+                        &cancellation,
+                    )
+                },
+                PreparedCopper::allocation_bytes,
             )?;
-            pads.custom_mesh = Some(std::sync::Arc::new(pads.build_custom_meshes(
-                CopperLimits::default(),
-                &pomelo_core::copper::MeshLimits::default(),
-                &cancellation,
+            begin_stage(ImportStage::PreparingPads)?;
+            let mut pads = preparation_memory.prepare(
+                |bytes| {
+                    pomelo_render::pads::PreparedPads::build(
+                        &board.scene.pins,
+                        &board.scene.vias,
+                        pomelo_render::pads::PadLimits {
+                            max_pads: u32::MAX as usize,
+                            max_bytes: bytes,
+                        },
+                        &cancellation,
+                    )
+                },
+                pomelo_render::pads::PreparedPads::allocation_bytes,
+            )?;
+            pads.custom_mesh = Some(std::sync::Arc::new(preparation_memory.prepare(
+                |bytes| {
+                    pads.build_custom_meshes(
+                        CopperLimits {
+                            max_vertices: u32::MAX as usize,
+                            max_indices: u32::MAX as usize,
+                            max_zones: u32::MAX as usize,
+                            max_bytes: bytes,
+                        },
+                        &pomelo_core::copper::MeshLimits::default(),
+                        &cancellation,
+                    )
+                },
+                PreparedCopper::allocation_bytes,
             )?));
             begin_stage(ImportStage::PreparingDrills)?;
-            let drills = pomelo_render::drills::PreparedDrills::build(
-                &board.scene.pins,
-                &board.scene.vias,
-                pomelo_render::pads::PadLimits::default(),
-                &cancellation,
+            let drills = preparation_memory.prepare(
+                |bytes| {
+                    pomelo_render::drills::PreparedDrills::build(
+                        &board.scene.pins,
+                        &board.scene.vias,
+                        pomelo_render::pads::PadLimits {
+                            max_pads: u32::MAX as usize,
+                            max_bytes: bytes,
+                        },
+                        &cancellation,
+                    )
+                },
+                |drills| drills.geometry.allocation_bytes(),
             )?;
             begin_stage(ImportStage::BuildingSearch)?;
             let search = pomelo_core::search::SearchIndex::build(&board.scene, &cancellation)

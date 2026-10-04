@@ -52,6 +52,8 @@ pub struct PreparedPads {
     pub drill_scopes: Option<std::sync::Arc<Vec<Vec<pomelo_core::model::LayerId>>>>,
     /// Via owner index -> cut layers, populated only for independent backdrill patterns.
     pub backdrill_scopes: Option<std::sync::Arc<Vec<Vec<pomelo_core::model::LayerId>>>>,
+    // Keep last: buffers must drop before the shared budget returns their bytes.
+    pub(crate) memory_reservation: Option<pomelo_core::memory::MemoryReservation>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +79,49 @@ impl Default for PadLimits {
 }
 
 impl PreparedPads {
+    /// Owned preparation buffers. Immutable custom source contours belong to the scene.
+    pub fn allocation_bytes(&self) -> usize {
+        let scope_bytes =
+            |scope: &Option<std::sync::Arc<Vec<Vec<pomelo_core::model::LayerId>>>>| {
+                scope.as_ref().map_or(0, |layers| {
+                    layers
+                        .capacity()
+                        .saturating_mul(size_of::<Vec<pomelo_core::model::LayerId>>())
+                        .saturating_add(layers.iter().fold(0usize, |bytes, layer| {
+                            bytes.saturating_add(
+                                layer
+                                    .capacity()
+                                    .saturating_mul(size_of::<pomelo_core::model::LayerId>()),
+                            )
+                        }))
+                })
+            };
+        self.analytic
+            .capacity()
+            .saturating_mul(size_of::<PadInstance>())
+            .saturating_add(
+                self.custom
+                    .capacity()
+                    .saturating_mul(size_of::<CustomPadInstance>()),
+            )
+            .saturating_add(
+                self.batches
+                    .capacity()
+                    .saturating_mul(size_of::<PadBatch>()),
+            )
+            .saturating_add(
+                self.custom_mesh
+                    .as_ref()
+                    .map_or(0, |mesh| mesh.allocation_bytes()),
+            )
+            .saturating_add(
+                self.custom_outlines
+                    .as_ref()
+                    .map_or(0, |edges| edges.allocation_bytes()),
+            )
+            .saturating_add(scope_bytes(&self.drill_scopes))
+            .saturating_add(scope_bytes(&self.backdrill_scopes))
+    }
     /// Prepare independent exterior/hole coverage meshes for custom pad placements.
     /// Exact source paths remain in `custom` for later curved-edge rendering and picking.
     pub fn build_custom_meshes(
@@ -242,12 +287,6 @@ impl PreparedPads {
                 actual: usize::MAX,
                 limit: limits.max_bytes,
             })?;
-        let bytes = bytes
-            .checked_add(analytic_count.saturating_mul(std::mem::size_of::<PadBatch>()))
-            .ok_or(PrepareError::Limit {
-                actual: usize::MAX,
-                limit: limits.max_bytes,
-            })?;
         if bytes > limits.max_bytes {
             return Err(PrepareError::Limit {
                 actual: bytes,
@@ -255,6 +294,7 @@ impl PreparedPads {
             });
         }
         let mut output = Self {
+            memory_reservation: None,
             analytic: Vec::new(),
             custom: Vec::new(),
             batches: Vec::new(),
@@ -270,10 +310,6 @@ impl PreparedPads {
         output
             .custom
             .try_reserve_exact(custom_count)
-            .map_err(|_| PrepareError::Allocation)?;
-        output
-            .batches
-            .try_reserve_exact(analytic_count)
             .map_err(|_| PrepareError::Allocation)?;
         let owners = pins
             .iter()
@@ -407,6 +443,27 @@ impl PreparedPads {
         output.custom.sort_unstable_by_key(|pad| {
             (pad.pad.layer, pad.source[0], pad.source[1], pad.source[2])
         });
+        let batch_count = output
+            .analytic
+            .iter()
+            .enumerate()
+            .filter(|(index, instance)| {
+                *index == 0 || output.analytic[*index - 1].ids[1] != instance.ids[1]
+            })
+            .count();
+        let bytes = output
+            .allocation_bytes()
+            .saturating_add(batch_count.saturating_mul(size_of::<PadBatch>()));
+        if bytes > limits.max_bytes {
+            return Err(PrepareError::Limit {
+                actual: bytes,
+                limit: limits.max_bytes,
+            });
+        }
+        output
+            .batches
+            .try_reserve_exact(batch_count)
+            .map_err(|_| PrepareError::Allocation)?;
         for (index, instance) in output.analytic.iter().enumerate() {
             let layer = pomelo_core::model::LayerId(instance.ids[1]);
             if let Some(batch) = output
@@ -427,7 +484,7 @@ impl PreparedPads {
             output.custom_outlines = Some(std::sync::Arc::new(output.build_custom_outlines(
                 crate::tracks::TraceLimits {
                     max_bytes: limits.max_bytes.saturating_sub(bytes),
-                    ..crate::tracks::TraceLimits::default()
+                    max_instances: u32::MAX as usize,
                 },
                 cancellation,
             )?));

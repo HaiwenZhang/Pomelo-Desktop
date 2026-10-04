@@ -132,6 +132,17 @@ fn overlapping_holes_are_a_union_and_source_vertices_are_preserved() {
 }
 
 #[test]
+fn convex_contours_preserve_frozen_triangle_order_for_both_windings() {
+    let ring = square(0.0, 0.0, 10.0);
+    assert_eq!(
+        build(std::slice::from_ref(&ring)).indices,
+        [2, 3, 0, 2, 0, 1]
+    );
+    let reversed: Vec<_> = ring.into_iter().rev().collect();
+    assert_eq!(build(&[reversed]).indices, [1, 0, 3, 1, 3, 2]);
+}
+
+#[test]
 fn concave_contour_and_reversed_winding_preserve_fill_area() {
     let ring = vec![
         Point::new(0.0, 0.0),

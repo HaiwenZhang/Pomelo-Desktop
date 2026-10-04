@@ -344,6 +344,8 @@ fn hardware_curve_uploads_share_one_four_mib_budget() {
     // Drawing is irrelevant here; no batches reference these diagnostic buffers.
     for entry in cache.entries.values_mut() {
         entry.source = Arc::new(PreparedCopper {
+            memory_reservation: None,
+            source: None,
             vertices: vec![CopperVertex { position: [0.0; 4] }; 600_000],
             indices: vec![0, 0, 0],
             batches: vec![],
@@ -478,7 +480,7 @@ fn hardware_curve_zone_labels_share_the_final_hole_mask() {
     let unmasked = target.read(&context);
     target.bind(&context);
     copper
-        .draw_annotated(&gpu, &frame, 0.5, LayerId(1), &mut |_| {
+        .draw_annotated(&gpu, &frame, 0.5, LayerId(1), None, &mut |_| {
             glyph_renderer.draw_prepared(
                 &gpu,
                 &glyph_frame,

@@ -13,7 +13,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -21,8 +21,8 @@ use std::{
 pub(super) enum TraceScope {
     All,
     Layer(LayerId),
-    /// Base zone boundaries; true retains the low-shape-alpha physical hairline.
-    ZoneOutlines(LayerId, bool),
+    /// Base zone boundaries retain a physical hairline at every shape opacity.
+    ZoneOutlines(LayerId),
     Outline,
     /// Custom pad edges filtered by owner category (pin=true / via=false).
     Pads(LayerId, bool),
@@ -102,6 +102,50 @@ impl<S: InstanceSource> Clone for TraceFrame<S> {
 }
 
 impl<S: InstanceSource> TraceFrame<S> {
+    /// A single selected net can be tested per instance by the pad vertex shader.
+    pub(super) fn selected_net_only(&self) -> Option<pomelo_core::model::NetId> {
+        if self.pass != OverlayPass::Selection
+            || self.highlighted_object.is_some()
+            || self.highlighted_trace.is_some()
+            || self
+                .highlighted_objects
+                .as_ref()
+                .is_some_and(|(ids, _)| !ids.is_empty())
+            || self
+                .highlighted_related_objects
+                .as_ref()
+                .is_some_and(|(ids, _)| !ids.is_empty())
+        {
+            return None;
+        }
+        self.highlighted_net
+            .map(|(net, _)| net)
+            .filter(|net| net.0 != 0)
+    }
+
+    /// Empty overlays cannot produce fragments; avoid scanning every source for them.
+    pub(super) fn has_overlay(&self, pass: OverlayPass) -> bool {
+        match pass {
+            OverlayPass::Base => true,
+            OverlayPass::Selection => {
+                self.highlighted_object.is_some()
+                    || self.highlighted_trace.is_some()
+                    || self.highlighted_net.is_some_and(|(id, _)| id.0 != 0)
+                    || self
+                        .highlighted_objects
+                        .as_ref()
+                        .is_some_and(|(ids, _)| !ids.is_empty())
+                    || self
+                        .highlighted_related_objects
+                        .as_ref()
+                        .is_some_and(|(ids, _)| !ids.is_empty())
+            }
+            OverlayPass::Hover | OverlayPass::GroupHover => {
+                self.hovered_object.is_some() || self.hover_selection.is_some()
+            }
+        }
+    }
+
     pub(super) fn with_source<T: InstanceSource>(&self, tracks: Arc<T>) -> TraceFrame<T> {
         TraceFrame {
             tracks,
@@ -249,6 +293,7 @@ pub enum TraceSelection {
 
 #[derive(Default)]
 pub struct TraceTelemetry {
+    visible_ready: AtomicBool,
     pub(super) pipeline_builds: AtomicU64,
     pub(super) cache_builds: AtomicU64,
     pub(super) uploaded_instances: AtomicU64,
@@ -259,6 +304,7 @@ pub struct TraceTelemetry {
 
 #[derive(Debug, serde::Serialize)]
 pub struct TraceStatistics {
+    pub visible_ready: bool,
     pub pipeline_builds: u64,
     pub cache_builds: u64,
     pub uploaded_instances: u64,
@@ -271,6 +317,7 @@ pub struct TraceStatistics {
 impl TraceTelemetry {
     pub fn snapshot(&self) -> TraceStatistics {
         TraceStatistics {
+            visible_ready: self.visible_ready.load(Ordering::Acquire),
             pipeline_builds: self.pipeline_builds.load(Ordering::Relaxed),
             cache_builds: self.cache_builds.load(Ordering::Relaxed),
             uploaded_instances: self.uploaded_instances.load(Ordering::Acquire),
@@ -282,12 +329,16 @@ impl TraceTelemetry {
 }
 
 pub struct TraceRenderer<S: InstanceSource = PreparedTracks> {
+    residency_bytes: Option<usize>,
     pipeline: Option<Pipeline>,
     uploaded: Option<UploadedTracks<S>>,
     telemetry: Arc<TraceTelemetry>,
 }
 
 impl<S: InstanceSource> TraceRenderer<S> {
+    pub(super) fn statistics(&self) -> TraceStatistics {
+        self.telemetry.snapshot()
+    }
     pub(super) fn clear_if_cached(&mut self) {
         if self.pipeline.is_some() || self.uploaded.is_some() {
             self.reset();
@@ -295,16 +346,24 @@ impl<S: InstanceSource> TraceRenderer<S> {
     }
 
     pub(super) fn is_uploaded(&self, source: &Arc<S>) -> bool {
-        self.uploaded.as_ref().is_some_and(|cache| {
-            Arc::ptr_eq(&cache.source, source) && cache.uploaded() == source.instances().len()
-        })
+        self.uploaded
+            .as_ref()
+            .is_some_and(|cache| Arc::ptr_eq(&cache.source, source) && cache.ready())
     }
     pub fn new(telemetry: Arc<TraceTelemetry>) -> Self {
         Self {
+            residency_bytes: None,
             pipeline: None,
             uploaded: None,
             telemetry,
         }
+    }
+    pub fn with_residency(mut self, soft_bytes: usize) -> Self {
+        self.residency_bytes = Some(soft_bytes);
+        self
+    }
+    pub(super) fn set_telemetry(&mut self, telemetry: Arc<TraceTelemetry>) {
+        self.telemetry = telemetry;
     }
 }
 
@@ -314,6 +373,15 @@ impl<S: InstanceSource> TraceRenderer<S> {
         &mut self,
         context: &NativeGpuContext<'_>,
         frame: &TraceFrame<S>,
+    ) -> anyhow::Result<()> {
+        let mut budget = super::copper_pipeline::UPLOAD_BYTES_PER_FRAME;
+        self.prepare_with_budget(context, frame, &mut budget)
+    }
+    pub(super) fn prepare_with_budget(
+        &mut self,
+        context: &NativeGpuContext<'_>,
+        frame: &TraceFrame<S>,
+        budget: &mut usize,
     ) -> anyhow::Result<()> {
         if self.pipeline.is_none() {
             self.pipeline = Some(if S::MSDF {
@@ -336,22 +404,47 @@ impl<S: InstanceSource> TraceRenderer<S> {
             .is_none_or(|cache| !Arc::ptr_eq(&cache.source, &frame.tracks))
         {
             self.uploaded = Some(UploadedTracks::new(Arc::clone(&frame.tracks))?);
+            if let Some(bytes) = self.residency_bytes {
+                self.uploaded
+                    .as_mut()
+                    .context("GPU_TRACE_CACHE_MISSING")?
+                    .enable_residency(bytes)?;
+            }
             self.telemetry.cache_builds.fetch_add(1, Ordering::Relaxed);
             self.telemetry
                 .uploaded_instances
                 .store(0, Ordering::Release);
         }
         let cache = self.uploaded.as_mut().context("GPU_TRACE_CACHE_MISSING")?;
-        let before = cache.uploaded();
-        let upload = cache.upload_next(&context.device);
+        let before = cache.lifetime_bytes();
+        let view = frame.camera.and_then(|mut camera| {
+            camera.pixels_per_mm *= f64::from(frame.scale_factor);
+            let width = f64::from(context.bounds.size.width.0);
+            let height = f64::from(context.bounds.size.height.0);
+            let a = camera.view_to_board(pomelo_core::model::Point::new(-8.0, -8.0), width, height);
+            let b = camera.view_to_board(
+                pomelo_core::model::Point::new(width + 8.0, height + 8.0),
+                width,
+                height,
+            );
+            let bounds = Bounds {
+                min: pomelo_core::model::Point::new(a.x.min(b.x), a.y.min(b.y)),
+                max: pomelo_core::model::Point::new(a.x.max(b.x), a.y.max(b.y)),
+            };
+            bounds.is_valid().then_some(bounds)
+        });
+        let upload = cache.upload_visible(&context.device, view, budget);
         // Record successful chunks even if a later chunk fails in the same frame.
-        let bytes = (cache.uploaded() - before) * std::mem::size_of::<S::Instance>();
+        let bytes = cache.lifetime_bytes() - before;
         self.telemetry
             .uploaded_bytes
-            .fetch_add(bytes as u64, Ordering::Relaxed);
+            .fetch_add(bytes, Ordering::Relaxed);
         self.telemetry
             .uploaded_instances
             .store(cache.uploaded() as u64, Ordering::Release);
+        self.telemetry
+            .visible_ready
+            .store(cache.ready(), Ordering::Release);
         upload?;
         Ok(())
     }
@@ -391,6 +484,7 @@ impl<S: InstanceSource> NativeGpuRenderer for TraceRenderer<S> {
     fn reset(&mut self) {
         self.pipeline = None;
         self.uploaded = None;
+        self.telemetry.visible_ready.store(false, Ordering::Release);
         self.telemetry
             .uploaded_instances
             .store(0, Ordering::Release);

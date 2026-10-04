@@ -215,7 +215,7 @@ fn rotated_text_quads_pick_last_source_owner_and_respect_text_visibility() {
         Point::new(4.0, 2.0),
         Point::new(3.0, 1.0),
     ];
-    let quads = [
+    let mut quads = vec![
         TextPickQuad {
             text: ObjectId(10),
             corners,
@@ -234,9 +234,16 @@ fn rotated_text_quads_pick_last_source_owner_and_respect_text_visibility() {
             ],
         },
     ];
+    quads.extend(std::iter::repeat_n(
+        TextPickQuad {
+            text: ObjectId(999),
+            corners,
+        },
+        2_000,
+    ));
     let cancel = CancellationToken::default();
     let board = std::sync::Arc::new(board);
-    let index = SegmentIndex::build(board.clone(), 10, &cancel)
+    let index = SegmentIndex::build_with_budget(board.clone(), 10, 64 * 1024, &cancel)
         .unwrap()
         .with_text_quads(&quads, &cancel)
         .unwrap();

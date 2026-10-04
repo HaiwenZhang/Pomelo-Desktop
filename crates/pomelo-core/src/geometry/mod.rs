@@ -164,10 +164,14 @@ pub fn flatten_path(
         if !point.x.is_finite() || !point.y.is_finite() {
             return Err(PathError::Invalid(id));
         }
-        if points
-            .last()
-            .is_none_or(|last: &Point| last.distance(point) > 1e-9)
-        {
+        if points.last().is_none_or(|last: &Point| {
+            // Most tessellation points are far apart compared with this
+            // threshold. A single axis proves separation without hypot;
+            // keep its exact evaluation for near-coincident boundaries.
+            (last.x - point.x).abs() > 1e-9
+                || (last.y - point.y).abs() > 1e-9
+                || last.distance(point) > 1e-9
+        }) {
             let actual = points.len().saturating_add(1);
             if actual > max_points {
                 return Err(PathError::PointLimit {
@@ -330,6 +334,61 @@ pub fn distance_to_line(point: Point, a: Point, b: Point) -> f64 {
 mod tests {
     use super::*;
     use crate::model::{Arc, LayerId, NetId, ObjectId};
+
+    #[test]
+    fn contour_deduplication_preserves_hypot_threshold_decisions() {
+        let epsilon = 1e-9_f64;
+        let below = f64::from_bits(epsilon.to_bits() - 1);
+        let above = f64::from_bits(epsilon.to_bits() + 1);
+        let origins = [Point::default(), Point::new(100_000.000_123, -20.0)];
+        let mut deltas = vec![
+            Point::new(below, 0.0),
+            Point::new(epsilon, 0.0),
+            Point::new(above, 0.0),
+            Point::new(0.0, above),
+            Point::new(1e308, -1e308),
+        ];
+        for x in -16..=16 {
+            for y in -16..=16 {
+                deltas.push(Point::new(
+                    x as f64 * epsilon / 16.0,
+                    y as f64 * epsilon / 16.0,
+                ));
+            }
+        }
+        for origin in origins {
+            for delta in &deltas {
+                let endpoint = Point::new(origin.x + delta.x, origin.y + delta.y);
+                let edge = Segment {
+                    id: ObjectId(1),
+                    track_id: ObjectId(1),
+                    layer: LayerId(1),
+                    net: NetId(1),
+                    a: origin,
+                    b: endpoint,
+                    width: 0.0,
+                    arc: None,
+                    bond_wire: None,
+                };
+                let expected = if origin.distance(endpoint) > epsilon {
+                    vec![origin, endpoint]
+                } else {
+                    vec![origin]
+                };
+                assert_eq!(
+                    flatten_path(
+                        &[edge],
+                        COPPER_CHORD_TOLERANCE_MM,
+                        2,
+                        &CancellationToken::default()
+                    )
+                    .unwrap(),
+                    expected,
+                    "origin={origin:?} delta={delta:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn arc_length_uses_signed_sweep_magnitude() {

@@ -38,9 +38,12 @@ float4 fragment_color(float4 position) {
         uint2 pixel = uint2(max(floor(sample), 0.0)) & 15u;
         uint row = pattern_mask[pixel.y >> 2u][pixel.y & 3u];
         float ink = float((row >> pixel.x) & 1u);
-        // Dynamic gaps also receive the original material at shape alpha.
-        // Static gaps stay transparent, retaining the unchanged sparse fill.
-        if (dynamic) return float4(lerp(color.rgb, float3(1,1,1), ink), color.a);
+        if (dynamic) {
+            float2 screen = position.xy / viewport.z;
+            float2 cell = screen - floor(screen / 5.0) * 5.0 - 2.5;
+            return float4(1,1,1,(1.0 - smoothstep(0.65,1.25,length(cell))) * 0.9);
+        }
+        // Static gaps retain the unchanged sparse fill.
         return float4(color.rgb, color.a * ink);
     }
     if (view.w > 0.5 && view.z > 1.5) {

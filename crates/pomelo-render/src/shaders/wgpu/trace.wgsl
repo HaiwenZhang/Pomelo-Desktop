@@ -35,7 +35,6 @@ struct Out {
 @fragment fn fragment_main(i: Out) -> @location(0) vec4f {
     if clipped(i.position.xy) {discard;}
     let dynamic_base = (i.flags.w & 128u) != 0u && u.view.w < 0.5 && u.batch.w != 0u;
-    if dynamic_base && u.batch.w == 2u {discard;}
     let screen = board_position(i.position.xy); let a = delta(screen, i.a); let b = delta(screen, i.b);
     var distance: f32;
     if i.flags.x == 2u {

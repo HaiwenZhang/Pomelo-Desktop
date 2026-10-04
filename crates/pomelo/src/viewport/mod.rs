@@ -3,6 +3,7 @@ use crate::panels::focus_scroll::FocusScroll;
 use crate::tooltips::ButtonTooltipExt;
 mod appearance;
 mod curves;
+mod gesture;
 mod opacity;
 mod presentation;
 mod toolbar;
@@ -151,7 +152,7 @@ pub struct BoardViewport {
     paint_error: Option<String>,
     navigation: ViewportNavigation,
     bounds: Option<Bounds<Pixels>>,
-    drag_position: Option<Point<Pixels>>,
+    pointer_gesture: Option<gesture::PointerGesture>,
     pointer_position: Option<Point<Pixels>>,
     focus: FocusHandle,
     diagnostics_navigation: crate::panels::diagnostics::NavigationFocus,
@@ -300,7 +301,8 @@ impl BoardViewport {
                 .with_source_stroke_telemetry(Arc::clone(&source_stroke_telemetry))
                 .with_custom_outline_telemetry(Arc::clone(&custom_outline_telemetry))
                 .with_zone_outline_telemetry(Arc::clone(&zone_outline_telemetry))
-                .with_label_telemetry(Arc::clone(&label_telemetry)),
+                .with_label_telemetry(Arc::clone(&label_telemetry))
+                .with_trace_residency(64 * 1024 * 1024),
             ))
             .map_err(|error| format!("{error:#}"));
         let colors =
@@ -487,7 +489,7 @@ impl BoardViewport {
             paint_error: None,
             navigation: ViewportNavigation::default(),
             bounds: None,
-            drag_position: None,
+            pointer_gesture: None,
             pointer_position: None,
             focus: cx.focus_handle(),
         };
@@ -849,11 +851,11 @@ impl BoardViewport {
         cx.notify();
     }
 
-    fn pick_trace(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn pick_trace(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(bounds) = self.bounds else {
             return;
         };
-        let local = event.position - bounds.origin;
+        let local = position - bounds.origin;
         // A normal click keeps selecting Web's topmost hit. Candidate cycling
         // is an explicit keyboard command, not a side effect of repeated clicks.
         self.last_pick = None;
@@ -1096,11 +1098,16 @@ impl BoardViewport {
     }
 
     fn start_pan(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.hover_cancel.cancel();
-        self.hovered = None;
-        self.hover_notice = None;
+        if self.pointer_gesture.is_some() {
+            return;
+        }
+        self.invalidate_hover();
         window.focus(&self.focus, cx);
-        self.drag_position = Some(event.position);
+        self.pointer_gesture = Some(gesture::PointerGesture::new(
+            event.position,
+            event.button,
+            self.pan_tool,
+        ));
         cx.stop_propagation();
         cx.notify();
     }
@@ -1114,6 +1121,9 @@ impl BoardViewport {
     }
 
     fn hover_at(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pan_tool || self.pointer_gesture.is_some() {
+            return;
+        }
         let Some(bounds) = self.bounds else {
             return;
         };
@@ -1147,7 +1157,7 @@ impl BoardViewport {
         let mode = self.selection_mode;
         let delay = cx
             .background_executor()
-            .timer(std::time::Duration::from_millis(40));
+            .timer(std::time::Duration::from_millis(500));
         let worker = cx.background_spawn(async move {
             delay.await;
             if worker_cancel.is_cancelled() {
@@ -1181,6 +1191,8 @@ impl BoardViewport {
             let result = worker.await;
             let _ = this.update_in(cx, |this, _, cx| {
                 if cancel.is_cancelled()
+                    || this.pan_tool
+                    || this.pointer_gesture.is_some()
                     || this.pick_filter != filter
                     || !context.matches_view(
                         this.navigation.camera(),
@@ -1221,31 +1233,51 @@ impl BoardViewport {
             self.pointer_position = Some(event.position);
             cx.notify();
         }
-        if event.pressed_button != Some(MouseButton::Middle)
-            && !(self.pan_tool && event.pressed_button == Some(MouseButton::Left))
+        if self
+            .pointer_gesture
+            .as_ref()
+            .is_some_and(|gesture| event.pressed_button != Some(gesture.button))
         {
-            if self.drag_position.take().is_some() {
-                cx.notify();
-            }
-            if event.pressed_button.is_none() {
-                self.hover_at(event.position, window, cx);
-            }
-            return;
+            self.pointer_gesture = None;
+            cx.notify();
         }
-        if let Some(previous) = self.drag_position {
-            self.drag_position = Some(event.position);
-            let delta = event.position - previous;
-            if self.navigation.pan(pomelo_core::model::Point::new(
-                f64::from(f32::from(delta.x)),
-                f64::from(f32::from(delta.y)),
-            )) {
+        if let Some(gesture) = &mut self.pointer_gesture {
+            if let Some(delta) = gesture.advance(event.position) {
+                self.navigation.pan(pomelo_core::model::Point::new(
+                    f64::from(f32::from(delta.x)),
+                    f64::from(f32::from(delta.y)),
+                ));
                 cx.notify();
             }
+        } else if event.pressed_button.is_none() {
+            self.hover_at(event.position, window, cx);
         }
     }
 
-    fn stop_pan(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.drag_position.take().is_some() {
+    fn stop_pan(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .pointer_gesture
+            .as_ref()
+            .is_some_and(|gesture| gesture.button == event.button)
+        {
+            return;
+        }
+        if let Some(gesture) = self.pointer_gesture.take() {
+            if gesture.is_click() {
+                self.pick_trace(event.position, window, cx);
+            }
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+
+    fn cancel_pan(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .pointer_gesture
+            .as_ref()
+            .is_some_and(|gesture| gesture.button == event.button)
+        {
+            self.pointer_gesture = None;
             cx.notify();
         }
     }
@@ -2693,39 +2725,32 @@ impl Render for BoardViewport {
             .cloned()
             .or_else(|| self.paint_error.clone())
             .or_else(|| status.as_ref().and_then(|status| status.last_error.clone()));
-        let geometry_ready = stats.uploaded_instances == self.tracks.instances.len() as u64
+        let geometry_ready = (self.tracks.instances.is_empty() || stats.visible_ready)
             && copper_stats.uploaded_bytes == self.copper.upload_bytes() as u64
             && pad_stats.uploaded_instances == self.pads.analytic.len() as u64
             && custom_pad_stats.uploaded_bytes == custom_bytes as u64
-            && custom_outline_stats.uploaded_instances
-                == self
-                    .pads
-                    .custom_outlines
-                    .as_ref()
-                    .map_or(0, |source| source.instances.len()) as u64
+            && self.pads.custom_outlines.as_ref().is_none_or(|source| {
+                source.instances.is_empty() || custom_outline_stats.visible_ready
+            })
             && drill_stats.uploaded_instances == self.drills.analytic.len() as u64
-            && zone_outline_stats.uploaded_instances == self.zone_outlines.instances.len() as u64
-            && drawing_stats.uploaded_instances == self.drawings.instances.len() as u64
-            && text_stats.uploaded_instances
-                == self
-                    .texts
-                    .as_ref()
-                    .map_or(0, |source| source.instances.len()) as u64
-            && source_stroke_stats.uploaded_instances
-                == self
-                    .source_strokes
-                    .as_ref()
-                    .map_or(0, |source| source.instances.len()) as u64;
+            && (self.zone_outlines.instances.is_empty() || zone_outline_stats.visible_ready)
+            && (self.drawings.instances.is_empty() || drawing_stats.visible_ready)
+            && self
+                .texts
+                .as_ref()
+                .is_none_or(|source| source.instances.is_empty() || text_stats.visible_ready)
+            && self.source_strokes.as_ref().is_none_or(|source| {
+                source.instances.is_empty() || source_stroke_stats.visible_ready
+            });
         let ready = geometry_ready
             && !self.curve_fill.pending
             && !self.curve_fill.failed
             && copper_stats.curve_uploaded_bytes == curve_bytes
             && copper_stats.curve_revision == curve_revision
-            && label_stats.uploaded_instances
-                == self
-                    .label_cache
-                    .as_ref()
-                    .map_or(0, |cache| cache.source.instances.len()) as u64;
+            && self
+                .label_cache
+                .as_ref()
+                .is_none_or(|cache| cache.source.instances.is_empty() || label_stats.visible_ready);
         if failure.is_none()
             && !self.curve_fill.failed
             && (!ready || status.as_ref().is_some_and(|status| status.encoded == 0))
@@ -2798,8 +2823,8 @@ impl Render for BoardViewport {
                 "source_outline_count": self.scene.outline.len(),
                 "copper_prepared": {
                     "zones": self.copper.batches.len(),
-                    "vertices": self.copper.vertices.len(),
-                    "indices": self.copper.indices.len(),
+                    "vertices": self.copper.vertex_count(),
+                    "indices": self.copper.index_count(),
                     "gpu_drawn": copper_stats.draw_calls > 0,
                 },
                 "pads_prepared": {
@@ -2979,6 +3004,8 @@ impl Render for BoardViewport {
         let copper_opacity = self.display.copper_opacity;
         let viewport = canvas(
             move |bounds, _, cx| {
+                let prepaint_started = pomelo_render::frame_timing::begin();
+                let mut label_layout_us = 0u64;
                 let mut resized = false;
                 let mut labels = None;
                 let mut curves = None;
@@ -3020,6 +3047,7 @@ impl Render for BoardViewport {
                             if this.label_cache.as_ref().is_none_or(|cache| {
                                 cache.key != key || !Arc::ptr_eq(&cache.display, &this.display)
                             }) {
+                                let layout_started = prepaint_started.map(|_|std::time::Instant::now());
                                 match index.layout(
                                     camera,
                                     width,
@@ -3046,6 +3074,9 @@ impl Render for BoardViewport {
                                         }
                                     }
                                 }
+                                if let Some(started) = layout_started {
+                                    label_layout_us = started.elapsed().as_micros() as u64;
+                                }
                             }
                             labels = this
                                 .label_cache
@@ -3058,6 +3089,11 @@ impl Render for BoardViewport {
                 if resized {
                     frame.hovered_object = None;
                 }
+                pomelo_render::frame_timing::record("prepaint_board", prepaint_started, || serde_json::json!({
+                    "camera":frame.camera,"segments":frame.tracks.instances.len(),"zones":copper.batches.len(),
+                    "label_layout_us":label_layout_us,
+                    "labels":labels.as_ref().map_or(0, |source|source.instances.len()),
+                }));
                 Arc::new(BoardFrame {
                     curves,
                     zone_outlines: Some(zone_outlines),
@@ -3076,6 +3112,13 @@ impl Render for BoardViewport {
                 })
             },
             move |bounds, frame, window, cx| {
+                if pomelo_render::frame_timing::continuous() {
+                    window.request_animation_frame();
+                    let repaint = weak.clone();
+                    window.on_next_frame(move |_, cx| {
+                        let _ = repaint.update(cx, |_, cx| cx.notify());
+                    });
+                }
                 if let Some(renderer) = &renderer
                     && let Err(error) = window.paint_gpu(bounds, renderer, frame)
                 {
@@ -3089,6 +3132,15 @@ impl Render for BoardViewport {
                     let weak = weak.clone();
                     let before = renderer.status();
                     let before_uploaded = telemetry.snapshot().uploaded_instances;
+                    let before_trace_ready = telemetry.snapshot().visible_ready;
+                    let before_residency_ready = [
+                        custom_outline_telemetry.snapshot().visible_ready,
+                        drawing_telemetry.snapshot().visible_ready,
+                        text_telemetry.snapshot().visible_ready,
+                        source_stroke_telemetry.snapshot().visible_ready,
+                        label_telemetry.snapshot().visible_ready,
+                        zone_outline_telemetry.snapshot().visible_ready,
+                    ];
                     let before_copper = copper_telemetry.snapshot().uploaded_bytes;
                     let before_pads = pad_telemetry.snapshot().uploaded_instances;
                     let before_custom = custom_pad_telemetry.snapshot().uploaded_bytes;
@@ -3107,6 +3159,16 @@ impl Render for BoardViewport {
                         if before.last_error != after.last_error
                             || before.resets != after.resets
                             || before_uploaded != uploaded
+                            || before_trace_ready != telemetry.snapshot().visible_ready
+                            || before_residency_ready
+                                != [
+                                    custom_outline_telemetry.snapshot().visible_ready,
+                                    drawing_telemetry.snapshot().visible_ready,
+                                    text_telemetry.snapshot().visible_ready,
+                                    source_stroke_telemetry.snapshot().visible_ready,
+                                    label_telemetry.snapshot().visible_ready,
+                                    zone_outline_telemetry.snapshot().visible_ready,
+                                ]
                             || before_copper != copper_telemetry.snapshot().uploaded_bytes
                             || before_pads != pad_telemetry.snapshot().uploaded_instances
                             || before_custom != custom_pad_telemetry.snapshot().uploaded_bytes
@@ -3157,11 +3219,14 @@ impl Render for BoardViewport {
                 toolbar::Commands {
                     select: Box::new(cx.listener(|this, _, window, cx| {
                         this.pan_tool = false;
+                        this.pointer_gesture = None;
                         window.focus(&this.focus, cx);
                         cx.notify();
                     })),
                     pan: Box::new(cx.listener(|this, _, window, cx| {
                         this.pan_tool = true;
+                        this.pointer_gesture = None;
+                        this.invalidate_hover();
                         window.focus(&this.focus, cx);
                         cx.notify();
                     })),
@@ -3209,7 +3274,7 @@ impl Render for BoardViewport {
                                     .border_color(theme.border)
                                     .bg(self.canvas_background())
                                     .focus_visible(|style| style.border_color(theme.ring))
-                                    .cursor(if self.drag_position.is_some() {
+                                    .cursor(if self.pointer_gesture.as_ref().is_some_and(|gesture| gesture.dragging) {
                                         CursorStyle::ClosedHand
                                     } else if self.pan_tool {
                                         CursorStyle::OpenHand
@@ -3218,13 +3283,7 @@ impl Render for BoardViewport {
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(|this, event, window, cx| {
-                                            if this.pan_tool {
-                                                this.start_pan(event, window, cx);
-                                            } else {
-                                                this.pick_trace(event, window, cx);
-                                            }
-                                        }),
+                                        cx.listener(Self::start_pan),
                                     )
                                     .on_mouse_down(
                                         MouseButton::Middle,
@@ -3241,11 +3300,11 @@ impl Render for BoardViewport {
                                         }
                                     }))
                                     .on_mouse_up(MouseButton::Left, cx.listener(Self::stop_pan))
-                                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::stop_pan))
+                                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::cancel_pan))
                                     .on_mouse_up(MouseButton::Middle, cx.listener(Self::stop_pan))
                                     .on_mouse_up_out(
                                         MouseButton::Middle,
-                                        cx.listener(Self::stop_pan),
+                                        cx.listener(Self::cancel_pan),
                                     )
                                     .on_scroll_wheel(cx.listener(Self::scroll))
                                     .child(viewport)
@@ -3411,6 +3470,7 @@ impl Render for BoardViewport {
                                                             .on_click(cx.listener(
                                                                 |this, _, _, cx| {
                                                                     this.pan_tool = false;
+                                                                    this.pointer_gesture = None;
                                                                     cx.notify();
                                                                 },
                                                             )),
@@ -3438,6 +3498,8 @@ impl Render for BoardViewport {
                                                             .on_click(cx.listener(
                                                                 |this, _, _, cx| {
                                                                     this.pan_tool = true;
+                                                                    this.pointer_gesture = None;
+                                                                    this.invalidate_hover();
                                                                     cx.notify();
                                                                 },
                                                             )),
