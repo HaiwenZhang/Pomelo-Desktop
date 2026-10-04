@@ -3003,7 +3003,33 @@ impl Render for BoardViewport {
         let zone_outlines = Arc::clone(&self.zone_outlines);
         let copper_opacity = self.display.copper_opacity;
         let viewport = canvas(
-            move |bounds, _, cx| {
+            move |bounds, window, cx| {
+                let move_view = layout_view.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = move_view.update(cx, |this, cx| {
+                            if this.pointer_gesture.is_some() {
+                                this.move_pan(event, window, cx);
+                                cx.stop_propagation();
+                            }
+                        });
+                    }
+                });
+                let release_view = layout_view.clone();
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = release_view.update(cx, |this, cx| {
+                            if this.pointer_gesture.as_ref().is_some_and(|gesture| gesture.button == event.button) {
+                                if bounds.contains(&event.position) {
+                                    this.stop_pan(event, window, cx);
+                                } else {
+                                    this.cancel_pan(event, window, cx);
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                    }
+                });
                 let prepaint_started = pomelo_render::frame_timing::begin();
                 let mut label_layout_us = 0u64;
                 let mut resized = false;

@@ -37,7 +37,7 @@ fn hardware_direct_copper_matches_stencil_materials_holes_annotations_and_edges(
                 }
                 Zone {
                     id: ObjectId(i + 1),
-                    layer: LayerId(0),
+                    layer: LayerId(u32::from(i == 5)),
                     net: NetId(if i >= 4 { 2 } else { i % 2 + 1 }),
                     kind: if i % 2 == 0 {
                         ZoneKind::Static
@@ -87,49 +87,55 @@ fn hardware_direct_copper_matches_stencil_materials_holes_annotations_and_edges(
                                 pomelo_core::selection::SelectedObject::Zone(ObjectId(4)),
                                 [1.0; 4],
                             ));
-                            let mut results = Vec::new();
-                            for cache in [&reference, &optimized] {
-                                target.bind(&context);
-                                let mut seen = Vec::new();
-                                let mut annotate = |batch: &crate::copper::CopperBatch| {
-                                    seen.push(batch.object);
-                                    probe
-                                        .draw(&gpu, &crate::backend::ProbeScene::triangle(1))
-                                        .map(|_| ())
-                                };
-                                let counts = pipeline
-                                    .draw(
-                                        &gpu,
-                                        &frame,
-                                        cache,
-                                        CopperDrawOptions {
-                                            opacity,
-                                            layer: None,
-                                            visible: None,
-                                            annotations: Some(&mut annotate),
-                                            annotation_owners: Some(&owners),
-                                            overrides: None,
-                                            static_shapes_fill_solid: solid,
-                                            network_selection: Some(NetId(1)),
-                                        },
-                                    )
-                                    .unwrap();
-                                results.push((target.read(&context), counts, seen));
-                            }
-                            assert_eq!(
-                                results[0].0, results[1].0,
-                                "offset={offset} dpi={scale} flip={flipped} solid={solid} alpha={opacity} pass={pass:?}"
-                            );
-                            assert_eq!(results[0].2, results[1].2, "annotation order changed");
-                            assert_eq!(
-                                results[0].1.1, results[1].1.1,
-                                "visible zone count changed"
-                            );
-                            if opacity > 0.0 && pass == OverlayPass::Base {
-                                assert!(
-                                    results[1].1.0 < results[0].1.0,
-                                    "fast path did not reduce draws"
+                            for layer in
+                                [None, Some(LayerId(0)), Some(LayerId(1)), Some(LayerId(99))]
+                            {
+                                let mut results = Vec::new();
+                                for cache in [&reference, &optimized] {
+                                    target.bind(&context);
+                                    let mut seen = Vec::new();
+                                    let mut annotate = |batch: &crate::copper::CopperBatch| {
+                                        seen.push(batch.object);
+                                        probe
+                                            .draw(&gpu, &crate::backend::ProbeScene::triangle(1))
+                                            .map(|_| ())
+                                    };
+                                    let counts = pipeline
+                                        .draw(
+                                            &gpu,
+                                            &frame,
+                                            cache,
+                                            CopperDrawOptions {
+                                                opacity,
+                                                layer,
+                                                visible: None,
+                                                annotations: Some(&mut annotate),
+                                                annotation_owners: Some(&owners),
+                                                overrides: None,
+                                                static_shapes_fill_solid: solid,
+                                            },
+                                        )
+                                        .unwrap();
+                                    results.push((target.read(&context), counts, seen));
+                                }
+                                assert_eq!(
+                                    results[0].0, results[1].0,
+                                    "offset={offset} dpi={scale} flip={flipped} solid={solid} alpha={opacity} pass={pass:?}"
                                 );
+                                assert_eq!(results[0].2, results[1].2, "annotation order changed");
+                                assert_eq!(
+                                    results[0].1.1, results[1].1.1,
+                                    "visible zone count changed"
+                                );
+                                if opacity > 0.0
+                                    && pass == OverlayPass::Base
+                                    && layer != Some(LayerId(99))
+                                {
+                                    assert!(
+                                        results[1].1.0 < results[0].1.0,
+                                        "fast path did not reduce draws"
+                                    );
+                                }
                             }
                         }
                     }

@@ -39,6 +39,8 @@ mod copper_direct;
 mod frame_profile;
 #[path = "pad_range_pixels.rs"]
 mod pad_range;
+#[path = "trace_overlay_pixels.rs"]
+mod trace_overlay;
 #[path = "residency_pixels.rs"]
 mod residency;
 

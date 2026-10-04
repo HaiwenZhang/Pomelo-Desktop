@@ -1,7 +1,7 @@
 //! Compact record boundaries and string lookup, without materializing record ASTs.
 
 use super::{header::BrdHeader, reader::Reader, record_scan::scan_record};
-use crate::{ImportContext, ImportError, ImportOptions};
+use crate::{ImportContext, ImportError, ImportOptions, TextEncoding};
 use pomelo_core::task::{ImportProgress, ImportStage};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, hash_map::Entry};
@@ -42,6 +42,7 @@ impl Default for IndexLimits {
 }
 
 pub struct BrdIndex {
+    pub encoding: TextEncoding,
     pub header: BrdHeader,
     pub strings: HashMap<u32, String>,
     pub object_offset: FileOffset,
@@ -71,6 +72,42 @@ impl BrdIndex {
         limits: &IndexLimits,
         context: &ImportContext<'_>,
     ) -> Result<Self, ImportError> {
+        if matches!(options.text_encoding, TextEncoding::Auto) {
+            let mut reader = Reader::detecting(bytes);
+            let sampling_options = ImportOptions {
+                text_encoding: TextEncoding::Windows1252,
+                ..options.clone()
+            };
+            // Drop the temporary index before the strict pass, keeping peak index memory bounded.
+            // Detection is cancellable but does not publish a premature completion event.
+            let sampling_context = ImportContext {
+                cancellation: context.cancellation,
+                progress: &|_| {},
+            };
+            Self::read_with_reader(
+                bytes,
+                &sampling_options,
+                limits,
+                &sampling_context,
+                &mut reader,
+            )?;
+            let resolved = ImportOptions {
+                text_encoding: reader.detected_encoding(),
+                ..options.clone()
+            };
+            return Self::read(bytes, &resolved, limits, context);
+        }
+        let mut reader = Reader::new(bytes, options.text_encoding);
+        Self::read_with_reader(bytes, options, limits, context, &mut reader)
+    }
+
+    fn read_with_reader(
+        bytes: &[u8],
+        options: &ImportOptions,
+        limits: &IndexLimits,
+        context: &ImportContext<'_>,
+        reader: &mut Reader<'_>,
+    ) -> Result<Self, ImportError> {
         context.check_cancelled()?;
         let file_limit = options.max_file_bytes.min(u32::MAX as u64);
         if bytes.len() as u64 > file_limit {
@@ -79,8 +116,7 @@ impl BrdIndex {
                 limit: file_limit,
             });
         }
-        let header = BrdHeader::read(bytes, options.text_encoding)?;
-        let mut reader = Reader::new(bytes, options.text_encoding);
+        let header = BrdHeader::read_with_reader(reader)?;
         reader.seek(0x1200)?;
         let mut strings = HashMap::new();
         // Includes per-type Vec headers and growth slack, not just populated elements.
@@ -108,6 +144,7 @@ impl BrdIndex {
         }
         let object_offset = FileOffset(reader.offset() as u32);
         let mut index = Self {
+            encoding: options.text_encoding,
             header,
             strings,
             object_offset,
@@ -142,7 +179,7 @@ impl BrdIndex {
                 progress.emit(bytes.len(), true)?;
                 return Ok(index);
             }
-            let key = scan_record(&mut reader, record_type, &index.header, limits, context)?;
+            let key = scan_record(reader, record_type, &index.header, limits, context)?;
             let key = RecordKey(key.unwrap_or(0));
             let entry = if key.0 == 0 {
                 None

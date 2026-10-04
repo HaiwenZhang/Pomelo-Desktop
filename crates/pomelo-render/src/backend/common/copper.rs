@@ -22,7 +22,6 @@ pub(crate) struct CopperDrawOptions<'a> {
     pub annotation_owners: Option<&'a BTreeSet<pomelo_core::model::ObjectId>>,
     pub overrides: Option<&'a BTreeMap<pomelo_core::model::ObjectId, UploadedCopper>>,
     pub static_shapes_fill_solid: bool,
-    pub network_selection: Option<pomelo_core::model::NetId>,
 }
 
 pub(crate) const UPLOAD_BYTES_PER_FRAME: usize = 4 * 1024 * 1024;
@@ -34,11 +33,29 @@ pub(crate) struct UploadedCopper {
     index_buffer: Option<Buffer>,
     vertex_uploaded: usize,
     index_uploaded: usize,
+    /// Original batch order within each layer; no geometry is duplicated.
+    layer_batches: BTreeMap<pomelo_core::model::LayerId, Vec<usize>>,
     #[cfg(test)]
     pub force_stencil: bool,
 }
 impl UploadedCopper {
     pub fn new(source: Arc<PreparedCopper>, device: &Device<'_>) -> anyhow::Result<Self> {
+        let mut counts = BTreeMap::new();
+        for batch in &source.batches {
+            *counts.entry(batch.layer).or_insert(0usize) += 1;
+        }
+        let mut layer_batches = BTreeMap::new();
+        for (layer, count) in counts {
+            let mut indices = Vec::new();
+            indices.try_reserve_exact(count)?;
+            layer_batches.insert(layer, indices);
+        }
+        for (index, batch) in source.batches.iter().enumerate() {
+            layer_batches
+                .get_mut(&batch.layer)
+                .context("GPU_COPPER_LAYER_MISSING")?
+                .push(index);
+        }
         let vertex_buffer = if source.vertex_count() == 0 {
             None
         } else {
@@ -72,6 +89,7 @@ impl UploadedCopper {
             index_buffer,
             vertex_uploaded: 0,
             index_uploaded: 0,
+            layer_batches,
             #[cfg(test)]
             force_stencil: false,
         })
@@ -214,7 +232,6 @@ impl Pipeline {
             annotation_owners,
             overrides,
             static_shapes_fill_solid,
-            network_selection,
         } = options;
         if cache.index_uploaded == 0 {
             return Ok((0, 0));
@@ -280,7 +297,18 @@ impl Pipeline {
         };
         let (mut draws, mut zones) = (0, 0);
         let mut pending: Option<DirectRun<'_>> = None;
-        for batch in &cache.source.batches {
+        let indexed_layer = layer;
+        // The pixel reference keeps the original whole-source scan.
+        #[cfg(test)]
+        let indexed_layer = indexed_layer.filter(|_| !cache.force_stencil);
+        let indices = indexed_layer.and_then(|layer| cache.layer_batches.get(&layer));
+        let count = if indexed_layer.is_some() {
+            indices.map_or(0, Vec::len)
+        } else {
+            cache.source.batches.len()
+        };
+        for index in 0..count {
+            let batch = &cache.source.batches[indices.map_or(index, |indices| indices[index])];
             if layer.is_some_and(|layer| batch.layer != layer)
                 || visible.is_some_and(|test| !test(batch))
             {
@@ -310,45 +338,14 @@ impl Pipeline {
                 batch.selected_object,
                 pomelo_core::selection::SelectedObject::Zone(_)
             );
-            let net_selected =
-                zone && matches!(
-                    batch.kind,
-                    pomelo_core::model::ZoneKind::Static | pomelo_core::model::ZoneKind::Dynamic
-                ) && network_selection
-                    .or_else(|| frame.highlighted_net.map(|(net, _)| net))
-                    .is_some_and(|net| net.0 != 0 && net == batch.net);
-            let object_selected = frame.pass == board::OverlayPass::Selection
-                && !net_selected
-                && zone
-                && frame
-                    .highlighted_object
-                    .is_some_and(|(object, _)| object == batch.selected_object);
-            if zone
-                && opacity <= 0.0
-                && !(object_selected && batch.kind == pomelo_core::model::ZoneKind::Dynamic)
-            {
+            let zone_overlay = zone && frame.pass != board::OverlayPass::Base;
+            if zone && opacity <= 0.0 && !zone_overlay {
                 continue;
             }
-            // Solid static shapes retain their fill; unsupported kinds do
-            // not inherit a rule inferred from known static/dynamic shapes.
-            if object_selected
-                && (batch.kind == pomelo_core::model::ZoneKind::Unknown
-                    || (batch.kind == pomelo_core::model::ZoneKind::Static
-                        && static_shapes_fill_solid))
-            {
-                continue;
-            }
-            // Custom pads share this pipeline but never inherit static-shape styling.
-            uniforms.view[2] = if net_selected && frame.pass == board::OverlayPass::Base {
-                3.0 // Replace ordinary fill, retaining the full stencil for labels.
-            } else if net_selected && frame.pass == board::OverlayPass::Selection {
-                2.0 // Dedicated physical-pixel persistent network bitmap.
-            } else if object_selected {
-                if batch.kind == pomelo_core::model::ZoneKind::Static {
-                    4.0 // Recolor the existing logical sparse bitmap.
-                } else {
-                    5.0 // Trace-style white dots, independent of shape opacity.
-                }
+            // Zone overlays add sparse white dots over the unchanged base material.
+            // Custom pads keep their own existing overlay treatment.
+            uniforms.view[2] = if zone_overlay {
+                6.0
             } else {
                 f32::from(u8::from(
                     !static_shapes_fill_solid
@@ -407,23 +404,12 @@ impl Pipeline {
                 rect.right as f32,
                 rect.bottom as f32,
             ];
-            uniforms.color = frame
-                .highlighted_net
-                .filter(|(net, _)| net.0 != 0 && *net == batch.net)
-                .map(|(_, color)| color)
-                .unwrap_or_else(|| frame.material_color(batch.layer, batch.net));
+            uniforms.color = frame.material_color(batch.layer, batch.net);
             if let Some(color) = overlay {
                 uniforms.color = color;
             }
             if frame.pass == board::OverlayPass::Base {
                 uniforms.color[3] *= opacity;
-            } else if (net_selected
-                || (object_selected && batch.kind == pomelo_core::model::ZoneKind::Static))
-                && frame.pass == board::OverlayPass::Selection
-            {
-                // The observed highlighted shape retains the shapes slider,
-                // independently of global alpha and ordinary UI selection alpha.
-                uniforms.color[3] = opacity;
             }
             let vertices = cache
                 .vertex_buffer

@@ -472,6 +472,7 @@ message_keys! {
     PickFailed => "view.pick_failed" [],
     RetryImport => "app.retry_import" [],
     RetryEncoding => "app.retry_encoding" [],
+    EncodingAuto => "app.encoding_auto" [],
     RetryEncodingHint => "app.retry_encoding_hint" [],
     RecentFiles => "app.recent_files" [],
     RecentFilesEmpty => "app.recent_files_empty" [],

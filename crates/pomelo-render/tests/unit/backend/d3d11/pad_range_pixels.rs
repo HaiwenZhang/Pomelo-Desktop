@@ -265,3 +265,184 @@ fn hardware_cached_pad_visibility_matches_predicates_across_display_and_upload_c
         }
     }
 }
+#[test]
+#[ignore = "requires hardware D3D11; cached overlay membership invalidation oracle"]
+fn hardware_pad_overlay_cache_matches_original_after_selection_and_hover_mutation() {
+    use crate::backend::common::pad::{Pipeline, UploadedPads, Visibility};
+    use crate::backend::{OverlayPass, TraceSelection};
+    use pomelo_core::selection::{SelectedObject, SelectionTarget};
+    use std::collections::BTreeSet;
+    let (device, context) = compositor_parity::device();
+    let gpu = compositor_parity::gpu_context(&device, &context);
+    let target = Target::new(&device);
+    let pipeline = Pipeline::new(&gpu.device).unwrap();
+    let mut board = compositor_parity::fixture();
+    let mut pads = Arc::try_unwrap(board.pads.take().unwrap()).unwrap();
+    let template = pads.analytic[0];
+    pads.analytic = (0..16385)
+        .map(|i| {
+            let mut pad = template;
+            let x = (i % 200) as f64 * 0.5 - 50.0;
+            let y = (i / 200) as f64 * 0.5 - 20.0;
+            pad.center = split_xy(x, y);
+            pad.bounds_min = split_xy(x - 0.4, y - 0.4);
+            pad.bounds_max = split_xy(x + 0.4, y + 0.4);
+            pad.shape = [0.8, 0.8, 0.0, 0.0];
+            pad.ids = [i as u32, 0, (i % 3 + 1) as u32, 2];
+            pad.source[0] = (i % 2) as u32;
+            pad
+        })
+        .collect();
+    pads.batches = vec![crate::pads::PadBatch {
+        layer: LayerId(0),
+        start: 0,
+        count: 16385,
+    }];
+    let pads = Arc::new(pads);
+    let mut cached = UploadedPads::new(Arc::clone(&pads)).unwrap();
+    let mut reference = UploadedPads::new(pads).unwrap();
+    reference.legacy_visibility = true;
+    reference.use_cpu_net_selection();
+    let mut frame = board.traces;
+    frame.bounds = Bounds {
+        min: Point::new(-100.0, -100.0),
+        max: Point::new(100.0, 100.0),
+    };
+    frame.camera = Some(Camera {
+        center: Point::new(0.0, 0.0),
+        pixels_per_mm: 10.0,
+        flipped: false,
+    });
+    for chunk in 0..2 {
+        for cache in [&mut cached, &mut reference] {
+            let mut budget = 16384 * size_of::<crate::pads::PadInstance>();
+            cache.upload_next(&gpu.device, &mut budget).unwrap();
+        }
+        frame.hover_selection = Some((SelectionTarget::Net(NetId(2)), Arc::new(BTreeSet::new())));
+        frame.highlighted_net = None;
+        frame.highlighted_objects = None;
+        frame.highlighted_related_objects = None;
+        frame.highlighted_object = None;
+        frame.highlighted_trace = None;
+        frame.hovered_object = None;
+        for state in 0..19 {
+            match state {
+                1 => {
+                    frame.hover_selection = Some((
+                        SelectionTarget::Component(ObjectId(1)),
+                        Arc::new(BTreeSet::from([
+                            SelectedObject::Pin(ObjectId(8100)),
+                            SelectedObject::Via(ObjectId(8101)),
+                        ])),
+                    ))
+                }
+                2 => {
+                    Arc::make_mut(&mut frame.hover_selection.as_mut().unwrap().1)
+                        .insert(SelectedObject::Via(ObjectId(8103)));
+                }
+                3 => {
+                    frame.highlighted_related_objects = Some((
+                        Arc::new(BTreeSet::from([SelectedObject::Via(ObjectId(8101))])),
+                        [1.0; 4],
+                    ))
+                }
+                4 => {
+                    Arc::make_mut(&mut frame.highlighted_related_objects.as_mut().unwrap().0)
+                        .insert(SelectedObject::Via(ObjectId(8103)));
+                }
+                5 => {
+                    frame.highlighted_objects =
+                        Some((Arc::new(BTreeSet::from([ObjectId(8100)])), [1.0; 4]))
+                }
+                6 => {
+                    Arc::make_mut(&mut frame.highlighted_objects.as_mut().unwrap().0)
+                        .insert(ObjectId(8102));
+                }
+                7 => frame.hovered_object = Some((SelectedObject::Pin(ObjectId(8102)), [0.5; 4])),
+                8 => {
+                    frame.hover_selection = Some((
+                        SelectionTarget::Track(ObjectId(0)),
+                        Arc::new(BTreeSet::new()),
+                    ))
+                }
+                9 => frame.highlighted_trace = Some((TraceSelection::Track(ObjectId(0)), [1.0; 4])),
+                10 => {
+                    frame.highlighted_object = Some((SelectedObject::Pin(ObjectId(8102)), [1.0; 4]))
+                }
+                11 => {
+                    frame.highlighted_net = Some((NetId(2), [1.0; 4]));
+                    frame.hover_selection =
+                        Some((SelectionTarget::Net(NetId(2)), Arc::new(BTreeSet::new())));
+                }
+                12 => {
+                    frame.hover_selection = None;
+                    frame.highlighted_object = None;
+                    frame.highlighted_related_objects = None;
+                    frame.highlighted_objects = None;
+                    frame.highlighted_trace = None;
+                    frame.hovered_object = None;
+                    frame.highlighted_net = Some((NetId(0), [1.0; 4]));
+                }
+                13 => {
+                    frame.highlighted_net = None;
+                    frame.hover_selection =
+                        Some((SelectionTarget::Net(NetId(2)), Arc::new(BTreeSet::new())));
+                    frame.hovered_object = Some((SelectedObject::Via(ObjectId(8101)), [0.5; 4]));
+                }
+                14 => frame.hovered_object = Some((SelectedObject::Pin(ObjectId(8100)), [0.5; 4])),
+                15 => frame.highlighted_net = Some((NetId(1), [1.0; 4])),
+                16 => {
+                    frame.highlighted_net = None;
+                    frame.hover_selection =
+                        Some((SelectionTarget::Net(NetId(0)), Arc::new(BTreeSet::new())));
+                }
+                17 => {
+                    frame.hover_selection =
+                        Some((SelectionTarget::Net(NetId(9)), Arc::new(BTreeSet::new())))
+                }
+                18 => frame.hovered_object = None,
+                _ => {}
+            }
+            for pass in [
+                OverlayPass::Selection,
+                OverlayPass::Hover,
+                OverlayPass::GroupHover,
+            ] {
+                frame.pass = pass;
+                for repeat in 0..2 {
+                    for filter in 0..3 {
+                        let scope = if filter == 0 {
+                            Visibility::All
+                        } else {
+                            Visibility::Pads {
+                                pin: filter == 1,
+                                show_backdrills: false,
+                            }
+                        };
+                        target.bind(&context);
+                        let reference_draws = pipeline
+                            .draw_scoped(&gpu, &frame, &reference, None, scope)
+                            .unwrap();
+                        let expected = target.read(&context);
+                        target.bind(&context);
+                        let cached_draws = pipeline
+                            .draw_scoped(&gpu, &frame, &cached, None, scope)
+                            .unwrap();
+                        assert_eq!(
+                            target.read(&context),
+                            expected,
+                            "chunk={chunk} state={state} pass={pass:?} repeat={repeat} filter={filter}"
+                        );
+                        if matches!(state, 0 | 13) && pass != OverlayPass::Selection && filter == 0
+                        {
+                            assert!(
+                                cached_draws < reference_draws,
+                                "dense net hover must reduce submissions"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

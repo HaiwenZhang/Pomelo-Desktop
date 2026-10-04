@@ -99,6 +99,84 @@ fn scan(bytes: &[u8]) -> Result<BrdIndex, ImportError> {
 }
 
 #[test]
+fn auto_detects_supported_text_encodings_and_preserves_strings() {
+    for (encoding, text) in [
+        (
+            encoding_rs::UTF_8,
+            "电路板网络名称与元件属性，测试中文文本。",
+        ),
+        (encoding_rs::GBK, "电路板网络名称与元件属性，测试中文文本。"),
+        (
+            encoding_rs::BIG5,
+            "電路板網路名稱與元件屬性，測試繁體中文文字。",
+        ),
+        (
+            encoding_rs::SHIFT_JIS,
+            "プリント基板の部品と配線を確認してください。日本語の文字列です。",
+        ),
+        (
+            encoding_rs::WINDOWS_1252,
+            "Résistance électrique, température élevée, capacité mesurée.",
+        ),
+    ] {
+        let (encoded, _, errors) = encoding.encode(text);
+        assert!(!errors);
+        let mut bytes = board(174, 1);
+        string(&mut bytes, 7, &encoded);
+        // Non-text header bytes must not participate in detection.
+        bytes[0x600..0x610].fill(0xff);
+        let index = scan(&bytes).unwrap();
+        assert_eq!(
+            index.encoding.tag(),
+            encoding.name().to_ascii_lowercase(),
+            "{text}"
+        );
+        assert_eq!(index.strings[&7], text);
+    }
+}
+
+#[test]
+fn auto_resolves_ascii_to_utf8_and_samples_header_and_legacy_inline_text() {
+    assert_eq!(scan(&board(174, 0)).unwrap().encoding.tag(), "utf-8");
+    let text = "電路板網路名稱與元件屬性，測試繁體中文文字。";
+    let (encoded, _, _) = encoding_rs::BIG5.encode(text);
+    let mut bytes = board(152, 0);
+    let mut component = record(7, 152, 1, 64);
+    component[8..8 + encoded.len()].copy_from_slice(&encoded);
+    bytes.extend(component);
+    assert_eq!(scan(&bytes).unwrap().encoding.tag(), "big5");
+    let mut bytes = board(174, 0);
+    bytes[0xf8..0xf8 + encoded.len()].copy_from_slice(&encoded);
+    assert_eq!(scan(&bytes).unwrap().header.writer_version, text);
+}
+
+#[test]
+fn explicit_encoding_overrides_auto_detection_and_keeps_strict_errors() {
+    let mut bytes = board(174, 1);
+    string(&mut bytes, 1, b"caf\xe9");
+    let token = CancellationToken::default();
+    let context = ImportContext {
+        cancellation: &token,
+        progress: &|_| {},
+    };
+    let mut options = ImportOptions {
+        text_encoding: TextEncoding::Utf8,
+        ..ImportOptions::default()
+    };
+    assert!(matches!(
+        BrdIndex::read(&bytes, &options, &IndexLimits::default(), &context),
+        Err(ImportError::InvalidEncoding(_))
+    ));
+    options.text_encoding = TextEncoding::Windows1252;
+    assert_eq!(
+        BrdIndex::read(&bytes, &options, &IndexLimits::default(), &context)
+            .unwrap()
+            .strings[&1],
+        "café"
+    );
+}
+
+#[test]
 fn boundaries_and_unsigned_keys_are_exact_for_all_thirteen_families() {
     for version in [
         152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251,
@@ -187,7 +265,18 @@ fn legacy_inline_strings_validate_encoding_instead_of_being_skipped() {
     component[8] = 0xff;
     bytes.extend(component);
     assert!(matches!(
-        scan(&bytes),
+        BrdIndex::read(
+            &bytes,
+            &ImportOptions {
+                text_encoding: TextEncoding::Utf8,
+                ..ImportOptions::default()
+            },
+            &IndexLimits::default(),
+            &ImportContext {
+                cancellation: &CancellationToken::default(),
+                progress: &|_| {}
+            }
+        ),
         Err(ImportError::InvalidEncoding(4616))
     ));
     let options = ImportOptions {
@@ -367,16 +456,39 @@ fn invalid_blob_size_constraint_end_and_unsupported_metadata_are_typed_errors() 
             ..
         })
     ));
-    let mut bytes = board(165, 0);
-    bytes.extend(record(0x1a, 165, 7, 88));
+    let mut bytes = board(164, 0);
+    bytes.extend(record(0x1a, 164, 7, 88));
     assert!(matches!(
         scan(&bytes),
         Err(ImportError::UnsupportedRecordLayout {
             record_type: 0x1a,
-            version: 165,
+            version: 164,
             ..
         })
     ));
+}
+
+#[test]
+fn v165_and_v166_paired_nets_preserve_following_record_boundaries_and_reject_truncation() {
+    for version in [165, 166] {
+        let mut bytes = board(version, 0);
+        let pair = record(0x1a, version, 7, 88);
+        bytes.extend(&pair);
+        bytes.extend(record(4, version, 8, 24));
+        let index = scan(&bytes).unwrap();
+        assert_eq!(index.records().len(), 2);
+        assert_eq!(index.record(RecordKey(7)).unwrap().byte_length, 88);
+        assert_eq!(
+            index.record(RecordKey(8)).unwrap().offset.0,
+            (START + 88) as u32
+        );
+        for prefix in 1..88 {
+            assert!(
+                scan(&bytes[..START + prefix]).is_err(),
+                "version={version}, prefix={prefix}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -58,6 +58,11 @@ pub fn resolve_version(magic: u32) -> Result<u16, ImportError> {
 impl BrdHeader {
     pub fn read(bytes: &[u8], encoding: TextEncoding) -> Result<Self, ImportError> {
         let mut reader = Reader::new(bytes, encoding);
+        Self::read_with_reader(&mut reader)
+    }
+
+    pub(super) fn read_with_reader(reader: &mut Reader<'_>) -> Result<Self, ImportError> {
+        reader.seek(0)?;
         let magic = reader.u32()?;
         let version = resolve_version(magic)?;
         let (
@@ -75,7 +80,7 @@ impl BrdHeader {
             180 => (0xb4, 0x84, 0x124, 0x18c, 0x28, 0x34, 0x26c, true),
             _ => (0x8c, 0x5c, 0xf8, 0x180, 0x18c, 0x194, 0x26c, false),
         };
-        let object_count = read_u32_at(&mut reader, 0x14)?;
+        let object_count = read_u32_at(reader, 0x14)?;
         let mut sentinel_keys = Vec::new();
         if version >= 180 {
             reader.seek(if version >= 251 { 0x60 } else { 0x3c })?;
@@ -88,15 +93,15 @@ impl BrdHeader {
                 }
             }
         }
-        let text_list = read_list(&mut reader, text_offset, head_first)?;
-        let graphic_list = read_list(&mut reader, graphic_offset, head_first)?;
+        let text_list = read_list(reader, text_offset, head_first)?;
+        let graphic_list = read_list(reader, graphic_offset, head_first)?;
         reader.seek(writer_offset)?;
         let writer_version = reader.fixed_string(60)?;
         reader.seek(units_offset)?;
         let units = reader.u8()?;
-        let constraint_end = read_u32_at(&mut reader, constraint_offset)?;
-        let string_count = read_u32_at(&mut reader, string_offset)?;
-        let divisor = read_u32_at(&mut reader, divisor_offset)?;
+        let constraint_end = read_u32_at(reader, constraint_offset)?;
+        let string_count = read_u32_at(reader, string_offset)?;
+        let divisor = read_u32_at(reader, divisor_offset)?;
         if divisor == 0 {
             return Err(ImportError::InvalidDivisor);
         }

@@ -402,9 +402,16 @@ fn decode_record_probe(
     ) {
         return semantic_probe(bytes, input, source, report, locale, options, mode);
     }
-    let header = BrdHeader::read(&bytes, options.text_encoding)
+    let resolved_encoding = if matches!(options.text_encoding, TextEncoding::Auto) {
+        BrdIndex::read(&bytes, options, &IndexLimits::default(), &context)
+            .map_err(|error| error.diagnostic().with_path(source))?
+            .encoding
+    } else {
+        options.text_encoding
+    };
+    let header = BrdHeader::read(&bytes, resolved_encoding)
         .map_err(|error| error.diagnostic().with_path(source))?;
-    let decoder = RecordDecoder::new(&bytes, &header, options.text_encoding);
+    let decoder = RecordDecoder::new(&bytes, &header, resolved_encoding);
     let limits = DecodeLimits::default();
     let stage = if mode == "decode-fixed" {
         "fixed-records"
@@ -443,7 +450,7 @@ fn decode_record_probe(
         let message = error.as_ref().map(|error| error.message.display(locale));
         serde_json::to_writer(&mut writer, &serde_json::json!({ "schema_version": 1, "stage": stage, "path": source, "version": header.version,
             "offset": span.offset.0, "byte_length": span.byte_length, "key": span.key.0, "record_type": span.record_type, "fields": fields,
-            "error": error, "locale": locale.tag(), "localized_message": message, "encoding": options.text_encoding.tag(), "scene_validated": false }))
+            "error": error, "locale": locale.tag(), "localized_message": message, "encoding": resolved_encoding.tag(), "scene_validated": false }))
             .map_err(serialization_error)?;
         writeln!(writer).map_err(|error| io_error(error, report))?;
     }
@@ -516,7 +523,7 @@ fn scene_probe(
         sha256: format!("{:x}", Sha256::digest(database.source_bytes())),
         bytes: database.source_bytes().len(),
         version: database.header().version,
-        encoding: options.text_encoding.tag(),
+        encoding: database.encoding().tag(),
         source_records: database.index().records().len(),
         source_strings: database.index().strings.len(),
         scene_validated: false,
@@ -684,7 +691,7 @@ fn annotation_probe(
         sha256: format!("{:x}", Sha256::digest(database.source_bytes())),
         bytes: database.source_bytes().len(),
         version: database.header().version,
-        encoding: options.text_encoding.tag(),
+        encoding: database.encoding().tag(),
         source_records: database.index().records().len(),
         source_strings: database.index().strings.len(),
         scene_validated: false,
@@ -775,7 +782,7 @@ fn connectivity_probe(
         sha256: format!("{:x}", Sha256::digest(database.source_bytes())),
         bytes: database.source_bytes().len(),
         version: database.header().version,
-        encoding: options.text_encoding.tag(),
+        encoding: database.encoding().tag(),
         source_records: database.index().records().len(),
         source_strings: database.index().strings.len(),
         scene_validated: false,
@@ -897,7 +904,7 @@ fn semantic_probe(
     let mut writer = BufWriter::new(File::create(report).map_err(|error| io_error(error, report))?);
     serde_json::to_writer(&mut writer, &serde_json::json!({ "schema_version": 1, "stage": stage, "kind": "metadata", "path": source,
         "sha256": request.sha256, "bytes": request.source_size, "scale": decoder.scale(), "layers": layers,
-        "version": database.header().version, "encoding": options.text_encoding.tag(), "scene_validated": false })).map_err(serialization_error)?;
+        "version": database.header().version, "encoding": database.encoding().tag(), "scene_validated": false })).map_err(serialization_error)?;
     writeln!(writer).map_err(|error| io_error(error, report))?;
     let mut failed = 0_u32;
     for span in &request.spans {
@@ -1000,7 +1007,7 @@ fn semantic_probe(
         let message = error.as_ref().map(|error| error.message.display(locale));
         serde_json::to_writer(&mut writer, &serde_json::json!({ "schema_version": 1, "stage": stage, "kind": "record", "path": source,
             "key": span.key, "offset": span.offset, "byte_length": span.byte_length, "record_type": span.record_type,
-            (stage): geometry, "error": error, "locale": locale.tag(), "localized_message": message, "encoding": options.text_encoding.tag(), "scene_validated": false })).map_err(serialization_error)?;
+            (stage): geometry, "error": error, "locale": locale.tag(), "localized_message": message, "encoding": database.encoding().tag(), "scene_validated": false })).map_err(serialization_error)?;
         writeln!(writer).map_err(|error| io_error(error, report))?;
     }
     if matches!(stage, "padstack" | "placement" | "routing" | "copper") {
@@ -1234,6 +1241,7 @@ fn inspect_file(
         result.sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
         let index = BrdIndex::read(&bytes, options, &IndexLimits::default(), &context)
             .map_err(|error| error.diagnostic())?;
+        result.encoding = index.encoding.tag();
         result.index = Some(index.summary());
         if let Some(directory) = index_data_dir {
             let mut filename = path.file_name().ok_or_else(usage)?.to_os_string();

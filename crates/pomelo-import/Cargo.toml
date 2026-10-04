@@ -13,6 +13,7 @@ thiserror.workspace = true
 encoding_rs.workspace = true
 sha2.workspace = true
 anyhow.workspace = true
+chardetng = "=0.1.17"
 
 [lints]
 workspace = true

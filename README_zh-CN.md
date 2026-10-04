@@ -55,7 +55,7 @@ cargo run -p pomelo --locked
 cargo run -p pomelo --locked -- --locale zh-CN --encoding windows-1252 "C:\boards\example.brd"
 ```
 
-`--locale` 支持 `en`、`zh-CN`、`zh-TW`、`ja`、`ko`，仅对本次启动生效，不覆盖已保存的语言偏好。`--encoding` 支持 `utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252`，默认严格 UTF-8；所选编码作用于本次进程打开的文件。界面语言与源文件编码相互独立。`--` 后的参数全部作为文件路径。
+`--locale` 支持 `en`、`zh-CN`、`zh-TW`、`ja`、`ko`，仅对本次启动生效，不覆盖已保存的语言偏好。`--encoding` 支持 `auto`、`utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252`，默认 `auto`，先根据 BRD 文本字段识别 UTF-8、GBK、Shift JIS、Big5 或 Windows-1252，再严格解码；短文本或歧义文本可能误判，可显式指定编码覆盖；所选编码作用于本次进程打开的文件。界面语言与源文件编码相互独立。`--` 后的参数全部作为文件路径。
 
 ## 快捷操作
 

@@ -336,6 +336,53 @@ fn opaque_constraint_extent_consumes_no_allocation_budget_but_stays_inside_its_s
 }
 
 #[test]
+fn legacy_paired_net_members_preserve_unsigned_keys_and_all_metadata_words() {
+    for version in [165, 166] {
+        let (mut bytes, span) = fixture(version, 0x1a, 88);
+        bytes[START + 1] = 0xa5;
+        put16(&mut bytes, START + 2, 0x1234);
+        for word in 0..20 {
+            put32(&mut bytes, START + 8 + word * 4, 0x8000_0000 + word as u32);
+        }
+        let VariableRecord::PairedNets(record) = variable(&bytes, &span) else {
+            panic!("expected paired nets")
+        };
+        assert_eq!(record.r#type, 0xa5);
+        assert_eq!(record.t2, 0x1234);
+        assert_eq!(record.key, RecordKey(u32::MAX));
+        assert!(record.unknown.is_none());
+        for (i, member) in record.members.iter().enumerate() {
+            let first = 0x8000_0000 + i as u32 * 10;
+            assert_eq!(member.net, first);
+            assert_eq!(member.next, first + 1);
+            assert_eq!(member.metadata, (first + 2..first + 10).collect::<Vec<_>>());
+        }
+        for length in 1..88 {
+            let short_span = RecordSpan {
+                byte_length: length,
+                ..span
+            };
+            assert!(
+                decode(&bytes, &short_span, &DecodeLimits::default()).is_err(),
+                "version={version}, length={length}"
+            );
+        }
+        bytes.extend_from_slice(&[0; 4]);
+        let long_span = RecordSpan {
+            byte_length: 92,
+            ..span
+        };
+        assert!(matches!(
+            decode(&bytes, &long_span, &DecodeLimits::default()),
+            Err(ImportError::InvalidRecord {
+                field: "RECORD_BOUNDARY",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn every_variable_layout_obeys_version_specific_empty_boundaries() {
     for version in VERSIONS {
         for kind in [
@@ -420,7 +467,7 @@ fn every_variable_layout_obeys_version_specific_empty_boundaries() {
                 _ => {}
             }
             let result = decode(&bytes, &span, &DecodeLimits::default());
-            if kind == 0x1a && ![152, 157, 172, 174, 251].contains(&version) {
+            if kind == 0x1a && ![152, 157, 165, 166, 172, 174, 251].contains(&version) {
                 assert!(matches!(
                     result,
                     Err(ImportError::UnsupportedRecordLayout { .. })

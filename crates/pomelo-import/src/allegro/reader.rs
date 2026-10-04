@@ -1,12 +1,54 @@
 //! Allegro numeric byte order and absolute four-byte string alignment.
 
 use crate::{ImportContext, ImportError, TextEncoding};
+use std::cell::RefCell;
+
+/// Only text fields enter the detector; never feed record keys, padding or model payloads.
+struct TextSample {
+    detector: chardetng::EncodingDetector,
+    utf8: bool,
+    remaining: usize,
+}
+
+impl TextSample {
+    fn new() -> Self {
+        Self {
+            detector: chardetng::EncodingDetector::new(),
+            utf8: true,
+            remaining: 1024 * 1024,
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        self.utf8 &= std::str::from_utf8(bytes).is_ok();
+        if !bytes.is_ascii() && self.remaining > 0 {
+            let count = bytes.len().min(self.remaining).min(64 * 1024);
+            self.detector.feed(&bytes[..count], false);
+            // Text fields are independent strings, rather than pieces of one multibyte character.
+            self.detector.feed(b" ", false);
+            self.remaining -= count;
+        }
+    }
+
+    fn encoding(&self) -> TextEncoding {
+        if self.utf8 {
+            return TextEncoding::Utf8;
+        }
+        match self.detector.guess(None, false) {
+            encoding if encoding == encoding_rs::GBK => TextEncoding::Gbk,
+            encoding if encoding == encoding_rs::BIG5 => TextEncoding::Big5,
+            encoding if encoding == encoding_rs::SHIFT_JIS => TextEncoding::ShiftJis,
+            _ => TextEncoding::Windows1252,
+        }
+    }
+}
 
 pub struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
     encoding: TextEncoding,
     packed_flags: Option<(usize, u16)>,
+    sample: Option<RefCell<TextSample>>,
 }
 
 impl<'a> Reader<'a> {
@@ -16,7 +58,20 @@ impl<'a> Reader<'a> {
             offset: 0,
             encoding,
             packed_flags: None,
+            sample: None,
         }
+    }
+
+    pub(super) fn detecting(bytes: &'a [u8]) -> Self {
+        let mut reader = Self::new(bytes, TextEncoding::Windows1252);
+        reader.sample = Some(RefCell::new(TextSample::new()));
+        reader
+    }
+
+    pub(super) fn detected_encoding(&self) -> TextEncoding {
+        self.sample
+            .as_ref()
+            .map_or(self.encoding, |sample| sample.borrow().encoding())
     }
 
     pub fn offset(&self) -> usize {
@@ -219,14 +274,26 @@ impl<'a> Reader<'a> {
     }
 
     fn decode(&self, bytes: &[u8], offset: usize) -> Result<String, ImportError> {
+        if let Some(sample) = &self.sample {
+            sample.borrow_mut().feed(bytes);
+        }
+        let selected = if matches!(self.encoding, TextEncoding::Auto) {
+            // Header-only probes have no board-wide sample. Full imports resolve Auto in BrdIndex.
+            let mut sample = TextSample::new();
+            sample.feed(bytes);
+            sample.encoding()
+        } else {
+            self.encoding
+        };
         // Match TextDecoder's default UTF-8 BOM handling in the frozen Web reader.
         // Keep the original source offset for diagnostics and other code pages unchanged.
-        let bytes = if matches!(self.encoding, TextEncoding::Utf8) {
+        let bytes = if matches!(selected, TextEncoding::Utf8) {
             bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes)
         } else {
             bytes
         };
-        let encoding = match self.encoding {
+        let encoding = match selected {
+            TextEncoding::Auto => encoding_rs::UTF_8,
             TextEncoding::Utf8 => encoding_rs::UTF_8,
             TextEncoding::Gbk => encoding_rs::GBK,
             TextEncoding::ShiftJis => encoding_rs::SHIFT_JIS,

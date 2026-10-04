@@ -392,6 +392,7 @@ impl ImportError {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub enum TextEncoding {
     #[default]
+    Auto,
     Utf8,
     Gbk,
     ShiftJis,
@@ -402,6 +403,7 @@ pub enum TextEncoding {
 impl TextEncoding {
     pub const fn tag(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Utf8 => "utf-8",
             Self::Gbk => "gbk",
             Self::ShiftJis => "shift_jis",
@@ -411,6 +413,7 @@ impl TextEncoding {
     }
     pub fn from_tag(tag: &str) -> Option<Self> {
         match tag {
+            "auto" => Some(Self::Auto),
             "utf-8" => Some(Self::Utf8),
             "gbk" => Some(Self::Gbk),
             "shift_jis" => Some(Self::ShiftJis),
@@ -430,7 +433,7 @@ pub struct ImportOptions {
 impl Default for ImportOptions {
     fn default() -> Self {
         Self {
-            text_encoding: TextEncoding::Utf8,
+            text_encoding: TextEncoding::Auto,
             max_file_bytes: 1024 * 1024 * 1024,
         }
     }

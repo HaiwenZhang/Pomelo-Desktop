@@ -455,7 +455,7 @@ mod tests {
         assert!(first.set_retry_encoding(pomelo_import::TextEncoding::Big5));
         first.retry().unwrap();
         assert_eq!(first.import_options.text_encoding.tag(), "big5");
-        assert_eq!(second.import_options.text_encoding.tag(), "utf-8");
+        assert_eq!(second.import_options.text_encoding.tag(), "auto");
         assert_eq!(second.request.generation, 1);
         assert!(matches!(second.status, DocumentStatus::Queued));
     }

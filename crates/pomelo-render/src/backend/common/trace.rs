@@ -3,12 +3,14 @@ pub use super::super::instances::InstanceSource;
 use super::super::{TraceFrame, board};
 use super::Rect;
 use super::driver::{Buffer, Draw, Pipeline as GpuPipeline, StencilMode};
+use super::pad_overlay::OverlayKey;
+use super::pad_visibility::Accepted;
 use super::{Device, NativeGpuContext};
 use crate::split_position;
 use crate::tracks::PreparedTracks;
 use anyhow::{Context as _, ensure};
 use pomelo_core::interaction::Camera;
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 pub(crate) const CHUNK_INSTANCES: usize = 16384;
 pub(crate) const CHUNKS_PER_FRAME: usize = 2;
 const SPATIAL_CHUNK_INSTANCES: usize = 4096;
@@ -29,6 +31,9 @@ pub(crate) struct UploadedTracks<S: InstanceSource = PreparedTracks> {
     uploaded: usize,
     lifetime_bytes: u64,
     spatial: Option<crate::scene::residency::ResidencyCache<Buffer>>,
+    overlays: RefCell<[Option<(OverlayKey, Accepted)>; 2]>,
+    #[cfg(test)]
+    pub legacy_overlays: bool,
 }
 impl<S: InstanceSource> UploadedTracks<S> {
     pub fn new(source: Arc<S>) -> anyhow::Result<Self> {
@@ -50,6 +55,9 @@ impl<S: InstanceSource> UploadedTracks<S> {
             uploaded: 0,
             lifetime_bytes: 0,
             spatial: None,
+            overlays: RefCell::new([None, None]),
+            #[cfg(test)]
+            legacy_overlays: false,
         })
     }
     pub fn enable_residency(&mut self, soft_bytes: usize) -> anyhow::Result<()> {
@@ -175,6 +183,37 @@ impl<S: InstanceSource> UploadedTracks<S> {
             self.uploaded += count;
         }
         Ok(bytes)
+    }
+    fn overlay<T: InstanceSource>(
+        &self,
+        frame: &TraceFrame<T>,
+        key: &OverlayKey,
+        range: std::ops::Range<usize>,
+        emit: impl FnMut(std::ops::Range<usize>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let slot = usize::from(frame.pass != board::OverlayPass::Selection);
+        let mut entries = self.overlays.borrow_mut();
+        if entries[slot]
+            .as_ref()
+            .is_none_or(|(cached, _)| cached != key)
+        {
+            let accepted = Accepted::build((0..self.source.instances().len()).map(|index| {
+                let ids = self.source.selection_ids(index);
+                frame
+                    .object_highlight(
+                        self.source.selected_object(index),
+                        pomelo_core::model::NetId(ids[3]),
+                        Some(pomelo_core::model::ObjectId(ids[1])),
+                    )
+                    .is_some()
+            }))?;
+            entries[slot] = Some((key.clone(), accepted));
+        }
+        entries[slot]
+            .as_ref()
+            .context("GPU_TRACE_OVERLAY_MISSING")?
+            .1
+            .visible(range, emit)
     }
 }
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -323,6 +362,12 @@ impl Pipeline {
             highlight,
         };
         let mut draws = 0;
+        #[cfg(not(test))]
+        let legacy = false;
+        #[cfg(test)]
+        let legacy = cache.legacy_overlays;
+        let overlay_key =
+            (!legacy && frame.pass != board::OverlayPass::Base).then(|| OverlayKey::new(frame));
         for batch in cache.source.batches() {
             let selected = match scope {
                 board::TraceScope::All => true,
@@ -334,6 +379,9 @@ impl Pipeline {
                 board::TraceScope::Pads(layer, _) => batch.layer == layer,
             };
             if !selected {
+                continue;
+            }
+            if batch.outline && overlay_key.is_some() {
                 continue;
             }
             uniforms.color = if batch.outline {
@@ -350,95 +398,129 @@ impl Pipeline {
                 if start >= end {
                     continue;
                 }
-                let mut cursor = start;
-                while cursor < end {
-                    let span_start = cursor;
-                    let accepted = |index: usize| match scope {
-                        board::TraceScope::Pads(_, pin) => {
-                            matches!(
+                let mut draw_range = |range: std::ops::Range<usize>| -> anyhow::Result<()> {
+                    let mut cursor = range.start;
+                    let end = range.end;
+                    while cursor < end {
+                        let span_start = cursor;
+                        let accepted = |index: usize| match scope {
+                            board::TraceScope::Pads(_, pin) => {
+                                matches!(
+                                    cache.source.selected_object(index),
+                                    pomelo_core::selection::SelectedObject::Pin(_)
+                                ) == pin
+                            }
+                            board::TraceScope::Labels(_, category, owner) => {
+                                cache.source.label_category(index) == category as u32
+                                    && owner.is_none_or(|id| {
+                                        cache.source.selection_ids(index)[0] == id.0
+                                    })
+                            }
+                            _ => true,
+                        };
+                        let accept = accepted(cursor);
+                        let page = cache.source.atlas_page(cursor);
+                        let selected = |index: usize| {
+                            if batch.outline {
+                                return None;
+                            }
+                            frame.object_highlight(
                                 cache.source.selected_object(index),
-                                pomelo_core::selection::SelectedObject::Pin(_)
-                            ) == pin
-                        }
-                        board::TraceScope::Labels(_, category, owner) => {
-                            cache.source.label_category(index) == category as u32
-                                && owner
-                                    .is_none_or(|id| cache.source.selection_ids(index)[0] == id.0)
-                        }
-                        _ => true,
-                    };
-                    let accept = accepted(cursor);
-                    let page = cache.source.atlas_page(cursor);
-                    let selected = |index: usize| {
-                        if batch.outline {
-                            return None;
-                        }
-                        frame.object_highlight(
-                            cache.source.selected_object(index),
-                            pomelo_core::model::NetId(cache.source.selection_ids(index)[3]),
-                            Some(pomelo_core::model::ObjectId(
-                                cache.source.selection_ids(index)[1],
-                            )),
-                        )
-                    };
-                    let color = selected(cursor);
-                    cursor += 1;
-                    if frame.pass == board::OverlayPass::Base
-                        && !S::MSDF
-                        && !matches!(scope, board::TraceScope::Pads(_, _))
-                        && frame.highlighted_related_objects.is_none()
-                        && frame.highlighted_object.is_none()
-                        && frame.hovered_object.is_none()
-                    {
-                        cursor = end;
-                    } else {
-                        while cursor < end
-                            && selected(cursor) == color
-                            && accepted(cursor) == accept
-                            && cache.source.atlas_page(cursor) == page
+                                pomelo_core::model::NetId(cache.source.selection_ids(index)[3]),
+                                Some(pomelo_core::model::ObjectId(
+                                    cache.source.selection_ids(index)[1],
+                                )),
+                            )
+                        };
+                        let color = if overlay_key.is_some() {
+                            Some(if frame.pass == board::OverlayPass::Selection {
+                                [1.0, 1.0, 1.0, 0.9]
+                            } else {
+                                [0.63, 1.0, 0.85, 0.9]
+                            })
+                        } else {
+                            selected(cursor)
+                        };
+                        cursor += 1;
+                        if (overlay_key.is_some()
+                            && !S::MSDF
+                            && !matches!(
+                                scope,
+                                board::TraceScope::Pads(_, _) | board::TraceScope::Labels(_, _, _)
+                            ))
+                            || (frame.pass == board::OverlayPass::Base
+                                && !S::MSDF
+                                && !matches!(scope, board::TraceScope::Pads(_, _))
+                                && frame.highlighted_related_objects.is_none()
+                                && frame.highlighted_object.is_none()
+                                && frame.hovered_object.is_none())
                         {
-                            cursor += 1;
+                            cursor = end;
+                        } else {
+                            while cursor < end
+                                && (overlay_key.is_some() || selected(cursor) == color)
+                                && accepted(cursor) == accept
+                                && cache.source.atlas_page(cursor) == page
+                            {
+                                cursor += 1;
+                            }
                         }
+                        if !accept {
+                            continue;
+                        }
+                        if frame.pass != board::OverlayPass::Base && color.is_none() {
+                            continue;
+                        }
+                        uniforms.color = color.unwrap_or(base_color);
+                        // Copper boundaries stay white for selection and hover alike.
+                        uniforms.view[3] = if color.is_some()
+                            && matches!(
+                                cache.source.selected_object(span_start),
+                                pomelo_core::selection::SelectedObject::Zone(_)
+                            ) {
+                            board::OverlayPass::Selection as u8 as f32
+                        } else {
+                            frame.pass as u8 as f32
+                        };
+                        // Network colors are computed per instance; object overrides still win.
+                        uniforms.view[2] = if S::MSDF {
+                            frame.opacity
+                        } else {
+                            f32::from(u8::from(
+                                frame.color_mode == pomelo_core::display::ColorMode::Net
+                                    && !batch.outline
+                                    && !S::COMPACT_TEXT
+                                    && color.is_none(),
+                            ))
+                        };
+                        uniforms.batch[2] = if color.is_some() { 0 } else { selection_kind };
+                        uniforms.batch[0] = (span_start - chunk.start) as u32;
+                        context.device.draw(
+                            &self.pipeline,
+                            Draw {
+                                uniforms: bytemuck::bytes_of(&uniforms),
+                                vertices: chunk.buffer,
+                                indices: None,
+                                start: 0,
+                                count: 4,
+                                instances: (cursor - span_start) as u32,
+                                rect,
+                                stencil: StencilMode::Inherited,
+                                atlas: self
+                                    .atlas
+                                    .as_ref()
+                                    .map(|atlas| atlas.get(&page).context("GPU_MSDF_PAGE_MISSING"))
+                                    .transpose()?,
+                            },
+                        )?;
+                        draws += 1;
                     }
-                    if !accept {
-                        continue;
-                    }
-                    if frame.pass != board::OverlayPass::Base && color.is_none() {
-                        continue;
-                    }
-                    uniforms.color = color.unwrap_or(base_color);
-                    // Network colors are computed per instance; object overrides still win.
-                    uniforms.view[2] = if S::MSDF {
-                        frame.opacity
-                    } else {
-                        f32::from(u8::from(
-                            frame.color_mode == pomelo_core::display::ColorMode::Net
-                                && !batch.outline
-                                && !S::COMPACT_TEXT
-                                && color.is_none(),
-                        ))
-                    };
-                    uniforms.batch[2] = if color.is_some() { 0 } else { selection_kind };
-                    uniforms.batch[0] = (span_start - chunk.start) as u32;
-                    context.device.draw(
-                        &self.pipeline,
-                        Draw {
-                            uniforms: bytemuck::bytes_of(&uniforms),
-                            vertices: chunk.buffer,
-                            indices: None,
-                            start: 0,
-                            count: 4,
-                            instances: (cursor - span_start) as u32,
-                            rect,
-                            stencil: StencilMode::Inherited,
-                            atlas: self
-                                .atlas
-                                .as_ref()
-                                .map(|atlas| atlas.get(&page).context("GPU_MSDF_PAGE_MISSING"))
-                                .transpose()?,
-                        },
-                    )?;
-                    draws += 1;
+                    Ok(())
+                };
+                if let Some(key) = overlay_key.as_ref() {
+                    cache.overlay(frame, key, start..end, draw_range)?;
+                } else {
+                    draw_range(start..end)?;
                 }
             }
         }

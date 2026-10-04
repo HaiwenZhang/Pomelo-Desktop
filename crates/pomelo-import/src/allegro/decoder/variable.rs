@@ -42,7 +42,7 @@ pub struct PairedNetMember {
     pub next: u32,
     pub metadata: Vec<u32>,
 }
-/// 0x1a. Member words remain opaque; layout support follows the frozen Web baseline.
+/// 0x1a. Member words remain opaque; V165/V166 retain the 88-byte legacy layout.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PairedNets {
@@ -495,7 +495,7 @@ impl State<'_, '_, '_, '_> {
     }
 
     fn paired_nets(&mut self) -> Result<PairedNets, ImportError> {
-        if ![152, 157, 172, 174, 251].contains(&self.version) {
+        if ![152, 157, 165, 166, 172, 174, 251].contains(&self.version) {
             return Err(ImportError::UnsupportedRecordLayout {
                 record_type: 0x1a,
                 version: self.version,

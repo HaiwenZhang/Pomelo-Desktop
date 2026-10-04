@@ -115,9 +115,9 @@ fn hardware_real_board_frame_profile() {
     }
     assert!(renderer.geometry_is_uploaded(&frame));
     let _ = target.read(&context);
-    for mode in ["fit", "local", "pan", "net"] {
+    for mode in ["fit", "local", "pan", "net", "hover_fit", "hover_local"] {
         let mut view = camera;
-        if mode != "fit" {
+        if !matches!(mode, "fit" | "hover_fit") {
             view.pixels_per_mm *= 16.0;
         }
         if mode == "pan" {
@@ -128,6 +128,14 @@ fn hardware_real_board_frame_profile() {
             (
                 scene.vias.first().map_or(NetId(1), |via| via.net),
                 [1.0, 1.0, 1.0, 0.9],
+            )
+        });
+        frame.traces.hover_selection = mode.starts_with("hover").then(|| {
+            (
+                pomelo_core::selection::SelectionTarget::Net(
+                    scene.vias.first().map_or(NetId(1), |via| via.net),
+                ),
+                Arc::new(Default::default()),
             )
         });
         for trial in 0..7 {

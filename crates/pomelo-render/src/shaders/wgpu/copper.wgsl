@@ -10,6 +10,10 @@ fn stipple(sample: vec2f) -> f32 {
 }
 @fragment fn fragment_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
  if clipped(position.xy) {discard;}
+ if u.view.w > 0.5 && u.view.z > 5.5 {
+ let screen = (position.xy - u.canvas.xy) / u.viewport.z; let cell = screen - floor(screen / 12.0) * 12.0 - vec2f(6.0);
+ return vec4f(1.0, 1.0, 1.0, (1.0 - smoothstep(0.65, 1.25, length(cell))) * 0.9);
+ }
  if u.view.w > 1.5 {return vec4f(0.63, 1.0, 0.85, 0.18);}
  if u.view.w > 0.5 && u.view.z > 3.5 {
  let dynamic = u.view.z > 4.5; let sample = (position.xy - u.canvas.xy) / select(u.viewport.z, 1.0, dynamic); let ink = stipple(sample);

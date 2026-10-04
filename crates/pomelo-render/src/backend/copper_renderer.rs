@@ -76,7 +76,6 @@ pub struct CopperRenderer {
     curves: BTreeMap<pomelo_core::model::ObjectId, UploadedCopper>,
     telemetry: Arc<CopperTelemetry>,
     static_shapes_fill_solid: bool,
-    network_selection: Option<pomelo_core::model::NetId>,
 }
 impl CopperRenderer {
     fn is_uploaded(&self, source: &Arc<PreparedCopper>) -> bool {
@@ -92,7 +91,6 @@ impl CopperRenderer {
             telemetry,
             // Standalone geometry callers and custom pad meshes retain solid fill.
             static_shapes_fill_solid: true,
-            network_selection: None,
         }
     }
 
@@ -289,7 +287,6 @@ impl CopperRenderer {
                     annotation_owners: None,
                     overrides: Some(&self.curves),
                     static_shapes_fill_solid: self.static_shapes_fill_solid,
-                    network_selection: self.network_selection,
                 },
             )?;
         self.telemetry
@@ -342,7 +339,6 @@ impl CopperRenderer {
                     annotation_owners,
                     overrides: Some(&self.curves),
                     static_shapes_fill_solid: self.static_shapes_fill_solid,
-                    network_selection: self.network_selection,
                 },
             )?;
         self.telemetry
@@ -479,13 +475,6 @@ impl NativeGpuRenderer for BoardRenderer {
         let timing = crate::frame_timing::begin();
         let mut category_us = [[0u64; 10]; 3];
         self.copper.static_shapes_fill_solid = frame.display.static_shapes_fill_solid;
-        // Keep selection identity separate from base material colors. Standalone
-        // copper tinting and unknown zone styling retain their existing contract.
-        self.copper.network_selection = frame
-            .traces
-            .highlighted_net
-            .filter(|(net, _)| net.0 != 0)
-            .map(|(net, _)| net);
         // Defer copper uploads until this exact trace source is uploaded. Combined application
         // upload traffic remains <= 4 MiB/frame, including scene revisions and device recovery.
         let allow_copper_upload = self.traces.is_uploaded(&frame.traces.tracks);
@@ -785,8 +774,7 @@ impl NativeGpuRenderer for BoardRenderer {
                     Category::Zone
                         if copper_ready
                             && frame.display.show_copper
-                            && (frame.copper_opacity > 0.0 || pass == OverlayPass::Selection)
-                            && pass != OverlayPass::Hover =>
+                            && (frame.copper_opacity > 0.0 || pass != OverlayPass::Base) =>
                     {
                         if pass == OverlayPass::Base
                             && let Some(label) = &label_frame

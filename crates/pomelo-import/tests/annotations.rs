@@ -20,6 +20,58 @@ use pomelo_import::{
 };
 
 #[test]
+fn automatic_import_decodes_board_text_and_records_resolved_source_encoding() {
+    let value = "电路板网络名称与元件属性，测试中文文本。";
+    let (encoded, _, errors) = encoding_rs::GBK.encode(value);
+    assert!(!errors);
+    let n = encoded.len() + 1;
+    let mut content = record(0x31, 20, 28 + n.next_multiple_of(4));
+    content[22..24].copy_from_slice(&(n as u16).to_le_bytes());
+    content[28..28 + encoded.len()].copy_from_slice(&encoded);
+    let database = db(
+        vec![
+            track(2, 3),
+            edge(3, 2),
+            font(1, 1000, 500),
+            wrapper(10, 999, 0xf901, 20, 1),
+            content,
+        ],
+        10,
+        0,
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("自动编码.brd");
+    std::fs::write(&path, database.source_bytes()).unwrap();
+    let board = pomelo_import::allegro::AllegroImporter
+        .import(
+            &path,
+            &ImportOptions::default(),
+            &context(&CancellationToken::default()),
+        )
+        .unwrap();
+    assert_eq!(board.identity.encoding, "gbk");
+    assert_eq!(board.scene.texts[0].text, value);
+
+    let report = dir.path().join("scene.jsonl");
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_pcb_inspect"))
+        .args(["--encoding", "auto", "decode-scene"])
+        .arg(&path)
+        .arg("--report")
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let journal = std::fs::read_to_string(&report).unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+    assert_eq!(metadata["encoding"], "gbk");
+}
+
+#[test]
 fn importer_reads_real_file_to_shared_scene_and_attaches_source_paths_to_warnings() {
     let db = db(
         vec![

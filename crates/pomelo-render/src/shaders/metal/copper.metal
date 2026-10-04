@@ -174,6 +174,11 @@ metal::float4 fragment_color(
     if (_e2) {
         metal::discard_fragment();
     }
+    if (u.view.w > 0.5 && u.view.z > 5.5) {
+        metal::float2 screen = (position_3.xy - u.canvas.xy) / u.viewport.z;
+        metal::float2 cell = screen - metal::floor(screen / 12.0) * 12.0 - metal::float2(6.0);
+        return metal::float4(1.0, 1.0, 1.0, (1.0 - metal::smoothstep(0.65, 1.25, metal::length(cell))) * 0.9);
+    }
     float _e6 = u.view.w;
     if (_e6 > 1.5) {
         return metal::float4(0.63, 1.0, 0.85, 0.18);

@@ -30,6 +30,11 @@ float4 clear_vertex(uint id : SV_VertexID) : SV_Position {
 float4 fragment_color(float4 position) {
     clip(position.xy - clip_bounds.xy);
     clip(clip_bounds.xy + clip_bounds.zw - position.xy);
+    if (view.w > 0.5 && view.z > 5.5) {
+        float2 screen = (position.xy - canvas.xy) / viewport.z;
+        float2 cell = screen - floor(screen / 12.0) * 12.0 - 6.0;
+        return float4(1,1,1,(1.0 - smoothstep(0.65,1.25,length(cell))) * 0.9);
+    }
     if (view.w > 1.5) return float4(0.63,1,0.85,0.18);
     if (view.w > 0.5 && view.z > 3.5) {
         bool dynamic = view.z > 4.5;

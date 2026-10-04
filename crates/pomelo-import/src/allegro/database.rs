@@ -64,10 +64,11 @@ impl BrdDatabase {
         context: &ImportContext<'_>,
     ) -> Result<Self, ImportError> {
         let index = BrdIndex::read(&bytes, options, index_limits, context)?;
+        let encoding = index.encoding;
         Ok(Self {
             bytes,
             index,
-            encoding: options.text_encoding,
+            encoding,
             decode_limits,
         })
     }
@@ -85,6 +86,9 @@ impl BrdDatabase {
 
     pub fn header(&self) -> &BrdHeader {
         &self.index.header
+    }
+    pub fn encoding(&self) -> TextEncoding {
+        self.encoding
     }
     pub fn index(&self) -> &BrdIndex {
         &self.index

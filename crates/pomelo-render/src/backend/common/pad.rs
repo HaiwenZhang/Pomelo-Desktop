@@ -2,6 +2,8 @@
 use super::super::{TraceFrame, board};
 use super::Rect;
 use super::driver::{Buffer, Draw, Pipeline as GpuPipeline, StencilMode};
+use super::pad_index::PadIndex;
+use super::pad_overlay::OverlayKey;
 use super::pad_ranges::PadRanges;
 use super::pad_visibility::Accepted;
 use super::trace::{CHUNK_INSTANCES, CHUNKS_PER_FRAME};
@@ -9,11 +11,9 @@ use super::{Device, NativeGpuContext};
 use crate::pads::{PadInstance, PreparedPads};
 use crate::split_position;
 use anyhow::ensure;
+use pomelo_core::selection::{SelectedObject, SelectionTarget};
 use pomelo_core::{interaction::Camera, model::LayerId};
-use std::{
-    cell::{Cell, RefCell},
-    sync::Arc,
-};
+use std::{cell::RefCell, sync::Arc};
 #[derive(Clone, Copy)]
 pub(crate) enum Visibility<'a> {
     All,
@@ -64,17 +64,46 @@ struct SelectedNetSummary {
     net: u32,
     count: usize,
     runs: usize,
+    extra_hover: bool,
 }
 struct Chunk {
     start: usize,
     count: usize,
     buffer: Buffer,
     ranges: PadRanges,
-    selected_net: Cell<Option<SelectedNetSummary>>,
+    index: PadIndex,
     pad_visibility: RefCell<[Option<Accepted>; 4]>,
     drill_visibility: RefCell<Option<DrillVisibility>>,
+    overlay_visibility: RefCell<[Option<(OverlayKey, Accepted)>; 2]>,
 }
 impl Chunk {
+    fn overlay(
+        &self,
+        source: &PreparedPads,
+        frame: &TraceFrame,
+        key: &OverlayKey,
+        range: std::ops::Range<usize>,
+        emit: impl FnMut(std::ops::Range<usize>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let slot = usize::from(frame.pass != board::OverlayPass::Selection);
+        let mut entries = self.overlay_visibility.borrow_mut();
+        if entries[slot]
+            .as_ref()
+            .is_none_or(|(cached, _)| cached != key)
+        {
+            let accepted = Accepted::build(
+                source.analytic[self.start..self.start + self.count]
+                    .iter()
+                    .map(|instance| highlight(frame, instance).is_some()),
+            )?;
+            entries[slot] = Some((key.clone(), accepted));
+        }
+        entries[slot]
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("GPU_PAD_OVERLAY_MISSING"))?
+            .1
+            .visible(range, emit)
+    }
     fn visible(
         &self,
         source: &PreparedPads,
@@ -146,22 +175,18 @@ impl Chunk {
         }
         Ok(())
     }
-    fn selected_net_summary(&self, source: &[PadInstance], net: u32) -> SelectedNetSummary {
-        if let Some(summary) = self.selected_net.get().filter(|summary| summary.net == net) {
-            return summary;
+    fn selected_net_summary(
+        &self,
+        net: u32,
+        hovered: Option<SelectedObject>,
+    ) -> SelectedNetSummary {
+        let (count, runs) = self.index.summary(net);
+        SelectedNetSummary {
+            net,
+            count,
+            runs,
+            extra_hover: self.index.extra_hover(net, hovered),
         }
-        let mut count = 0;
-        let mut runs = 0;
-        let mut previous = false;
-        for instance in &source[self.start..self.start + self.count] {
-            let selected = instance.ids[2] == net;
-            count += usize::from(selected);
-            runs += usize::from(selected && !previous);
-            previous = selected;
-        }
-        let summary = SelectedNetSummary { net, count, runs };
-        self.selected_net.set(Some(summary));
-        summary
     }
 }
 pub(crate) struct UploadedPads {
@@ -251,9 +276,10 @@ impl UploadedPads {
                 count,
                 buffer,
                 ranges,
-                selected_net: Cell::new(None),
+                index: PadIndex::build(&self.source.analytic[start..start + count])?,
                 pad_visibility: RefCell::new([None, None, None, None]),
                 drill_visibility: RefCell::new(None),
+                overlay_visibility: RefCell::new([None, None]),
             });
             self.uploaded += count;
         }
@@ -417,7 +443,9 @@ impl Pipeline {
                 .as_ref()
                 .is_none_or(|(objects, _)| objects.is_empty())
             && frame.hovered_object.is_none();
-        let selected_net = frame.selected_net_only();
+        let selected_net = overlay_net(frame);
+        let overlay_key =
+            (!legacy && frame.pass != board::OverlayPass::Base).then(|| OverlayKey::new(frame));
         #[cfg(test)]
         let selected_net = selected_net.filter(|_| !cache.cpu_net_selection);
         for batch in &cache.source.batches {
@@ -431,15 +459,17 @@ impl Pipeline {
                 if start >= end {
                     continue;
                 }
-                let summary = selected_net
-                    .map(|net| chunk.selected_net_summary(&cache.source.analytic, net.0));
-                if summary.is_some_and(|summary| summary.count == 0) {
+                let summary =
+                    selected_net.map(|(net, hovered)| chunk.selected_net_summary(net.0, hovered));
+                if summary.is_some_and(|summary| summary.count == 0 && !summary.extra_hover) {
                     continue;
                 }
                 // Avoid streaming sparse nets through the GPU merely to reject them.
                 // Dense, fragmented chunks amortize one instanced submission instead.
-                let shader_net =
-                    summary.filter(|summary| summary.count >= 128 && summary.runs >= 32);
+                let shader_net = summary.filter(|summary| {
+                    !summary.extra_hover && summary.count >= 128 && summary.runs >= 32
+                });
+                let cached_overlay = overlay_key.as_ref().filter(|_| shader_net.is_none());
                 let magnitude = chunk
                     .ranges
                     .coordinate_magnitude()
@@ -457,34 +487,22 @@ impl Pipeline {
                 let mut draw_range = |range: std::ops::Range<usize>| {
                     let start = range.start + chunk.start;
                     let end = range.end + chunk.start;
-                    let selected = |index: usize| {
-                        let instance = &cache.source.analytic[index];
-                        let object = if instance.source[0] == 0 {
-                            pomelo_core::selection::SelectedObject::Pin(
-                                pomelo_core::model::ObjectId(instance.ids[0]),
-                            )
-                        } else {
-                            pomelo_core::selection::SelectedObject::Via(
-                                pomelo_core::model::ObjectId(instance.ids[0]),
-                            )
-                        };
-                        frame.object_highlight(
-                            object,
-                            pomelo_core::model::NetId(instance.ids[2]),
-                            None,
-                        )
-                    };
+                    let selected = |index: usize| highlight(frame, &cache.source.analytic[index]);
                     let mut cursor = start;
                     while cursor < end {
                         let start = cursor;
-                        let highlighted = if shader_net.is_some() {
-                            Some([1.0, 1.0, 1.0, 0.9])
+                        let highlighted = if shader_net.is_some() || cached_overlay.is_some() {
+                            Some(if frame.pass == board::OverlayPass::Selection {
+                                [1.0, 1.0, 1.0, 0.9]
+                            } else {
+                                [0.63, 1.0, 0.85, 0.9]
+                            })
                         } else if uniform_base {
                             None
                         } else {
                             (cursor < end).then(|| selected(cursor)).flatten()
                         };
-                        if uniform_base || shader_net.is_some() {
+                        if uniform_base || shader_net.is_some() || cached_overlay.is_some() {
                             cursor = end;
                         } else {
                             while cursor < end && selected(cursor) == highlighted {
@@ -505,6 +523,9 @@ impl Pipeline {
                         } else {
                             u32::from(highlighted.is_some())
                         };
+                        if let Some(summary) = shader_net {
+                            uniforms.batch[1] = summary.net;
+                        }
                         uniforms.highlight = highlighted.unwrap_or_else(|| {
                             frame.highlighted_net.map_or([0.0; 4], |(_, color)| color)
                         });
@@ -529,7 +550,14 @@ impl Pipeline {
                 };
                 let range = start - chunk.start..end - chunk.start;
                 let mut visible_range = |range| {
-                    chunk.visible(&cache.source, visibility, range, legacy, &mut draw_range)
+                    let mut visible = |range| {
+                        chunk.visible(&cache.source, visibility, range, legacy, &mut draw_range)
+                    };
+                    if let Some(key) = cached_overlay {
+                        chunk.overlay(&cache.source, frame, key, range, visible)
+                    } else {
+                        visible(range)
+                    }
                 };
                 if covers_board {
                     visible_range(range)?;
@@ -540,4 +568,41 @@ impl Pipeline {
         }
         Ok(draws)
     }
+}
+
+fn highlight(frame: &TraceFrame, instance: &PadInstance) -> Option<[f32; 4]> {
+    frame.object_highlight(
+        object(instance),
+        pomelo_core::model::NetId(instance.ids[2]),
+        None,
+    )
+}
+
+fn object(instance: &PadInstance) -> SelectedObject {
+    let id = pomelo_core::model::ObjectId(instance.ids[0]);
+    if instance.source[0] == 0 {
+        SelectedObject::Pin(id)
+    } else {
+        SelectedObject::Via(id)
+    }
+}
+
+fn overlay_net(frame: &TraceFrame) -> Option<(pomelo_core::model::NetId, Option<SelectedObject>)> {
+    if let Some(net) = frame.selected_net_only() {
+        return Some((net, None));
+    }
+    if !matches!(
+        frame.pass,
+        board::OverlayPass::Hover | board::OverlayPass::GroupHover
+    ) || frame.has_overlay(board::OverlayPass::Selection)
+    {
+        return None;
+    }
+    let (SelectionTarget::Net(net), _) = frame.hover_selection.as_ref()? else {
+        return None;
+    };
+    // A pointer object is usually in the hovered net. Each chunk verifies that
+    // implication before using net-only GPU rejection; extra objects retain the
+    // exact cached membership path, including objects on unconnected nets.
+    (net.0 != 0).then_some((*net, frame.hovered_object.map(|(object, _)| object)))
 }

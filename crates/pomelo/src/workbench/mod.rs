@@ -1244,6 +1244,7 @@ impl Workbench {
         let current = document.import_options.text_encoding;
         let mut choices = div().flex().flex_wrap().gap_2();
         for encoding in [
+            TextEncoding::Auto,
             TextEncoding::Utf8,
             TextEncoding::Gbk,
             TextEncoding::Big5,
@@ -1253,7 +1254,11 @@ impl Workbench {
             choices = choices.child(
                 Button::new(encoding.tag())
                     .ghost()
-                    .label(encoding.tag())
+                    .label(if matches!(encoding, TextEncoding::Auto) {
+                        text(locale, Key::EncodingAuto)
+                    } else {
+                        encoding.tag().to_owned()
+                    })
                     .selected(current.tag() == encoding.tag())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(document) = this

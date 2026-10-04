@@ -173,6 +173,21 @@ mod tests {
         }
     }
     #[test]
+    fn files_default_to_auto_detection_and_accept_explicit_auto() {
+        assert_eq!(
+            parse(&["board.brd"]).unwrap().options.text_encoding.tag(),
+            "auto"
+        );
+        assert_eq!(
+            parse(&["--encoding", "auto", "board.brd"])
+                .unwrap()
+                .options
+                .text_encoding
+                .tag(),
+            "auto"
+        );
+    }
+    #[test]
     fn language_and_encoding_are_independent_of_paths() {
         let startup = parse(&[
             "first.brd",

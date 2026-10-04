@@ -55,7 +55,7 @@ Open a board with **Ctrl+O**, drag and drop, or a startup file path. Select a la
 cargo run -p pomelo --locked -- --locale en --encoding windows-1252 "C:\boards\example.brd"
 ```
 
-`--locale` accepts `en`, `zh-CN`, `zh-TW`, `ja`, and `ko`. It applies only to this launch and does not overwrite the saved language preference. `--encoding` accepts `utf-8`, `gbk`, `shift_jis`, `big5`, and `windows-1252`; the default is strict UTF-8. The selected encoding applies to files opened in that process. Interface language and source encoding are independent. Arguments after `--` are treated as file paths.
+`--locale` accepts `en`, `zh-CN`, `zh-TW`, `ja`, and `ko`. It applies only to this launch and does not overwrite the saved language preference. `--encoding` accepts `auto`, `utf-8`, `gbk`, `shift_jis`, `big5`, and `windows-1252`; the default is `auto`, which detects UTF-8, GBK, Shift JIS, Big5, or Windows-1252 from BRD text fields before strict decoding. Short or ambiguous text can be misidentified; use an explicit encoding to override detection. The selected encoding applies to files opened in that process. Interface language and source encoding are independent. Arguments after `--` are treated as file paths.
 
 ## Navigation
 

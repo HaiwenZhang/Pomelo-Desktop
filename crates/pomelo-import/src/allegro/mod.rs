@@ -42,7 +42,7 @@ impl BoardImporter for AllegroImporter {
         let identity = pomelo_core::view_state::SourceIdentity {
             sha256: crate::source::content_sha256(database.source_bytes(), context)?,
             format: "allegro".into(),
-            encoding: options.text_encoding.tag().into(),
+            encoding: database.encoding().tag().into(),
         };
         let mut limits = semantics::scene::SceneLimits::default();
         // One shared path allocation, including owned OS string capacity and Arc bookkeeping.
