@@ -181,7 +181,7 @@ impl CopperRenderer {
     ) -> anyhow::Result<()> {
         self.draw_filtered(context, frame, opacity, layer, None)
     }
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub(super) fn prepare_curves(
         &mut self,
         context: &NativeGpuContext<'_>,

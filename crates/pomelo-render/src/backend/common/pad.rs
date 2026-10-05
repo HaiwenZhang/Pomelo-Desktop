@@ -225,11 +225,11 @@ impl UploadedPads {
     pub fn uploaded(&self) -> usize {
         self.uploaded
     }
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub(crate) fn use_cpu_net_selection(&mut self) {
         self.cpu_net_selection = true;
     }
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub(crate) fn disable_range_culling(&mut self) -> anyhow::Result<()> {
         for chunk in &mut self.chunks {
             chunk.ranges = PadRanges::build(std::iter::repeat_n(
@@ -311,7 +311,7 @@ impl Pipeline {
             pipeline: device.pipeline(super::Shader::Pad)?,
         })
     }
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub fn draw(
         &self,
         context: &NativeGpuContext<'_>,

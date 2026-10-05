@@ -132,7 +132,7 @@ impl<S: InstanceSource> UploadedTracks<S> {
                 .sum()
         })
     }
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub fn upload_next(&mut self, device: &Device<'_>) -> anyhow::Result<u64> {
         let mut budget = super::copper::UPLOAD_BYTES_PER_FRAME;
         self.upload_visible(device, None, &mut budget)
