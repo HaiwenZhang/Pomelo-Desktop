@@ -26,13 +26,77 @@ pub(crate) struct CopperDrawOptions<'a> {
 
 pub(crate) const UPLOAD_BYTES_PER_FRAME: usize = 4 * 1024 * 1024;
 
-pub(crate) struct UploadedCopper {
-    pub source: Arc<PreparedCopper>,
-    pub active: bool,
+#[derive(Debug)]
+struct PageRanges {
+    vertices: std::ops::Range<usize>,
+    indices: std::ops::Range<usize>,
+}
+struct CopperPage {
+    ranges: PageRanges,
     vertex_buffer: Option<Buffer>,
     index_buffer: Option<Buffer>,
     vertex_uploaded: usize,
     index_uploaded: usize,
+}
+
+// Pack in source geometry order, which can differ from layer draw order. Each
+// batch stays together so exterior, holes and parity rings share one stencil.
+fn page_ranges(
+    source: &PreparedCopper,
+    vertex_limit: usize,
+    index_limit: usize,
+) -> anyhow::Result<(Vec<PageRanges>, Vec<usize>)> {
+    let mut order = Vec::new();
+    order.try_reserve_exact(source.batches.len())?;
+    order.extend(0..source.batches.len());
+    order.sort_unstable_by_key(|&index| {
+        let batch = &source.batches[index];
+        (
+            batch.vertex_start,
+            batch.outer_indices().start,
+            batch.source_index,
+        )
+    });
+    let mut pages: Vec<PageRanges> = Vec::new();
+    let mut batch_pages = Vec::new();
+    batch_pages.try_reserve_exact(source.batches.len())?;
+    batch_pages.resize(source.batches.len(), 0);
+    for index in order {
+        let batch = &source.batches[index];
+        let vertices =
+            batch.vertex_start as usize..batch.vertex_start as usize + batch.vertex_count as usize;
+        let indices = batch.outer_indices().start as usize..batch.hole_indices().end as usize;
+        ensure!(
+            vertices.len() <= vertex_limit && indices.len() <= index_limit,
+            "GPU_COPPER_BATCH_SIZE: object {:?}, vertex bytes {}, index bytes {}, limits {} / {} bytes",
+            batch.object,
+            vertices.len() * size_of::<CopperVertex>(),
+            indices.len() * 4,
+            vertex_limit * size_of::<CopperVertex>(),
+            index_limit * 4
+        );
+        if let Some(page) = pages.last_mut().filter(|page| {
+            page.vertices.end == vertices.start
+                && page.indices.end == indices.start
+                && vertices.end - page.vertices.start <= vertex_limit
+                && indices.end - page.indices.start <= index_limit
+        }) {
+            page.vertices.end = vertices.end;
+            page.indices.end = indices.end;
+        } else {
+            pages.try_reserve(1)?;
+            pages.push(PageRanges { vertices, indices });
+        }
+        batch_pages[index] = pages.len() - 1;
+    }
+    Ok((pages, batch_pages))
+}
+
+pub(crate) struct UploadedCopper {
+    pub source: Arc<PreparedCopper>,
+    pub active: bool,
+    pages: Vec<CopperPage>,
+    batch_pages: Vec<usize>,
     /// Original batch order within each layer; no geometry is duplicated.
     layer_batches: BTreeMap<pomelo_core::model::LayerId, Vec<usize>>,
     #[cfg(test)]
@@ -40,6 +104,19 @@ pub(crate) struct UploadedCopper {
 }
 impl UploadedCopper {
     pub fn new(source: Arc<PreparedCopper>, device: &Device<'_>) -> anyhow::Result<Self> {
+        Self::new_with_limits(
+            source,
+            device,
+            device.buffer_limit(false),
+            device.buffer_limit(true),
+        )
+    }
+    fn new_with_limits(
+        source: Arc<PreparedCopper>,
+        device: &Device<'_>,
+        vertex_bytes: usize,
+        index_bytes: usize,
+    ) -> anyhow::Result<Self> {
         let mut counts = BTreeMap::new();
         for batch in &source.batches {
             *counts.entry(batch.layer).or_insert(0usize) += 1;
@@ -56,46 +133,50 @@ impl UploadedCopper {
                 .context("GPU_COPPER_LAYER_MISSING")?
                 .push(index);
         }
-        let vertex_buffer = if source.vertex_count() == 0 {
-            None
-        } else {
-            Some(
-                device.buffer_empty(
-                    source
-                        .vertex_count()
-                        .checked_mul(size_of::<CopperVertex>())
-                        .context("GPU_COPPER_BUFFER_SIZE")?,
-                    false,
-                )?,
-            )
-        };
-        let index_buffer = if source.index_count() == 0 {
-            None
-        } else {
-            Some(
-                device.buffer_empty(
-                    source
-                        .index_count()
-                        .checked_mul(4)
-                        .context("GPU_COPPER_BUFFER_SIZE")?,
-                    true,
-                )?,
-            )
-        };
+        let (ranges, batch_pages) = page_ranges(
+            &source,
+            vertex_bytes / size_of::<CopperVertex>(),
+            index_bytes / 4,
+        )?;
+        let mut pages = Vec::new();
+        pages.try_reserve_exact(ranges.len())?;
+        for ranges in ranges {
+            let vertex_buffer = if ranges.vertices.is_empty() {
+                None
+            } else {
+                Some(
+                    device
+                        .buffer_empty(ranges.vertices.len() * size_of::<CopperVertex>(), false)?,
+                )
+            };
+            let index_buffer = if ranges.indices.is_empty() {
+                None
+            } else {
+                Some(device.buffer_empty(ranges.indices.len() * 4, true)?)
+            };
+            pages.push(CopperPage {
+                ranges,
+                vertex_buffer,
+                index_buffer,
+                vertex_uploaded: 0,
+                index_uploaded: 0,
+            });
+        }
         Ok(Self {
             source,
             active: false,
-            vertex_buffer,
-            index_buffer,
-            vertex_uploaded: 0,
-            index_uploaded: 0,
+            pages,
+            batch_pages,
             layer_batches,
             #[cfg(test)]
             force_stencil: false,
         })
     }
     pub fn uploaded_bytes(&self) -> usize {
-        self.vertex_uploaded * size_of::<CopperVertex>() + self.index_uploaded * 4
+        self.pages
+            .iter()
+            .map(|page| page.vertex_uploaded * size_of::<CopperVertex>() + page.index_uploaded * 4)
+            .sum()
     }
     #[cfg(all(test, target_os = "macos"))]
     pub fn upload_next(&mut self, context: &NativeGpuContext<'_>) -> anyhow::Result<()> {
@@ -107,29 +188,54 @@ impl UploadedCopper {
         context: &NativeGpuContext<'_>,
         budget: &mut usize,
     ) -> anyhow::Result<()> {
-        if let Some(buffer) = &self.vertex_buffer {
-            upload_slice(
-                &context.device,
-                buffer,
-                self.source.vertex_count(),
-                &mut self.vertex_uploaded,
-                budget,
-                |range| self.source.vertex_block(range),
-            )?;
-        }
-        if let Some(buffer) = &self.index_buffer {
-            upload_slice(
-                &context.device,
-                buffer,
-                self.source.index_count(),
-                &mut self.index_uploaded,
-                budget,
-                |range| self.source.index_block(range),
-            )?;
+        for page in &mut self.pages {
+            if *budget == 0 {
+                break;
+            }
+            if let Some(buffer) = &page.vertex_buffer {
+                upload_slice(
+                    &context.device,
+                    buffer,
+                    page.ranges.vertices.len(),
+                    &mut page.vertex_uploaded,
+                    budget,
+                    |range| {
+                        self.source.vertex_block(
+                            range.start + page.ranges.vertices.start
+                                ..range.end + page.ranges.vertices.start,
+                        )
+                    },
+                )?;
+            }
+            if let Some(buffer) = &page.index_buffer {
+                upload_slice(
+                    &context.device,
+                    buffer,
+                    page.ranges.indices.len(),
+                    &mut page.index_uploaded,
+                    budget,
+                    |range| {
+                        let mut data = self.source.index_block(
+                            range.start + page.ranges.indices.start
+                                ..range.end + page.ranges.indices.start,
+                        )?;
+                        if page.ranges.vertices.start != 0 {
+                            for index in data.to_mut() {
+                                *index -= page.ranges.vertices.start as u32;
+                            }
+                        }
+                        Ok(data)
+                    },
+                )?;
+            }
         }
         Ok(())
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../../tests/unit/backend/wgpu/copper_pages.rs"]
+mod tests;
 fn upload_slice<'a, T: bytemuck::Pod + 'a>(
     device: &Device<'_>,
     buffer: &Buffer,
@@ -179,7 +285,7 @@ pub(crate) struct Pipeline {
     pipeline: GpuPipeline,
 }
 struct DirectRun<'a> {
-    cache: &'a UploadedCopper,
+    page: &'a CopperPage,
     indices: std::ops::Range<u32>,
     uniforms: Uniforms,
     rect: Rect,
@@ -191,17 +297,17 @@ impl DirectRun<'_> {
             Draw {
                 uniforms: bytemuck::bytes_of(&self.uniforms),
                 vertices: self
-                    .cache
+                    .page
                     .vertex_buffer
                     .as_ref()
                     .context("GPU_COPPER_VERTEX_MISSING")?,
                 indices: Some(
-                    self.cache
+                    self.page
                         .index_buffer
                         .as_ref()
                         .context("GPU_COPPER_INDEX_MISSING")?,
                 ),
-                start: self.indices.start,
+                start: self.indices.start - self.page.ranges.indices.start as u32,
                 count: self.indices.end - self.indices.start,
                 instances: 1,
                 rect: self.rect,
@@ -233,7 +339,7 @@ impl Pipeline {
             overrides,
             static_shapes_fill_solid,
         } = options;
-        if cache.index_uploaded == 0 {
+        if cache.pages.iter().all(|page| page.index_uploaded == 0) {
             return Ok((0, 0));
         }
         let bounds = context.bounds;
@@ -308,7 +414,8 @@ impl Pipeline {
             cache.source.batches.len()
         };
         for index in 0..count {
-            let batch = &cache.source.batches[indices.map_or(index, |indices| indices[index])];
+            let batch_index = indices.map_or(index, |indices| indices[index]);
+            let batch = &cache.source.batches[batch_index];
             if layer.is_some_and(|layer| batch.layer != layer)
                 || visible.is_some_and(|test| !test(batch))
             {
@@ -330,6 +437,12 @@ impl Pipeline {
             let batch = replacement
                 .and_then(|entry| entry.source.batches.first())
                 .unwrap_or(batch);
+            let page_index = cache.batch_pages[if replacement.is_some() {
+                0
+            } else {
+                batch_index
+            }];
+            let page = &cache.pages[page_index];
             let overlay = frame.object_highlight(batch.selected_object, batch.net, None);
             if frame.pass != board::OverlayPass::Base && overlay.is_none() {
                 continue;
@@ -362,9 +475,9 @@ impl Pipeline {
             let outer = batch.outer_indices();
             let holes = batch.hole_indices();
             if (batch.parity_rings.is_none() && outer.is_empty())
-                || holes.end as usize > cache.index_uploaded
+                || holes.end as usize > page.ranges.indices.start + page.index_uploaded
                 || (batch.vertex_start as usize + batch.vertex_count as usize)
-                    > cache.vertex_uploaded
+                    > page.ranges.vertices.start + page.vertex_uploaded
             {
                 continue;
             }
@@ -411,17 +524,21 @@ impl Pipeline {
             if frame.pass == board::OverlayPass::Base {
                 uniforms.color[3] *= opacity;
             }
-            let vertices = cache
+            let vertices = page
                 .vertex_buffer
                 .as_ref()
                 .context("GPU_COPPER_VERTEX_MISSING")?;
-            let indices = cache
+            let indices = page
                 .index_buffer
                 .as_ref()
                 .context("GPU_COPPER_INDEX_MISSING")?;
             let encode = |mode, range: Option<std::ops::Range<u32>>| -> anyhow::Result<()> {
                 let (start, count, index_buffer) = range.map_or((0, 4, None), |range| {
-                    (range.start, range.end - range.start, Some(indices))
+                    (
+                        range.start - page.ranges.indices.start as u32,
+                        range.end - range.start,
+                        Some(indices),
+                    )
                 });
                 context.device.draw(
                     &self.pipeline,
@@ -453,7 +570,7 @@ impl Pipeline {
                 let mut direct_uniforms = uniforms;
                 direct_uniforms.rectangle = [0.0; 4];
                 if let Some(run) = pending.as_mut()
-                    && std::ptr::eq(run.cache, cache)
+                    && std::ptr::eq(run.page, page)
                     && run.indices.end == outer.start
                     && run.uniforms == direct_uniforms
                 {
@@ -468,7 +585,7 @@ impl Pipeline {
                         draws += 1;
                     }
                     pending = Some(DirectRun {
-                        cache,
+                        page,
                         indices: outer,
                         uniforms: direct_uniforms,
                         rect,
