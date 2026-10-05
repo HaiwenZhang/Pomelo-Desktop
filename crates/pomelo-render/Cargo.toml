@@ -40,11 +40,12 @@ metal = { workspace = true, optional = true }
 gpui-wgpu = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-naga.workspace = true
 futures.workspace = true
 
 [dev-dependencies]
+naga.workspace = true
 sha2.workspace = true
+hex.workspace = true
 pomelo-import.workspace = true
 anyhow.workspace = true
 

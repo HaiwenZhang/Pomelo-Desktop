@@ -52,7 +52,7 @@ fn geometry_probe_keeps_metadata_source_identity_and_fields_across_five_locales(
     let report = dir.path().join("geometry.jsonl");
     let bytes = source();
     fs::write(&source_path, &bytes).unwrap();
-    fs::write(&request,serde_json::to_vec(&json!({"schema_version":1,"sha256":format!("{:x}",Sha256::digest(&bytes)),"source_size":bytes.len(),"spans":[
+    fs::write(&request,serde_json::to_vec(&json!({"schema_version":1,"sha256":hex::encode(Sha256::digest(&bytes)),"source_size":bytes.len(),"spans":[
         {"offset":START+24,"byte_length":44,"key":42,"record_type":21},
         {"offset":START+24,"byte_length":40,"key":42,"record_type":21}
     ]})).unwrap()).unwrap();

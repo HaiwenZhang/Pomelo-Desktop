@@ -323,12 +323,20 @@ impl BoardViewport {
                     }),
                 )
                 .collect();
-        let mut initial_display = pomelo_core::display::BoardDisplay::default();
-        for layer in &scene.drawing_layers {
-            if !layer.default_visible {
-                initial_display.hidden_layers.insert(layer.id);
-            }
-        }
+        let top_layer = scene.layers.first().map(|layer| layer.id);
+        let initial_display = pomelo_core::display::BoardDisplay {
+            static_shapes_fill_solid: true,
+            color_mode: pomelo_core::display::ColorMode::Net,
+            hidden_layers: scene
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .chain(scene.special_layers.iter().map(|layer| layer.id))
+                .chain(scene.drawing_layers.iter().map(|layer| layer.id))
+                .filter(|id| Some(*id) != top_layer)
+                .collect(),
+            ..pomelo_core::display::BoardDisplay::default()
+        };
         cx.observe_global::<crate::theme::ThemeState>(|_, cx| cx.notify())
             .detach();
         cx.observe_global::<crate::i18n::LanguageState>(|_, cx| cx.notify())
@@ -428,7 +436,7 @@ impl BoardViewport {
             selected_source_labels: Vec::new(),
             selected_related_net: None,
             selected_related_component: None,
-            selection_mode: pomelo_core::interaction::SelectionMode::Net,
+            selection_mode: pomelo_core::interaction::SelectionMode::Object,
             last_pick: None,
             candidate_position: None,
             selected_summary: None,
@@ -1166,7 +1174,7 @@ impl BoardViewport {
         // retains its longer delay without holding back the geometry preview.
         let tooltip_delay = cx
             .background_executor()
-            .timer(std::time::Duration::from_millis(500));
+            .timer(std::time::Duration::from_secs(1));
         let delay = cx
             .background_executor()
             .timer(std::time::Duration::from_millis(16));
@@ -3048,33 +3056,7 @@ impl Render for BoardViewport {
         let zone_outlines = Arc::clone(&self.zone_outlines);
         let copper_opacity = self.display.copper_opacity;
         let viewport = canvas(
-            move |bounds, window, cx| {
-                let move_view = layout_view.clone();
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                    if phase == DispatchPhase::Capture {
-                        let _ = move_view.update(cx, |this, cx| {
-                            if this.pointer_gesture.is_some() {
-                                this.move_pan(event, window, cx);
-                                cx.stop_propagation();
-                            }
-                        });
-                    }
-                });
-                let release_view = layout_view.clone();
-                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
-                    if phase == DispatchPhase::Capture {
-                        let _ = release_view.update(cx, |this, cx| {
-                            if this.pointer_gesture.as_ref().is_some_and(|gesture| gesture.button == event.button) {
-                                if bounds.contains(&event.position) {
-                                    this.stop_pan(event, window, cx);
-                                } else {
-                                    this.cancel_pan(event, window, cx);
-                                    cx.stop_propagation();
-                                }
-                            }
-                        });
-                    }
-                });
+            move |bounds, _window, cx| {
                 let prepaint_started = pomelo_render::frame_timing::begin();
                 let mut label_layout_us = 0u64;
                 let mut resized = false;
@@ -3183,6 +3165,33 @@ impl Render for BoardViewport {
                 })
             },
             move |bounds, frame, window, cx| {
+                // GPUI registers per-frame input listeners only during paint.
+                let move_view = weak.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = move_view.update(cx, |this, cx| {
+                            if this.pointer_gesture.is_some() {
+                                this.move_pan(event, window, cx);
+                                cx.stop_propagation();
+                            }
+                        });
+                    }
+                });
+                let release_view = weak.clone();
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = release_view.update(cx, |this, cx| {
+                            if this.pointer_gesture.as_ref().is_some_and(|gesture| gesture.button == event.button) {
+                                if bounds.contains(&event.position) {
+                                    this.stop_pan(event, window, cx);
+                                } else {
+                                    this.cancel_pan(event, window, cx);
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                    }
+                });
                 if pomelo_render::frame_timing::continuous() {
                     window.request_animation_frame();
                     let repaint = weak.clone();

@@ -89,7 +89,7 @@ fn successful_fields_and_failed_span_diagnostics_keep_identity_in_all_five_local
     fs::write(
         &request,
         serde_json::to_vec(&json!({
-            "schema_version": 1, "sha256": format!("{:x}", Sha256::digest(&bytes)),
+            "schema_version": 1, "sha256": hex::encode(Sha256::digest(&bytes)),
             "source_size": bytes.len(), "spans": [
                 {"offset": OFFSET, "byte_length": 24, "key": u32::MAX, "record_type": 4},
                 {"offset": OFFSET, "byte_length": 20, "key": u32::MAX, "record_type": 4}
@@ -143,7 +143,7 @@ fn all_record_cli_decodes_variable_text_with_identical_fields_in_all_five_locale
     fs::write(
         &request,
         serde_json::to_vec(&json!({
-            "schema_version": 1, "sha256": format!("{:x}", Sha256::digest(&bytes)),
+            "schema_version": 1, "sha256": hex::encode(Sha256::digest(&bytes)),
             "source_size": bytes.len(), "spans": [
                 {"offset": OFFSET, "byte_length": 32, "key": u32::MAX, "record_type": 0x31}
             ]

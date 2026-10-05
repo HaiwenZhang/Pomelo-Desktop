@@ -101,7 +101,7 @@ fn real_board_member_pages_match_source_network_membership() {
     );
     std::fs::write(report, serde_json::to_vec_pretty(&serde_json::json!({
         "scope":"cpu_source_network_member_pages", "source":source,
-        "sha256":format!("{:x}", Sha256::digest(std::fs::read(&source).unwrap())),
+        "sha256":hex::encode(Sha256::digest(std::fs::read(&source).unwrap())),
         "encoding":options.text_encoding.tag(), "network_id":net.0,"total":total,"pages":pages,
         "profile":"optimized_debug", "runs":1,"ui_validated":false,"electrical_continuity_validated":false
     })).unwrap()).unwrap();
@@ -281,7 +281,7 @@ fn real_board_mixed_candidates_match_category_reference_queries() {
     }
     std::fs::write(report, serde_json::to_vec_pretty(&serde_json::json!({
         "scope":"cpu_mixed_candidate_merge_parity", "source":source,
-        "sha256":format!("{:x}",Sha256::digest(std::fs::read(&source).unwrap())),
+        "sha256":hex::encode(Sha256::digest(std::fs::read(&source).unwrap())),
         "encoding":options.text_encoding.tag(),"segments":board.scene.segments.len(),
         "pins":board.scene.pins.len(),"vias":board.scene.vias.len(),"zones":board.scene.zones.len(),
         "probes":probes,"ui_validated":false,"gpu_geometry_parity_validated":false
@@ -370,7 +370,7 @@ fn real_board_index_matches_precise_reference_scan() {
     }
     assert!(!probes.is_empty());
     let data = serde_json::json!({"scope": "cpu_track_index_reference_parity", "source": source,
-        "sha256": format!("{:x}", Sha256::digest(std::fs::read(&source).unwrap())), "encoding": options.text_encoding.tag(),
+        "sha256": hex::encode(Sha256::digest(std::fs::read(&source).unwrap())), "encoding": options.text_encoding.tag(),
         "segments": index.segment_count(), "build_ms": build_ms, "probes": probes,
         "ui_validated": false, "gpu_pixel_parity_validated": false, "pad_zone_picking_validated": false});
     std::fs::write(report, serde_json::to_vec_pretty(&data).unwrap()).unwrap();

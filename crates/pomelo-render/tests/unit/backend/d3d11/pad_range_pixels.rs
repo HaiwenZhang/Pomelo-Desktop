@@ -282,8 +282,22 @@ fn hardware_cached_pad_visibility_matches_predicates_across_display_and_upload_c
             }
             for zoom in [1.0, 8.0] {
                 frame.camera.as_mut().unwrap().pixels_per_mm = 10.0 * zoom;
-                for net in [None, Some((NetId(2), [1.0; 4]))] {
+                // Base object hover must retain its color across owner predicates,
+                // including the exact CPU path used for varying base colors.
+                for (net, hovered) in [
+                    (None, None),
+                    (Some((NetId(2), [1.0; 4])), None),
+                    (
+                        None,
+                        Some(pomelo_core::selection::SelectedObject::Via(ObjectId(5001))),
+                    ),
+                    (
+                        Some((NetId(2), [1.0; 4])),
+                        Some(pomelo_core::selection::SelectedObject::Pin(ObjectId(5000))),
+                    ),
+                ] {
                     frame.highlighted_net = net;
+                    frame.hovered_object = hovered.map(|object| (object, [0.2, 1.0, 0.8, 0.4]));
                     for pass in [
                         OverlayPass::Base,
                         OverlayPass::Selection,
@@ -340,7 +354,11 @@ fn hardware_cached_pad_visibility_matches_predicates_across_display_and_upload_c
                                 expected,
                                 "chunks={uploaded_chunks} state={state} zoom={zoom} net={net:?} pass={pass:?} filter={filter}"
                             );
-                            if pass == OverlayPass::Base && filter < 4 && zoom == 1.0 {
+                            if pass == OverlayPass::Base
+                                && filter < 4
+                                && zoom == 1.0
+                                && hovered.is_none()
+                            {
                                 assert!(
                                     cached_draws < reference_draws,
                                     "chunks={uploaded_chunks} state={state} net={net:?} filter={filter}"

@@ -18,8 +18,7 @@ fn stipple(sample: vec2f) -> f32 {
     return f32((row >> pixel.x) & 1u);
 }
 
-@fragment
-fn fragment_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+fn fragment_color(position: vec4f) -> vec4f {
     if clipped(position.xy) {
         discard;
     }

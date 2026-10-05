@@ -63,6 +63,7 @@ impl PreparedCopper {
             .as_ref()
             .map_or(0, |source| metadata_bytes(source.spans.capacity()))
     }
+    #[cfg(any(feature = "native-gpu", test))]
     pub(crate) fn vertex_block(
         &self,
         range: Range<usize>,

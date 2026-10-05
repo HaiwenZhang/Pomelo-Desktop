@@ -216,7 +216,7 @@ fn hardware_long_lines_match_f64_capsules_at_deep_zoom() {
             serde_json::to_vec_pretty(&serde_json::json!({
                 "adapter":adapter_name,"hardware_only":true,"window_verified":false,
                 "reference":"independent f64 closest-point capsule and Web smoothstep coverage",
-                "shader_sha256":format!("{:x}",Sha256::digest(include_bytes!("../../../../src/shaders/d3d11/trace.hlsl"))),
+                "shader_sha256":hex::encode(Sha256::digest(include_bytes!("../../../../src/shaders/d3d11/trace.hlsl"))),
                 "cases":comparisons,"failures":failures
             }))
             .unwrap(),

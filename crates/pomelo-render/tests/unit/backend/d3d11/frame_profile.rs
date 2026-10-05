@@ -115,16 +115,34 @@ fn hardware_real_board_frame_profile() {
     }
     assert!(renderer.geometry_is_uploaded(&frame));
     let _ = target.read(&context);
-    for mode in ["fit", "local", "pan", "net", "hover_fit", "hover_local"] {
+    for mode in [
+        "fit",
+        "local",
+        "pan",
+        "net",
+        "hover_fit",
+        "hover_local",
+        "object_hover_fit",
+        "object_hover_local",
+        "mixed_hover_local",
+    ] {
         let mut view = camera;
-        if !matches!(mode, "fit" | "hover_fit") {
+        if !matches!(mode, "fit" | "hover_fit" | "object_hover_fit") {
             view.pixels_per_mm *= 16.0;
         }
         if mode == "pan" {
             view.center.x += 100.0 / view.pixels_per_mm;
         }
+        let pointer = (mode.starts_with("object_hover") || mode == "mixed_hover_local")
+            .then(|| scene.vias.iter().find(|via| !via.pads.is_empty()))
+            .flatten();
+        if mode.ends_with("local")
+            && let Some(via) = pointer
+        {
+            view.center = via.at;
+        }
         frame.traces.camera = Some(view);
-        frame.traces.highlighted_net = (mode == "net").then(|| {
+        frame.traces.highlighted_net = (mode == "net" || mode == "mixed_hover_local").then(|| {
             (
                 scene.vias.first().map_or(NetId(1), |via| via.net),
                 [1.0, 1.0, 1.0, 0.9],
@@ -138,6 +156,12 @@ fn hardware_real_board_frame_profile() {
                 Arc::new(Default::default()),
             )
         });
+        frame.traces.hovered_object = pointer.map(|via| {
+            (
+                pomelo_core::selection::SelectedObject::Via(via.id),
+                [0.63, 1.0, 0.85, 0.9],
+            )
+        });
         for trial in 0..7 {
             target.bind(&context);
             let started = std::time::Instant::now();
@@ -148,7 +172,7 @@ fn hardware_real_board_frame_profile() {
             if trial >= 2 {
                 println!(
                     "FRAME_PROFILE {}",
-                    serde_json::json!({"case":path,"mode":mode,"trial":trial-1,"width":1280,"height":720,"submit_us":submit_us,"synchronized_us":synchronized_us,"labels":false,"gpui":false})
+                    serde_json::json!({"case":path,"mode":mode,"trial":trial-1,"width":1280,"height":720,"submit_us":submit_us,"synchronized_us":synchronized_us,"labels":false,"gpui":false,"pointer":frame.traces.hovered_object.map(|(object,_)|format!("{object:?}")),"camera":[view.center.x,view.center.y,view.pixels_per_mm]})
                 );
             }
             if trial == 6

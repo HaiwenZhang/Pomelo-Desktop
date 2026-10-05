@@ -74,7 +74,7 @@ fn real_board_search_counts_and_all_target_bounds() {
             "name": entry.name, "count": entry.count, "bounds": bounds, "locate_ms": locate_ms,
             "query_ms": query_ms, "query_result_count": query_results.len()}));
     }
-    let data = serde_json::json!({"source": source, "sha256": format!("{:x}", Sha256::digest(std::fs::read(&source).unwrap())),
+    let data = serde_json::json!({"source": source, "sha256": hex::encode(Sha256::digest(std::fs::read(&source).unwrap())),
         "scope": "cpu_search_counts_and_target_bounds", "encoding": options.text_encoding.tag(), "build_ms": build_ms,
         "entries": targets, "ui_validated": false, "web_parity_validated": false});
     std::fs::write(report, serde_json::to_vec_pretty(&data).unwrap()).unwrap();

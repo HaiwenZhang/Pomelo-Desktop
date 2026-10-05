@@ -113,7 +113,7 @@ fn real_u94_subset_uses_production_canvas_picking_and_filters() {
         .read_to_end(&mut bytes)
         .expect("read bounded target");
     assert!(bytes.len() <= 256 * 1024, "target exceeds 256 KiB bound");
-    let input_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let input_sha256 = hex::encode(Sha256::digest(&bytes));
     let target: Target = serde_json::from_slice(&bytes).expect("cached target schema");
     assert_eq!(
         target.source["sha256"],

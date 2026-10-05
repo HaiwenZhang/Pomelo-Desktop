@@ -47,7 +47,7 @@ fn routing_cli_retains_objects_offsets_and_stable_diagnostics_across_five_langua
     let report = dir.path().join("report.jsonl");
     let bytes = source();
     fs::write(&file, &bytes).unwrap();
-    fs::write(&request, serde_json::to_vec(&json!({"schema_version":1,"sha256":format!("{:x}",Sha256::digest(&bytes)),"source_size":bytes.len(),"spans":[
+    fs::write(&request, serde_json::to_vec(&json!({"schema_version":1,"sha256":hex::encode(Sha256::digest(&bytes)),"source_size":bytes.len(),"spans":[
         {"offset":START+24,"byte_length":80,"key":42,"record_type":51},
         {"offset":START+104,"byte_length":68,"key":90,"record_type":5},
         {"offset":START+24,"byte_length":76,"key":42,"record_type":51}

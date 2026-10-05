@@ -5,8 +5,7 @@ const COPPER_FRAME: &str = "struct Frame {viewport: vec4f, canvas: vec4f, clip_b
 pub(super) fn source(shader: Shader) -> String {
     if shader == Shader::Probe {
         return with_opacity(
-            include_str!("../../shaders/wgpu/probe.wgsl")
-                .replace("shape_kind: vec4u}", "shape_kind: vec4u, inherited: vec4f}"),
+            include_str!("../../shaders/wgpu/probe.wgsl").to_owned(),
             shader,
         );
     }
@@ -34,18 +33,8 @@ pub(super) fn source(shader: Shader) -> String {
         shader,
     )
 }
-fn with_opacity(source: String, shader: Shader) -> String {
-    let mut source = source.replace("@fragment fn fragment_main", "fn fragment_color");
-    // Entry point attributes belong only on the wrapper, not the ordinary helper.
-    source = source
-        .replace(
-            "fn fragment_color(i: Out) -> @location(0) vec4f",
-            "fn fragment_color(i: Out) -> vec4f",
-        )
-        .replace(
-            "fn fragment_color(@builtin(position) position: vec4f) -> @location(0) vec4f",
-            "fn fragment_color(position: vec4f) -> vec4f",
-        );
+fn with_opacity(mut source: String, shader: Shader) -> String {
+    // Shader bodies define fragment_color; only this wrapper is an entry point.
     let (argument, value) = if shader == Shader::Copper {
         ("@builtin(position) position: vec4f", "position")
     } else {

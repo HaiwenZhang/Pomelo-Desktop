@@ -386,7 +386,7 @@ fn decode_record_probe(
     let bytes = pomelo_import::source::read_path(source, options, &context)
         .map_err(|error| error.diagnostic().with_path(source))?;
     if input.source_size != bytes.len() as u64
-        || input.sha256 != format!("{:x}", Sha256::digest(&bytes))
+        || input.sha256 != hex::encode(Sha256::digest(&bytes))
     {
         return Err(
             Diagnostic::error("CLI_SOURCE_MISMATCH", Key::CliSourceMismatch).with_path(source),
@@ -520,7 +520,7 @@ fn scene_probe(
         kind: "metadata",
         stage: "scene",
         path: source,
-        sha256: format!("{:x}", Sha256::digest(database.source_bytes())),
+        sha256: hex::encode(Sha256::digest(database.source_bytes())),
         bytes: database.source_bytes().len(),
         version: database.header().version,
         encoding: database.encoding().tag(),
@@ -688,7 +688,7 @@ fn annotation_probe(
         schema_version: 1,
         stage: "annotations",
         path: source,
-        sha256: format!("{:x}", Sha256::digest(database.source_bytes())),
+        sha256: hex::encode(Sha256::digest(database.source_bytes())),
         bytes: database.source_bytes().len(),
         version: database.header().version,
         encoding: database.encoding().tag(),
@@ -779,7 +779,7 @@ fn connectivity_probe(
         schema_version: 1,
         stage: "connectivity",
         path: source,
-        sha256: format!("{:x}", Sha256::digest(database.source_bytes())),
+        sha256: hex::encode(Sha256::digest(database.source_bytes())),
         bytes: database.source_bytes().len(),
         version: database.header().version,
         encoding: database.encoding().tag(),
@@ -1238,7 +1238,7 @@ fn inspect_file(
             .map_err(|error| error.diagnostic())?;
         result.bytes = bytes.len() as u64;
         // Bind index evidence to the exact input, including the frozen case manifest.
-        result.sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
+        result.sha256 = Some(hex::encode(Sha256::digest(&bytes)));
         let index = BrdIndex::read(&bytes, options, &IndexLimits::default(), &context)
             .map_err(|error| error.diagnostic())?;
         result.encoding = index.encoding.tag();
@@ -1277,7 +1277,7 @@ fn inspect_file(
             }
             digest.update(&buffer[..count]);
         }
-        result.sha256 = Some(format!("{:x}", digest.finalize()));
+        result.sha256 = Some(hex::encode(digest.finalize()));
     }
     result.header = Some(parsed.map_err(|error| error.diagnostic())?);
     Ok(())

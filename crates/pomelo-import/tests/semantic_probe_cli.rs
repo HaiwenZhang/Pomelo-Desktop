@@ -56,7 +56,7 @@ fn full_network_report_keeps_source_identity_and_does_not_claim_scene_validation
     let data: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
     assert_eq!(data["network"]["owners"], json!({"20":99}));
     assert_eq!(data["network"]["assignment_count"], 2);
-    assert_eq!(data["sha256"], format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(data["sha256"], hex::encode(Sha256::digest(&bytes)));
     assert_eq!(data["scene_validated"], false);
     assert_eq!(fs::read(&source).unwrap(), bytes);
 }
@@ -147,7 +147,7 @@ fn placement_warning_cli_preserves_source_offsets_and_translates_five_languages(
     bytes.extend(pin);
     bytes.extend([0; 4]);
     fs::write(&source, &bytes).unwrap();
-    fs::write(&request,serde_json::to_vec(&json!({"schema_version":1,"sha256":format!("{:x}",Sha256::digest(&bytes)),"source_size":bytes.len(),
+    fs::write(&request,serde_json::to_vec(&json!({"schema_version":1,"sha256":hex::encode(Sha256::digest(&bytes)),"source_size":bytes.len(),
         "spans":[{"offset":0x1200+24,"byte_length":72,"key":1,"record_type":45}]})).unwrap()).unwrap();
     let mut messages = std::collections::BTreeSet::new();
     let mut expected = None;

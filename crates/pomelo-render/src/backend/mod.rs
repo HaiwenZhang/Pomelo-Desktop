@@ -35,6 +35,11 @@ mod metal;
 
 #[cfg(all(target_os = "linux", feature = "native-gpu"))]
 mod wgpu;
+
+// WGSL validation is CPU-only and should catch Linux shader failures on every host.
+#[cfg(all(test, feature = "native-gpu", not(target_os = "linux")))]
+#[path = "wgpu/shaders.rs"]
+mod wgpu_shaders;
 #[cfg(feature = "native-gpu")]
 pub use common::{NativeGpuContext, NativeGpuRenderer};
 #[cfg(feature = "native-gpu")]

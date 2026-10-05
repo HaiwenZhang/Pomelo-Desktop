@@ -51,7 +51,7 @@ fn pad_probe_preserves_definition_and_warning_identity_while_translating_five_lo
     let report = dir.path().join("padstack.jsonl");
     let bytes = source();
     fs::write(&source_path, &bytes).unwrap();
-    fs::write(&request, serde_json::to_vec(&json!({"schema_version":1,"sha256":format!("{:x}",Sha256::digest(&bytes)),"source_size":bytes.len(),"spans":[
+    fs::write(&request, serde_json::to_vec(&json!({"schema_version":1,"sha256":hex::encode(Sha256::digest(&bytes)),"source_size":bytes.len(),"spans":[
         {"offset":START+24,"byte_length":STACK_SIZE,"key":42,"record_type":28},
         {"offset":START+24,"byte_length":40,"key":42,"record_type":28}
     ]})).unwrap()).unwrap();

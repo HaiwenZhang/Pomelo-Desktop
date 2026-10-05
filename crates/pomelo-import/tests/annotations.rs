@@ -150,7 +150,7 @@ fn scene_cli_journal_has_source_identity_all_rows_and_a_complete_marker_without_
     assert_eq!(rows[0]["kind"], "metadata");
     assert_eq!(
         rows[0]["sha256"],
-        format!("{:x}", Sha256::digest(db.source_bytes()))
+        hex::encode(Sha256::digest(db.source_bytes()))
     );
     assert_eq!(rows[0]["scene_validated"], false);
     assert_eq!(rows[0]["counts"]["segments"], 1);

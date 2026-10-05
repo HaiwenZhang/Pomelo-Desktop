@@ -380,6 +380,17 @@ pub struct BoardRenderer {
     drills: super::PadRenderer,
 }
 impl BoardRenderer {
+    // Only sampled by the opt-in profiler. Labels, custom pads and outlines have
+    // separate counters and are excluded from these four primary renderers.
+    fn primary_draw_calls(&self) -> [u64; 4] {
+        [
+            self.traces.statistics().draw_calls,
+            self.pads.statistics().draw_calls,
+            self.drills.statistics().draw_calls,
+            self.copper.telemetry.draw_calls.load(Ordering::Relaxed),
+        ]
+    }
+
     /// Bound offscreen trace/text caching while keeping visible chunks pinned.
     pub fn with_trace_residency(mut self, soft_bytes_per_source: usize) -> Self {
         self.traces = self.traces.with_residency(soft_bytes_per_source);
@@ -474,6 +485,7 @@ impl NativeGpuRenderer for BoardRenderer {
             .context("GPU_BOARD_PAYLOAD_INVALID")?;
         let timing = crate::frame_timing::begin();
         let mut category_us = [[0u64; 10]; 3];
+        let mut category_primary_draw_calls = [[[0u64; 4]; 10]; 3];
         self.copper.static_shapes_fill_solid = frame.display.static_shapes_fill_solid;
         // Defer copper uploads until this exact trace source is uploaded. Combined application
         // upload traffic remains <= 4 MiB/frame, including scene revisions and device recovery.
@@ -711,8 +723,16 @@ impl NativeGpuRenderer for BoardRenderer {
         use pomelo_core::display::{DisplayCategory as Category, LayerPrimitive};
         let mut base = frame.traces.base();
         base.opacity = frame.display.global_opacity;
+        let outline_calls = timing.map(|_| self.primary_draw_calls());
+        let outline_started = timing.map(|_| std::time::Instant::now());
         self.traces
             .draw_prepared(context, &base, TraceScope::Outline)?;
+        if let (Some(started), Some(before)) = (outline_started, outline_calls) {
+            category_us[0][Category::Outline as usize] = started.elapsed().as_micros() as u64;
+            let after = self.primary_draw_calls();
+            category_primary_draw_calls[0][Category::Outline as usize] =
+                std::array::from_fn(|index| after[index].saturating_sub(before[index]));
+        }
         let mut commands: Vec<_> = layers
             .iter()
             .copied()
@@ -760,6 +780,7 @@ impl NativeGpuRenderer for BoardRenderer {
                     continue;
                 }
                 traces.material_override = frame.display.appearance.material(layer, category);
+                let command_calls = timing.map(|_| self.primary_draw_calls());
                 let command_started = timing.map(|_| std::time::Instant::now());
                 // Allegro's shapes slider overrides global alpha for shape fill;
                 // ordinary geometry and labels use the independent global value.
@@ -1002,6 +1023,13 @@ impl NativeGpuRenderer for BoardRenderer {
                 if let Some(started) = command_started {
                     category_us[pass as usize][category as usize] +=
                         started.elapsed().as_micros() as u64;
+                    if let Some(before) = command_calls {
+                        let after = self.primary_draw_calls();
+                        for index in 0..4 {
+                            category_primary_draw_calls[pass as usize][category as usize][index] +=
+                                after[index].saturating_sub(before[index]);
+                        }
+                    }
                 }
             }
         }
@@ -1023,6 +1051,9 @@ impl NativeGpuRenderer for BoardRenderer {
                 "visible_layers": frame.layer_order.iter().filter(|&&id|frame.display.layer_visible(id)).map(|id|id.0).collect::<Vec<_>>(),
                 "category_order":["outline","drawing","zone","zone_outline","trace","bond_wire","text","pin","via","drill"],
                 "category_us": category_us,
+                "pass_order": ["base", "selection", "hover"],
+                "primary_renderer_order": ["trace", "pad", "drill", "copper"],
+                "category_primary_draw_calls": category_primary_draw_calls,
                 "trace_stats":self.traces.statistics(),
                 "pad_stats":self.pads.statistics(),
                 "drill_stats":self.drills.statistics(),

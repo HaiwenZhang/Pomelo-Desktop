@@ -5,7 +5,8 @@ struct Frame {
     shape_a: vec4f,
     shape_b: vec4f,
     shape_color: vec4f,
-    shape_kind: vec4u
+    shape_kind: vec4u,
+    inherited: vec4f
 }
 
 @group(0) @binding(0)
@@ -42,8 +43,7 @@ fn box_distance(p: vec2f, box: vec4f) -> f32 {
     return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0);
 }
 
-@fragment
-fn fragment_main(i: Out) -> @location(0) vec4f {
+fn fragment_color(i: Out) -> vec4f {
     let p = i.position.xy;
     if any(p < u.clip_bounds.xy) || any(p > u.clip_bounds.xy + u.clip_bounds.zw) {
         discard;

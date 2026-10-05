@@ -76,7 +76,7 @@ pub(crate) fn hlsl_library() -> String {
 }
 
 /// Palette generated from the same source used by the CPU and D3D11.
-#[cfg(all(feature = "native-gpu", target_os = "linux"))]
+#[cfg(all(feature = "native-gpu", any(target_os = "linux", test)))]
 pub(crate) fn wgsl_library() -> String {
     use std::fmt::Write as _;
     let mut source = format!("const pcb_net_colors = array<u32, {}>(", NET_COLORS.len());

@@ -35,8 +35,7 @@ fn vertex_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u3
     return o;
 }
 
-@fragment
-fn fragment_main(i: Out) -> @location(0) vec4f {
+fn fragment_color(i: Out) -> vec4f {
     // Compute derivatives before divergent clip branches.
     let dimensions = vec2f(textureDimensions(atlas));
     let dx = length(dpdx(i.uv) * dimensions);
