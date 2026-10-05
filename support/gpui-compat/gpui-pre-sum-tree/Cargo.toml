@@ -1,7 +1,7 @@
-# Package-name compatibility for GPUI Kit 0.7.0. All types come from the workspace fork.
+# Package-name compatibility for GPUI Kit 0.7.1. All types come from the workspace fork.
 [package]
 name = "gpui-pre-sum-tree"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
