@@ -2,6 +2,9 @@
 use std::ops::Range;
 
 const LEAF: usize = 8;
+// Offscreen gaps of one leaf cost less than another native draw submission.
+// Their quads clamp to degenerate viewport edges; source order is unchanged.
+const MAX_GAP: usize = LEAF;
 const EMPTY: [f64; 4] = [
     f64::INFINITY,
     f64::INFINITY,
@@ -61,7 +64,7 @@ impl PadRanges {
         let mut pending: Option<Range<usize>> = None;
         self.visit(1, 0..self.leaves * LEAF, &range, view, &mut |next| {
             if let Some(current) = &mut pending {
-                if current.end == next.start {
+                if next.start - current.end <= MAX_GAP {
                     current.end = next.end;
                     return Ok(());
                 }
@@ -112,6 +115,28 @@ fn include(bounds: &mut [f64; 4], value: [f64; 4]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_offscreen_leaf_gap_merges_but_larger_gaps_remain_culled() {
+        let values: Vec<_> = (0..64)
+            .map(|i| {
+                if i < 8 || (16..24).contains(&i) || (48..56).contains(&i) {
+                    [-0.5, -0.5, 0.5, 0.5]
+                } else {
+                    [100.0, 100.0, 101.0, 101.0]
+                }
+            })
+            .collect();
+        let ranges = PadRanges::build(values.into_iter()).unwrap();
+        let mut emitted = Vec::new();
+        ranges
+            .visible([-1.0, -1.0, 1.0, 1.0], 3..53, |range| {
+                emitted.push(range);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(emitted, [3..24, 48..53]);
+    }
 
     #[test]
     fn ranges_retain_all_intersections_and_source_order_at_partial_boundaries() {

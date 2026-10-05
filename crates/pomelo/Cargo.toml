@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+window-profiling = ["gpui/profiler", "pomelo-render/frame-profiling"]
+
 [dependencies]
 pomelo-core.workspace = true
 pomelo-import.workspace = true

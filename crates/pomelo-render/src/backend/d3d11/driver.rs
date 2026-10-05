@@ -27,7 +27,7 @@ use windows::{
             },
         },
     },
-    core::s,
+    core::{Interface, s},
 };
 
 pub(crate) struct Buffer {
@@ -54,6 +54,32 @@ struct StencilTarget {
     size: [u32; 2],
     view: ID3D11DepthStencilView,
 }
+struct OutputState {
+    targets: [Option<ID3D11RenderTargetView>; 1],
+    depth: Option<ID3D11DepthStencilView>,
+    state: Option<ID3D11DepthStencilState>,
+    reference: u32,
+}
+type BindingKey = (usize, bool, [i32; 4], StencilMode, bool, usize, usize);
+struct DrawState {
+    output: OutputState,
+    bindings: Option<BindingKey>,
+    vertices: Option<usize>,
+}
+pub(crate) struct DrawScope<'d, 'a> {
+    device: &'d Device<'a>,
+    owns: bool,
+}
+impl Drop for DrawScope<'_, '_> {
+    fn drop(&mut self) {
+        if self.owns {
+            self.device.batched.set(false);
+            if let Some(state) = self.device.draw_state.borrow_mut().take() {
+                self.device.restore_output(&state.output);
+            }
+        }
+    }
+}
 pub(crate) struct Device<'a> {
     raw: &'a ID3D11Device,
     pub(crate) context: &'a ID3D11DeviceContext,
@@ -61,6 +87,8 @@ pub(crate) struct Device<'a> {
     sample_count: u32,
     stencil: RefCell<Option<StencilTarget>>,
     active: Cell<bool>,
+    batched: Cell<bool>,
+    draw_state: RefCell<Option<DrawState>>,
 }
 impl<'a> Device<'a> {
     pub(crate) fn new(
@@ -75,6 +103,8 @@ impl<'a> Device<'a> {
             sample_count: 1,
             stencil: RefCell::new(None),
             active: Cell::new(false),
+            batched: Cell::new(false),
+            draw_state: RefCell::new(None),
         }
     }
     pub(super) fn from_paint(context: &gpui_windows::D3D11PaintContext<'a>) -> Self {
@@ -451,6 +481,41 @@ impl<'a> Device<'a> {
             previous,
         })
     }
+    /// Reuse bindings only until this native pipeline invocation returns to its caller.
+    /// Callers keep resources alive and issue all context draws through this device in the scope.
+    pub(crate) fn draw_scope(&self) -> DrawScope<'_, 'a> {
+        DrawScope {
+            device: self,
+            owns: !self.batched.replace(true),
+        }
+    }
+    fn capture_output(&self) -> OutputState {
+        let mut output = OutputState {
+            targets: [None],
+            depth: None,
+            state: None,
+            reference: 0,
+        };
+        // SAFETY: COM outputs retain the borrowed context's current attachments and depth state.
+        unsafe {
+            self.context
+                .OMGetRenderTargets(Some(&mut output.targets), Some(&mut output.depth));
+            self.context
+                .OMGetDepthStencilState(Some(&mut output.state), Some(&mut output.reference));
+        }
+        output
+    }
+    fn restore_output(&self, output: &OutputState) {
+        // SAFETY: retained COM resources remain alive through restoration, including error unwinding.
+        unsafe {
+            self.context.VSSetShaderResources(0, Some(&[None]));
+            self.context.PSSetShaderResources(0, Some(&[None]));
+            self.context
+                .OMSetRenderTargets(Some(&output.targets), output.depth.as_ref());
+            self.context
+                .OMSetDepthStencilState(output.state.as_ref(), output.reference);
+        }
+    }
     pub fn draw(&self, pipeline: &Pipeline, draw: Draw<'_>) -> anyhow::Result<()> {
         let Rect {
             left,
@@ -473,6 +538,41 @@ impl<'a> Device<'a> {
         } else {
             None
         };
+        let mut state = self.draw_state.borrow_mut();
+        if self.batched.get() && state.is_none() {
+            *state = Some(DrawState {
+                output: self.capture_output(),
+                bindings: None,
+                vertices: None,
+            });
+        }
+        let direct_output = state.is_none().then(|| self.capture_output());
+        let output = state
+            .as_ref()
+            .map(|state| &state.output)
+            .or(direct_output.as_ref())
+            .context("GPU_OUTPUT_STATE_MISSING")?;
+        let bindings = (
+            pipeline.uniforms.as_raw() as usize,
+            draw.indices.is_some(),
+            [left, top, right, bottom],
+            draw.stencil,
+            inherited,
+            draw.atlas.map_or(0, |atlas| atlas.view.as_raw() as usize),
+            draw.atlas
+                .map_or(0, |atlas| atlas.sampler.as_raw() as usize),
+        );
+        let bind = state
+            .as_ref()
+            .is_none_or(|state| state.bindings != Some(bindings));
+        let vertices = draw
+            .vertices
+            .view
+            .as_ref()
+            .map_or(0, |view| view.as_raw() as usize);
+        let bind_vertices = state
+            .as_ref()
+            .is_none_or(|state| state.vertices != Some(vertices));
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         // SAFETY: synchronous callback on the borrowed immediate context, checked uniform ABI and resources.
         unsafe {
@@ -494,61 +594,58 @@ impl<'a> Device<'a> {
                 16,
             );
             self.context.Unmap(&pipeline.uniforms, 0);
-            let mut targets = [None];
-            let mut previous_depth = None;
-            let mut previous_state = None;
-            let mut previous_reference = 0;
-            self.context
-                .OMGetRenderTargets(Some(&mut targets), Some(&mut previous_depth));
-            self.context
-                .OMGetDepthStencilState(Some(&mut previous_state), Some(&mut previous_reference));
-            self.context.OMSetRenderTargets(Some(&targets), stencil);
-            self.context.OMSetDepthStencilState(
-                &pipeline.states[&(draw.stencil, inherited)],
-                draw.stencil.state(inherited).2,
-            );
-            self.context.OMSetBlendState(
-                if draw.stencil.color() {
-                    &pipeline.blend
-                } else {
-                    &pipeline.no_color
-                },
-                None,
-                u32::MAX,
-            );
-            self.context.RSSetState(&pipeline.rasterizer);
-            self.context.RSSetScissorRects(Some(&[RECT {
-                left,
-                top,
-                right,
-                bottom,
-            }]));
-            self.context.IASetInputLayout(None);
-            self.context
-                .IASetPrimitiveTopology(if draw.indices.is_some() {
-                    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
-                } else {
-                    D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP
-                });
-            self.context.VSSetShader(
-                if draw.indices.is_some() {
-                    &pipeline.vertex
-                } else {
-                    pipeline.clear_vertex.as_ref().unwrap_or(&pipeline.vertex)
-                },
-                None,
-            );
-            self.context.PSSetShader(&pipeline.fragment, None);
-            self.context
-                .VSSetConstantBuffers(0, Some(&[Some(pipeline.uniforms.clone())]));
-            self.context
-                .PSSetConstantBuffers(0, Some(&[Some(pipeline.uniforms.clone())]));
-            self.context
-                .VSSetShaderResources(0, Some(std::slice::from_ref(&draw.vertices.view)));
-            self.context
-                .PSSetShaderResources(0, Some(&[draw.atlas.map(|atlas| atlas.view.clone())]));
-            self.context
-                .PSSetSamplers(0, Some(&[draw.atlas.map(|atlas| atlas.sampler.clone())]));
+            if bind {
+                self.context
+                    .OMSetRenderTargets(Some(&output.targets), stencil);
+                self.context.OMSetDepthStencilState(
+                    &pipeline.states[&(draw.stencil, inherited)],
+                    draw.stencil.state(inherited).2,
+                );
+                self.context.OMSetBlendState(
+                    if draw.stencil.color() {
+                        &pipeline.blend
+                    } else {
+                        &pipeline.no_color
+                    },
+                    None,
+                    u32::MAX,
+                );
+                self.context.RSSetState(&pipeline.rasterizer);
+                self.context.RSSetScissorRects(Some(&[RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                }]));
+                self.context.IASetInputLayout(None);
+                self.context
+                    .IASetPrimitiveTopology(if draw.indices.is_some() {
+                        D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
+                    } else {
+                        D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP
+                    });
+                self.context.VSSetShader(
+                    if draw.indices.is_some() {
+                        &pipeline.vertex
+                    } else {
+                        pipeline.clear_vertex.as_ref().unwrap_or(&pipeline.vertex)
+                    },
+                    None,
+                );
+                self.context.PSSetShader(&pipeline.fragment, None);
+                self.context
+                    .VSSetConstantBuffers(0, Some(&[Some(pipeline.uniforms.clone())]));
+                self.context
+                    .PSSetConstantBuffers(0, Some(&[Some(pipeline.uniforms.clone())]));
+                self.context
+                    .PSSetShaderResources(0, Some(&[draw.atlas.map(|atlas| atlas.view.clone())]));
+                self.context
+                    .PSSetSamplers(0, Some(&[draw.atlas.map(|atlas| atlas.sampler.clone())]));
+            }
+            if bind_vertices {
+                self.context
+                    .VSSetShaderResources(0, Some(std::slice::from_ref(&draw.vertices.view)));
+            }
             if let Some(indices) = draw.indices {
                 self.context
                     .IASetIndexBuffer(&indices.raw, DXGI_FORMAT_R32_UINT, 0);
@@ -557,13 +654,14 @@ impl<'a> Device<'a> {
                 self.context
                     .DrawInstanced(draw.count, draw.instances, draw.start, 0);
             }
-            self.context.VSSetShaderResources(0, Some(&[None]));
-            self.context.PSSetShaderResources(0, Some(&[None]));
-            self.context
-                .OMSetRenderTargets(Some(&targets), previous_depth.as_ref());
-            self.context
-                .OMSetDepthStencilState(previous_state.as_ref(), previous_reference);
+            if let Some(output) = direct_output.as_ref() {
+                self.restore_output(output);
+            }
             self.raw.GetDeviceRemovedReason()?;
+        }
+        if let Some(state) = state.as_mut() {
+            state.bindings = Some(bindings);
+            state.vertices = Some(vertices);
         }
         Ok(())
     }

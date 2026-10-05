@@ -33,21 +33,26 @@ struct Out {
 };
 Out pad_vertex(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID) {
     Pad pad = pads[batch.x + instance_id];
+    Out output = (Out)0;
+    output.position = float4(2, 2, 0, 1);
+    uint category = batch.z & 12u;
+    if ((batch.w == 2u && pad.ids.z != batch.y) ||
+        (category == 4u && pad.source.x != 0u) ||
+        (category == 8u && pad.source.x == 0u) ||
+        ((batch.z & 16u) != 0u && (pad.source.w & 4u) != 0u)) return output;
     float4 low = relative(pad.bounds_min), high = relative(pad.bounds_max);
     float2 limit = canvas.zw * 0.5 / view.x;
     float2 lo = clamp(low.xy + low.zw - 2.0 * viewport.z / view.x, -limit, limit);
     float2 hi = clamp(high.xy + high.zw + 2.0 * viewport.z / view.x, -limit, limit);
     float2 corner = float2(vertex_id & 1u, (vertex_id >> 1u) & 1u);
     float2 screen = canvas.xy + canvas.zw * 0.5 + lerp(lo, hi, corner) * float2(view.y,-1) * view.x;
-    Out output;
     output.position = float4(screen / viewport.xy * float2(2,-2) + float2(-1,1), 0, 1);
-    if (batch.w == 2u && pad.ids.z != batch.y) output.position = float4(2, 2, 0, 1);
     output.center = relative(pad.center);
     output.shape = pad.shape; output.rotation = pad.rotation.xy; output.kind = pad.ids.w;
     output.source_flags = pad.source.w;
     float4 material = color;
     if (view.z != 0 && pad.ids.z != 0u) material.rgb = pcb_net_color(pad.ids.z);
-    output.tint = batch.w != 0u || (batch.z != 0u && pad.ids.z == batch.y) ? highlight : material;
+    output.tint = batch.w != 0u || ((batch.z & 1u) != 0u && pad.ids.z == batch.y) ? highlight : material;
     return output;
 }
 float4 fragment_color(Out input) {

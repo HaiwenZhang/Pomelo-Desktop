@@ -1,5 +1,69 @@
 use super::*;
 
+#[test]
+#[ignore = "requires a hardware D3D11 adapter; scoped binding restoration"]
+fn hardware_pad_draw_scope_restores_output_on_success_and_error() {
+    use crate::backend::common::pad::{Pipeline, UploadedPads};
+    let (device, context) = compositor_parity::device();
+    let gpu = compositor_parity::gpu_context(&device, &context);
+    let target = Target::new(&device);
+    let board = compositor_parity::fixture();
+    let pipeline = Pipeline::new(&gpu.device).unwrap();
+    let mut pads = UploadedPads::new(Arc::clone(board.pads.as_ref().unwrap())).unwrap();
+    let mut budget = usize::MAX;
+    while pads.uploaded() < pads.source.analytic.len() {
+        pads.upload_next(&gpu.device, &mut budget).unwrap();
+    }
+    let output = || {
+        let mut targets = [None];
+        let mut depth = None;
+        let mut state = None;
+        let mut reference = 0;
+        let mut vertex_views = [None];
+        let mut pixel_views = [None];
+        // SAFETY: test-owned context returns retained handles for equality checks.
+        unsafe {
+            context.OMGetRenderTargets(Some(&mut targets), Some(&mut depth));
+            context.OMGetDepthStencilState(Some(&mut state), Some(&mut reference));
+            context.VSGetShaderResources(0, Some(&mut vertex_views));
+            context.PSGetShaderResources(0, Some(&mut pixel_views));
+        }
+        (targets, depth, state, reference, vertex_views, pixel_views)
+    };
+    let mut sentinel = None;
+    // SAFETY: valid descriptor; sentinel disables depth but retains a nonzero reference.
+    unsafe {
+        device
+            .CreateDepthStencilState(
+                &D3D11_DEPTH_STENCIL_DESC {
+                    DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ZERO,
+                    DepthFunc: D3D11_COMPARISON_ALWAYS,
+                    ..Default::default()
+                },
+                Some(&mut sentinel),
+            )
+            .unwrap();
+    }
+    for fail in [false, true] {
+        target.bind(&context);
+        // SAFETY: live same-device sentinel used to detect restoration, including its reference.
+        unsafe {
+            context.OMSetDepthStencilState(sentinel.as_ref(), 37);
+        }
+        let before = output();
+        let result = (|| -> anyhow::Result<()> {
+            let _scope = gpu.device.draw_scope();
+            pipeline.draw(&gpu, &board.traces, &pads, None, None)?;
+            if fail {
+                anyhow::bail!("TEST_AFTER_DRAW_ERROR");
+            }
+            Ok(())
+        })();
+        assert_eq!(result.is_err(), fail);
+        assert_eq!(output(), before, "restore bindings after fail={fail}");
+    }
+}
+
 fn split_xy(x: f64, y: f64) -> [f32; 4] {
     let [x, dx] = crate::split_position(x);
     let [y, dy] = crate::split_position(y);
@@ -10,7 +74,7 @@ fn split_xy(x: f64, y: f64) -> [f32; 4] {
 #[ignore = "requires a hardware D3D11 adapter; ordered range culling pixel oracle"]
 fn hardware_pad_ranges_match_unculled_edges_residuals_and_overlays() {
     use crate::backend::OverlayPass;
-    use crate::backend::common::pad::{Pipeline, UploadedPads};
+    use crate::backend::common::pad::{Pipeline, UploadedPads, Visibility};
     use pomelo_core::selection::{SelectedObject, SelectionTarget};
     let (device, context) = compositor_parity::device();
     let gpu = compositor_parity::gpu_context(&device, &context);
@@ -23,7 +87,7 @@ fn hardware_pad_ranges_match_unculled_edges_residuals_and_overlays() {
         pads.analytic = (0..4097)
             .map(|i| {
                 let mut pad = template;
-                let local_x = if i < 64 {
+                let local_x = if i < 768 && (i / 8) % 3 != 1 {
                     [-6.9, -6.75, -6.6, 0.0, 6.6, 6.75, 6.9, 0.1][i % 8]
                 } else {
                     100.0 + (i % 200) as f64
@@ -96,7 +160,20 @@ fn hardware_pad_ranges_match_unculled_edges_residuals_and_overlays() {
                                     let expected = target.read(&context);
                                     target.bind(&context);
                                     let actual_draws = pipeline
-                                        .draw(&gpu, &frame, &culled, None, Some(&visible))
+                                        .draw_scoped(
+                                            &gpu,
+                                            &frame,
+                                            &culled,
+                                            None,
+                                            if pin_only {
+                                                Visibility::Pads {
+                                                    pin: true,
+                                                    show_backdrills: false,
+                                                }
+                                            } else {
+                                                Visibility::All
+                                            },
+                                        )
                                         .unwrap();
                                     assert_eq!(
                                         target.read(&context),
@@ -187,6 +264,11 @@ fn hardware_cached_pad_visibility_matches_predicates_across_display_and_upload_c
             cache.upload_next(&gpu.device, &mut budget).unwrap();
         }
         for state in 0..6 {
+            frame.color_mode = if state % 2 == 0 {
+                pomelo_core::display::ColorMode::Net
+            } else {
+                pomelo_core::display::ColorMode::Layer
+            };
             let settings = Arc::make_mut(&mut display);
             settings.hidden_layers.clear();
             settings.layer_primitives.clear();
@@ -245,12 +327,12 @@ fn hardware_cached_pad_visibility_matches_predicates_across_display_and_upload_c
                                 }
                             };
                             target.bind(&context);
-                            pipeline
+                            let reference_draws = pipeline
                                 .draw(&gpu, &frame, &reference, None, Some(&predicate))
                                 .unwrap();
                             let expected = target.read(&context);
                             target.bind(&context);
-                            pipeline
+                            let cached_draws = pipeline
                                 .draw_scoped(&gpu, &frame, &cached, None, scope)
                                 .unwrap();
                             assert_eq!(
@@ -258,6 +340,12 @@ fn hardware_cached_pad_visibility_matches_predicates_across_display_and_upload_c
                                 expected,
                                 "chunks={uploaded_chunks} state={state} zoom={zoom} net={net:?} pass={pass:?} filter={filter}"
                             );
+                            if pass == OverlayPass::Base && filter < 4 && zoom == 1.0 {
+                                assert!(
+                                    cached_draws < reference_draws,
+                                    "chunks={uploaded_chunks} state={state} net={net:?} filter={filter}"
+                                );
+                            }
                         }
                     }
                 }
@@ -325,7 +413,7 @@ fn hardware_pad_overlay_cache_matches_original_after_selection_and_hover_mutatio
         frame.highlighted_object = None;
         frame.highlighted_trace = None;
         frame.hovered_object = None;
-        for state in 0..19 {
+        for state in 0..22 {
             match state {
                 1 => {
                     frame.hover_selection = Some((
@@ -401,6 +489,21 @@ fn hardware_pad_overlay_cache_matches_original_after_selection_and_hover_mutatio
                         Some((SelectionTarget::Net(NetId(9)), Arc::new(BTreeSet::new())))
                 }
                 18 => frame.hovered_object = None,
+                19 => {
+                    frame.highlighted_net = Some((NetId(1), [1.0; 4]));
+                    frame.hover_selection =
+                        Some((SelectionTarget::Net(NetId(2)), Arc::new(BTreeSet::new())));
+                    frame.hovered_object = Some((SelectedObject::Via(ObjectId(8101)), [0.5; 4]));
+                }
+                20 => {
+                    frame.hover_selection =
+                        Some((SelectionTarget::Net(NetId(1)), Arc::new(BTreeSet::new())))
+                }
+                21 => {
+                    frame.hover_selection =
+                        Some((SelectionTarget::Net(NetId(2)), Arc::new(BTreeSet::new())));
+                    frame.highlighted_trace = Some((TraceSelection::Track(ObjectId(0)), [1.0; 4]));
+                }
                 _ => {}
             }
             for pass in [
@@ -433,7 +536,9 @@ fn hardware_pad_overlay_cache_matches_original_after_selection_and_hover_mutatio
                             expected,
                             "chunk={chunk} state={state} pass={pass:?} repeat={repeat} filter={filter}"
                         );
-                        if matches!(state, 0 | 13) && pass != OverlayPass::Selection && filter == 0
+                        if matches!(state, 0 | 13 | 19)
+                            && pass != OverlayPass::Selection
+                            && filter == 0
                         {
                             assert!(
                                 cached_draws < reference_draws,

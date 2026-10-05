@@ -81,6 +81,8 @@ pub fn run() -> ExitCode {
         })
         .detach();
         let result = open_window(crate::main_window::options(cx), cx, |window, cx| {
+            #[cfg(feature = "window-profiling")]
+            crate::window_timing::install(window, cx);
             let workbench = cx.new(|cx| {
                 Workbench::new(
                     startup.options.clone(),

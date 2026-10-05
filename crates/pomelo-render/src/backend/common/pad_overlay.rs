@@ -72,3 +72,41 @@ impl PartialEq for OverlayKey {
             }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(target: SelectionTarget) -> OverlayKey {
+        OverlayKey {
+            object: None,
+            net: None,
+            trace: None,
+            pins: None,
+            related: None,
+            hovered: Some(SelectedObject::Pin(ObjectId(7))),
+            hover: Some((target, Arc::new(BTreeSet::new()))),
+        }
+    }
+
+    #[test]
+    fn fresh_unused_hover_members_keep_cache_but_component_mutation_invalidates() {
+        for target in [
+            SelectionTarget::Net(NetId(3)),
+            SelectionTarget::Track(ObjectId(3)),
+            SelectionTarget::Object(SelectedObject::Pin(ObjectId(7))),
+        ] {
+            assert!(key(target) == key(target));
+            let original = key(target);
+            let mut moved = original.clone();
+            moved.hovered = Some(SelectedObject::Via(ObjectId(7)));
+            assert!(original != moved);
+        }
+        let original = key(SelectionTarget::Component(ObjectId(3)));
+        let mut changed = original.clone();
+        assert!(original == changed);
+        Arc::make_mut(&mut changed.hover.as_mut().unwrap().1)
+            .insert(SelectedObject::Pin(ObjectId(8)));
+        assert!(original != changed);
+    }
+}

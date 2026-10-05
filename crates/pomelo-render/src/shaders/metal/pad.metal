@@ -282,6 +282,14 @@ vertex vertex_mainOutput vertex_main(
     bool local_2 = {};
     uint _e6 = u.batch.x;
     Pad p_4 = pads[_e6 + iid];
+    uint category = u.batch.z & 12u;
+    if ((u.batch.w == 2u && p_4.ids.z != u.batch.y) ||
+        (category == 4u && p_4.source.x != 0u) ||
+        (category == 8u && p_4.source.x == 0u) ||
+        ((u.batch.z & 16u) != 0u && (p_4.source.w & 4u) != 0u)) {
+        o.position = metal::float4(2.0, 2.0, 0.0, 1.0);
+        return vertex_mainOutput { o.position, o.center, o.shape, o.rotation, o.kind, o.tint, o.source_flags };
+    }
     metal::float4 _e11 = relative(p_4.bounds_min, u);
     metal::float4 _e13 = relative(p_4.bounds_max, u);
     metal::float4 _e16 = u.canvas;
@@ -300,9 +308,6 @@ vertex vertex_mainOutput vertex_main(
     float _e87 = u.view.x;
     metal::float4 _e90 = screen_position((_e66.xy + (_e70.zw * 0.5)) + ((metal::mix(lo, hi, _e75) * metal::float2(_e80, -1.0)) * _e87), u);
     o.position = _e90;
-    if (u.batch.w == 2u && p_4.ids.z != u.batch.y) {
-        o.position = metal::float4(2.0, 2.0, 0.0, 1.0);
-    }
     metal::float4 _e93 = relative(p_4.center, u);
     o.center = _e93;
     o.shape = p_4.shape;
@@ -328,7 +333,7 @@ vertex vertex_mainOutput vertex_main(
     uint _e137 = u.batch.w;
     if (!((_e137 != 0u))) {
         uint _e146 = u.batch.z;
-        if (_e146 != 0u) {
+        if ((_e146 & 1u) != 0u) {
             uint _e156 = u.batch.y;
             local_2 = p_4.ids.z == _e156;
         } else {

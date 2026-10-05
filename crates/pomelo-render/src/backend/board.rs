@@ -104,8 +104,14 @@ impl<S: InstanceSource> Clone for TraceFrame<S> {
 impl<S: InstanceSource> TraceFrame<S> {
     /// A single selected net can be tested per instance by the pad vertex shader.
     pub(super) fn selected_net_only(&self) -> Option<pomelo_core::model::NetId> {
-        if self.pass != OverlayPass::Selection
-            || self.highlighted_object.is_some()
+        (self.pass == OverlayPass::Selection)
+            .then(|| self.sole_selected_net())
+            .flatten()
+    }
+
+    /// The sole selection predicate is a connected network, independent of overlay pass.
+    pub(super) fn sole_selected_net(&self) -> Option<pomelo_core::model::NetId> {
+        if self.highlighted_object.is_some()
             || self.highlighted_trace.is_some()
             || self
                 .highlighted_objects

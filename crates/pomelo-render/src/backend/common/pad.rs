@@ -269,6 +269,7 @@ impl UploadedPads {
                     ]
                 },
             ))?;
+            let index = PadIndex::build(&self.source.analytic[start..start + count])?;
             bytes += data.len() as u64;
             *budget -= data.len();
             self.chunks.push(Chunk {
@@ -276,7 +277,7 @@ impl UploadedPads {
                 count,
                 buffer,
                 ranges,
-                index: PadIndex::build(&self.source.analytic[start..start + count])?,
+                index,
                 pad_visibility: RefCell::new([None, None, None, None]),
                 drill_visibility: RefCell::new(None),
                 overlay_visibility: RefCell::new([None, None]),
@@ -335,6 +336,10 @@ impl Pipeline {
         layer: Option<LayerId>,
         visibility: Visibility<'_>,
     ) -> anyhow::Result<u64> {
+        #[cfg(all(target_os = "windows", not(test)))]
+        let _draw_scope = context.device.draw_scope();
+        #[cfg(all(target_os = "windows", test))]
+        let _draw_scope = (!cache.legacy_visibility).then(|| context.device.draw_scope());
         let bounds = context.bounds;
         let width = bounds.size.width.0;
         let height = bounds.size.height.0;
@@ -459,6 +464,12 @@ impl Pipeline {
                 if start >= end {
                     continue;
                 }
+                if !legacy
+                    && let Visibility::Pads { pin, .. } = visibility
+                    && !chunk.index.contains_category(pin)
+                {
+                    continue;
+                }
                 let summary =
                     selected_net.map(|(net, hovered)| chunk.selected_net_summary(net.0, hovered));
                 if summary.is_some_and(|summary| summary.count == 0 && !summary.extra_hover) {
@@ -470,6 +481,24 @@ impl Pipeline {
                     !summary.extra_hover && summary.count >= 128 && summary.runs >= 32
                 });
                 let cached_overlay = overlay_key.as_ref().filter(|_| shader_net.is_none());
+                // Typed pad visibility can reject whole quads without splitting
+                // alternating Pin/Via instances into individual CPU submissions.
+                // Keep the exact CPU path when per-object base colors differ.
+                let shader_visibility = !legacy
+                    && (uniform_base || shader_net.is_some() || cached_overlay.is_some())
+                    && matches!(visibility, Visibility::Pads { .. });
+                uniforms.batch[2] &= 1;
+                if shader_visibility
+                    && let Visibility::Pads {
+                        pin,
+                        show_backdrills,
+                    } = visibility
+                {
+                    // Bit 0 remains base net highlighting; bits 2/3 select
+                    // Pin/Via, and bit 4 suppresses replaced backdrill pads.
+                    uniforms.batch[2] |= if pin { 4 } else { 8 };
+                    uniforms.batch[2] |= u32::from(show_backdrills) * 16;
+                }
                 let magnitude = chunk
                     .ranges
                     .coordinate_magnitude()
@@ -550,8 +579,14 @@ impl Pipeline {
                 };
                 let range = start - chunk.start..end - chunk.start;
                 let mut visible_range = |range| {
-                    let mut visible = |range| {
-                        chunk.visible(&cache.source, visibility, range, legacy, &mut draw_range)
+                    let mut visible = |range: std::ops::Range<usize>| {
+                        // Short camera leaves are cheaper to filter on the CPU;
+                        // streaming them doubles vertex work for little saving.
+                        if shader_visibility && range.len() >= 128 {
+                            draw_range(range)
+                        } else {
+                            chunk.visible(&cache.source, visibility, range, legacy, &mut draw_range)
+                        }
                     };
                     if let Some(key) = cached_overlay {
                         chunk.overlay(&cache.source, frame, key, range, visible)
@@ -587,20 +622,30 @@ fn object(instance: &PadInstance) -> SelectedObject {
     }
 }
 
-fn overlay_net(frame: &TraceFrame) -> Option<(pomelo_core::model::NetId, Option<SelectedObject>)> {
+pub(super) fn overlay_net<S: super::trace::InstanceSource>(
+    frame: &TraceFrame<S>,
+) -> Option<(pomelo_core::model::NetId, Option<SelectedObject>)> {
     if let Some(net) = frame.selected_net_only() {
         return Some((net, None));
     }
     if !matches!(
         frame.pass,
         board::OverlayPass::Hover | board::OverlayPass::GroupHover
-    ) || frame.has_overlay(board::OverlayPass::Selection)
-    {
+    ) {
         return None;
     }
     let (SelectionTarget::Net(net), _) = frame.hover_selection.as_ref()? else {
         return None;
     };
+    // Distinct sole selected/hovered nets cannot share an instance. Other selection
+    // predicates and same-net exclusion still require exact cached membership.
+    if frame.has_overlay(board::OverlayPass::Selection)
+        && frame
+            .sole_selected_net()
+            .is_none_or(|selected| selected == *net)
+    {
+        return None;
+    }
     // A pointer object is usually in the hovered net. Each chunk verifies that
     // implication before using net-only GPU rejection; extra objects retain the
     // exact cached membership path, including objects on unconnected nets.

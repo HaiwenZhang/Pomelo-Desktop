@@ -66,6 +66,7 @@ pub struct BoardViewport {
     )>,
     hovered: Option<(pomelo_core::selection::SelectedObject, PickContext)>,
     hover_notice: Option<Message>,
+    hover_tooltip_ready: bool,
     hover_cancel: pomelo_core::task::CancellationToken,
     hover_task: Option<Task<()>>,
     last_pick: Option<PickContext>,
@@ -173,6 +174,7 @@ fn snapshot_selection(
     })
 }
 
+#[derive(Clone)]
 struct PickContext {
     local: pomelo_core::model::Point,
     camera: pomelo_core::interaction::Camera,
@@ -434,6 +436,7 @@ impl BoardViewport {
             hovered: None,
             hover_selection: None,
             hover_notice: None,
+            hover_tooltip_ready: false,
             hover_cancel: pomelo_core::task::CancellationToken::default(),
             hover_task: None,
             pick_filter: pomelo_core::picking::PickFilter::all(),
@@ -1118,6 +1121,7 @@ impl BoardViewport {
         self.hover_task = None;
         self.hovered = None;
         self.hover_notice = None;
+        self.hover_tooltip_ready = false;
     }
 
     fn hover_at(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
@@ -1140,6 +1144,7 @@ impl BoardViewport {
         };
         self.hover_cancel.cancel();
         self.hover_cancel = pomelo_core::task::CancellationToken::default();
+        self.hover_tooltip_ready = false;
         let cancel = self.hover_cancel.clone();
         let worker_cancel = cancel.clone();
         let index = Arc::clone(&self.picking);
@@ -1155,9 +1160,16 @@ impl BoardViewport {
             mode: self.selection_mode,
         };
         let mode = self.selection_mode;
-        let delay = cx
+        let tooltip_context = context.clone();
+        let hover_started = pomelo_render::frame_timing::begin();
+        // Coalesce rapid pointer events for one frame; detailed information
+        // retains its longer delay without holding back the geometry preview.
+        let tooltip_delay = cx
             .background_executor()
             .timer(std::time::Duration::from_millis(500));
+        let delay = cx
+            .background_executor()
+            .timer(std::time::Duration::from_millis(16));
         let worker = cx.background_spawn(async move {
             delay.await;
             if worker_cancel.is_cancelled() {
@@ -1189,7 +1201,7 @@ impl BoardViewport {
         });
         self.hover_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = worker.await;
-            let _ = this.update_in(cx, |this, _, cx| {
+            let published = this.update_in(cx, |this, _, cx| {
                 if cancel.is_cancelled()
                     || this.pan_tool
                     || this.pointer_gesture.is_some()
@@ -1201,7 +1213,7 @@ impl BoardViewport {
                         this.selection_mode,
                     )
                 {
-                    return;
+                    return false;
                 }
                 this.hover_notice = None;
                 match result {
@@ -1211,7 +1223,7 @@ impl BoardViewport {
                             .map(|(_, target, members)| (*target, Arc::clone(members)));
                         this.hovered = hit.map(|(object, _, _)| (object, context));
                     }
-                    Err(pomelo_core::geometry::PathError::Cancelled) => return,
+                    Err(pomelo_core::geometry::PathError::Cancelled) => return false,
                     Err(error) => {
                         this.hovered = None;
                         this.hover_selection = None;
@@ -1223,6 +1235,39 @@ impl BoardViewport {
                         });
                     }
                 }
+                pomelo_render::frame_timing::record("hover_applied", hover_started, || {
+                    serde_json::json!({
+                        "object":this.hovered.as_ref().map(|(object, _)| format!("{object:?}")),
+                        "camera":this.navigation.camera(),
+                    })
+                });
+                cx.notify();
+                this.hovered.is_some() || this.hover_notice.is_some()
+            });
+            if !matches!(published, Ok(true)) {
+                return;
+            }
+            tooltip_delay.await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                if cancel.is_cancelled()
+                    || this.pan_tool
+                    || this.pointer_gesture.is_some()
+                    || this.pick_filter != filter
+                    || !tooltip_context.matches_view(
+                        this.navigation.camera(),
+                        this.navigation.size(),
+                        &this.display,
+                        this.selection_mode,
+                    )
+                {
+                    return;
+                }
+                this.hover_tooltip_ready = true;
+                pomelo_render::frame_timing::record("hover_tooltip_ready", hover_started, || {
+                    serde_json::json!({
+                        "object":this.hovered.as_ref().map(|(object, _)| format!("{object:?}")),
+                    })
+                });
                 cx.notify();
             });
         }));
@@ -3770,6 +3815,7 @@ impl Render for BoardViewport {
                     ),
             );
         let hover_text: SharedString = if let Some((object, context)) = &self.hovered
+            && self.hover_tooltip_ready
             && context.matches_view(
                 self.navigation.camera(),
                 self.navigation.size(),
@@ -3783,7 +3829,9 @@ impl Render for BoardViewport {
                 .arg("id", id)
                 .display(locale)
                 .into()
-        } else if let Some(message) = &self.hover_notice {
+        } else if let Some(message) = &self.hover_notice
+            && self.hover_tooltip_ready
+        {
             message.display(locale).into()
         } else {
             SharedString::default()

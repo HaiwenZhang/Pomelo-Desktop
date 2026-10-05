@@ -3,6 +3,7 @@ pub use super::super::instances::InstanceSource;
 use super::super::{TraceFrame, board};
 use super::Rect;
 use super::driver::{Buffer, Draw, Pipeline as GpuPipeline, StencilMode};
+use super::net_runs::NetRuns;
 use super::pad_overlay::OverlayKey;
 use super::pad_visibility::Accepted;
 use super::{Device, NativeGpuContext};
@@ -19,18 +20,24 @@ struct Chunk {
     start: usize,
     count: usize,
     buffer: Buffer,
+    nets: NetRuns,
 }
 struct ChunkView<'a> {
     start: usize,
     count: usize,
     buffer: &'a Buffer,
+    nets: &'a NetRuns,
+}
+struct IndexedBuffer {
+    buffer: Buffer,
+    nets: NetRuns,
 }
 pub(crate) struct UploadedTracks<S: InstanceSource = PreparedTracks> {
     pub source: Arc<S>,
     chunks: Vec<Chunk>,
     uploaded: usize,
     lifetime_bytes: u64,
-    spatial: Option<crate::scene::residency::ResidencyCache<Buffer>>,
+    spatial: Option<crate::scene::residency::ResidencyCache<IndexedBuffer>>,
     overlays: RefCell<[Option<(OverlayKey, Accepted)>; 2]>,
     #[cfg(test)]
     pub legacy_overlays: bool,
@@ -102,13 +109,15 @@ impl<S: InstanceSource> UploadedTracks<S> {
                 start: chunk.start,
                 count: chunk.count,
                 buffer: &chunk.buffer,
+                nets: &chunk.nets,
             })
             .chain(self.spatial.iter().flat_map(|cache| {
                 cache.slots.iter().filter_map(|slot| {
-                    slot.payload.as_ref().map(|buffer| ChunkView {
+                    slot.payload.as_ref().map(|payload| ChunkView {
                         start: slot.range.start,
                         count: slot.range.len(),
-                        buffer,
+                        buffer: &payload.buffer,
+                        nets: &payload.nets,
                     })
                 })
             }))
@@ -146,7 +155,7 @@ impl<S: InstanceSource> UploadedTracks<S> {
             pending.extend(cache.pending(max_chunks));
             for index in pending {
                 let range = cache.slots[index].range.clone();
-                let data = bytemuck::cast_slice(&self.source.instances()[range]);
+                let data = bytemuck::cast_slice(&self.source.instances()[range.clone()]);
                 if data.len() > *budget {
                     break;
                 }
@@ -154,7 +163,8 @@ impl<S: InstanceSource> UploadedTracks<S> {
                     continue;
                 }
                 let buffer = device.structured_buffer(data, size_of::<S::Instance>())?;
-                cache.slots[index].payload = Some(buffer);
+                let nets = NetRuns::build(self.source.as_ref(), range)?;
+                cache.slots[index].payload = Some(IndexedBuffer { buffer, nets });
                 *budget -= data.len();
                 bytes += data.len() as u64;
                 self.lifetime_bytes += data.len() as u64;
@@ -172,6 +182,7 @@ impl<S: InstanceSource> UploadedTracks<S> {
                 break;
             }
             let buffer = device.structured_buffer(data, size_of::<S::Instance>())?;
+            let nets = NetRuns::build(self.source.as_ref(), start..start + count)?;
             bytes += data.len() as u64;
             self.lifetime_bytes += data.len() as u64;
             *budget -= data.len();
@@ -179,6 +190,7 @@ impl<S: InstanceSource> UploadedTracks<S> {
                 start,
                 count,
                 buffer,
+                nets,
             });
             self.uploaded += count;
         }
@@ -368,6 +380,7 @@ impl Pipeline {
         let legacy = cache.legacy_overlays;
         let overlay_key =
             (!legacy && frame.pass != board::OverlayPass::Base).then(|| OverlayKey::new(frame));
+        let net_overlay = (!legacy).then(|| super::pad::overlay_net(frame)).flatten();
         for batch in cache.source.batches() {
             let selected = match scope {
                 board::TraceScope::All => true,
@@ -517,7 +530,11 @@ impl Pipeline {
                     }
                     Ok(())
                 };
-                if let Some(key) = overlay_key.as_ref() {
+                if let Some((net, pointer)) = net_overlay
+                    && pointer.is_none_or(|object| !chunk.nets.may_contain(object))
+                {
+                    chunk.nets.visible(net.0, start..end, draw_range)?;
+                } else if let Some(key) = overlay_key.as_ref() {
                     cache.overlay(frame, key, start..end, draw_range)?;
                 } else {
                     draw_range(start..end)?;

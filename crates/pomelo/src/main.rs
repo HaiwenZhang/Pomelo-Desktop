@@ -9,6 +9,8 @@ mod main_window;
 mod services;
 mod settings;
 mod welcome;
+#[cfg(feature = "window-profiling")]
+mod window_timing;
 mod workbench;
 use services::{prefs, recent, startup};
 mod i18n;
