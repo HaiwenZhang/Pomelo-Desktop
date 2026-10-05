@@ -10,6 +10,16 @@
 #ifndef OutputDir
   #error OutputDir is required
 #endif
+#ifndef AppArch
+  #define AppArch "x64"
+#endif
+#if AppArch == "arm64"
+  #define AllowedArchitectures "arm64"
+#elif AppArch == "x64"
+  #define AllowedArchitectures "x64compatible"
+#else
+  #error AppArch must be x64 or arm64
+#endif
 
 [Setup]
 AppId={{F60DEFB7-4A95-4EB2-B561-1F776C0993A5}
@@ -18,11 +28,11 @@ AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\Pomelo
 DefaultGroupName=Pomelo
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#AllowedArchitectures}
+ArchitecturesInstallIn64BitMode={#AllowedArchitectures}
 MinVersion=10.0
 OutputDir={#OutputDir}
-OutputBaseFilename=Pomelo-{#AppVersion}-windows-x64-setup
+OutputBaseFilename=Pomelo-{#AppVersion}-windows-{#AppArch}-setup
 SetupIconFile={#IconFile}
 UninstallDisplayIcon={app}\pomelo.exe
 LicenseFile=..\..\LICENSE
