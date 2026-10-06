@@ -9,6 +9,7 @@ set "OUTPUT_DIR=%ROOT%\dist"
 set "STAGING="
 set "POMELO_PACKAGE_ICON="
 set "APP_VERSION="
+set "ARCH=x64"
 set "TARGET_DIR=%ROOT%\target"
 if defined CARGO_TARGET_DIR for %%I in ("%CARGO_TARGET_DIR%") do set "TARGET_DIR=%%~fI"
 
@@ -17,11 +18,19 @@ if "%~1"=="" goto prepare
 if /i "%~1"=="--help" goto help
 if /i "%~1"=="-h" goto help
 if /i "%~1"=="--offline" goto offline
+if /i "%~1"=="--arch" goto arch_argument
 if /i "%~1"=="--iscc" goto iscc_argument
 if /i "%~1"=="--toolchain" goto toolchain_argument
 if /i "%~1"=="--output-dir" goto output_argument
 echo Unknown option: %~1 1>&2
 goto failed
+
+:arch_argument
+if "%~2"=="" goto missing_value
+set "ARCH=%~2"
+shift
+shift
+goto arguments
 
 :offline
 set "OFFLINE=--offline"
@@ -54,6 +63,14 @@ echo Missing value for %~1. 1>&2
 goto failed
 
 :prepare
+if "%ARCH%"=="x64" (
+    set "TARGET=x86_64-pc-windows-msvc"
+) else if "%ARCH%"=="arm64" (
+    set "TARGET=aarch64-pc-windows-msvc"
+) else (
+    echo Architecture must be x64 or arm64. 1>&2
+    goto failed
+)
 where cargo.exe >nul 2>&1
 if errorlevel 1 (
     echo Cargo was not found in PATH. Install Rust and the MSVC build tools. 1>&2
@@ -61,6 +78,7 @@ if errorlevel 1 (
 )
 if defined ISCC goto check_iscc
 for /f "delims=" %%I in ('where ISCC.exe 2^>nul') do if not defined ISCC set "ISCC=%%I"
+if not defined ISCC if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
 if not defined ISCC if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if not defined ISCC if exist "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" set "ISCC=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"
 
@@ -86,9 +104,9 @@ mkdir "%STAGING%"
 if errorlevel 1 goto failed
 rem A unique path makes Cargo regenerate and export the current SVG icon.
 set "POMELO_PACKAGE_ICON=%STAGING%\pomelo.ico"
-cargo %TOOLCHAIN% build -p pomelo --release --locked --target x86_64-pc-windows-msvc --target-dir "%TARGET_DIR%" %OFFLINE%
+cargo %TOOLCHAIN% build -p pomelo --release --locked --target %TARGET% --target-dir "%TARGET_DIR%" %OFFLINE%
 if errorlevel 1 goto failed
-set "BUILD_DIR=%TARGET_DIR%\x86_64-pc-windows-msvc\release"
+set "BUILD_DIR=%TARGET_DIR%\%TARGET%\release"
 if not exist "%BUILD_DIR%\pomelo.exe" (
     echo Cargo did not produce pomelo.exe. 1>&2
     goto failed
@@ -97,9 +115,9 @@ if not exist "%POMELO_PACKAGE_ICON%" (
     echo Cargo did not export the installer icon. 1>&2
     goto failed
 )
-"%ISCC%" "/DAppVersion=%APP_VERSION%" "/DBuildDir=%BUILD_DIR%" "/DIconFile=%POMELO_PACKAGE_ICON%" "/DOutputDir=%OUTPUT_DIR%" "%ROOT%\scripts\windows\pomelo.iss"
+"%ISCC%" "/DAppVersion=%APP_VERSION%" "/DAppArch=%ARCH%" "/DBuildDir=%BUILD_DIR%" "/DIconFile=%POMELO_PACKAGE_ICON%" "/DOutputDir=%OUTPUT_DIR%" "%ROOT%\scripts\windows\pomelo.iss"
 if errorlevel 1 goto failed
-echo Installer: "%OUTPUT_DIR%\Pomelo-%APP_VERSION%-windows-x64-setup.exe"
+echo Installer: "%OUTPUT_DIR%\Pomelo-%APP_VERSION%-windows-%ARCH%-setup.exe"
 set "EXIT_CODE=0"
 goto cleanup
 
@@ -108,8 +126,9 @@ echo Install Inno Setup 6 or pass --iscc with the path to ISCC.exe. 1>&2
 goto failed
 
 :help
-echo Usage: scripts\build-windows.bat [--iscc PATH] [--toolchain NAME] [--offline] [--output-dir PATH]
+echo Usage: scripts\build-windows.bat [--arch x64^|arm64] [--iscc PATH] [--toolchain NAME] [--offline] [--output-dir PATH]
 echo Requires Rust, MSVC build tools, the Windows SDK, and Inno Setup 6.
+echo Architecture defaults to x64. The Rust target must be installed.
 echo The installer is written to dist by default. CARGO_TARGET_DIR is supported.
 set "EXIT_CODE=0"
 goto cleanup

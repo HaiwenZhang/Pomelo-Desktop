@@ -59,6 +59,10 @@ impl<'a> Device<'a> {
             size: data.len(),
         })
     }
+    /// Maximum geometry buffer allocation supported by the Metal device.
+    pub fn buffer_limit(&self, _: bool) -> usize {
+        self.raw.max_buffer_length() as usize
+    }
     pub fn buffer_empty(&self, size: usize, _: bool) -> anyhow::Result<Buffer> {
         ensure!(size != 0, "GPU_BUFFER_EMPTY");
         Ok(Buffer {

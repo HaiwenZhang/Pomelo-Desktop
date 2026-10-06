@@ -48,10 +48,23 @@ impl<'a> Device<'a> {
             active: Cell::new(false),
         }
     }
+    /// Maximum geometry allocation that can also be bound for drawing.
+    pub fn buffer_limit(&self, indices: bool) -> usize {
+        let limits = self.raw.limits();
+        let limit = if indices {
+            limits.max_buffer_size
+        } else {
+            limits
+                .max_buffer_size
+                .min(limits.max_storage_buffer_binding_size)
+        };
+        usize::try_from(limit).unwrap_or(usize::MAX)
+    }
     pub fn buffer_empty(&self, size: usize, indices: bool) -> anyhow::Result<Buffer> {
         ensure!(
-            size > 0 && size as u64 <= self.raw.limits().max_buffer_size,
-            "GPU_BUFFER_SIZE"
+            size > 0 && size <= self.buffer_limit(indices),
+            "GPU_BUFFER_SIZE: requested {size} bytes, limit {} bytes (indices={indices})",
+            self.buffer_limit(indices)
         );
         let raw = self.raw.create_buffer(&BufferDescriptor {
             label: Some("PCB geometry"),
@@ -71,6 +84,12 @@ impl<'a> Device<'a> {
     }
     pub fn buffer(&self, data: &[u8], indices: bool) -> anyhow::Result<Buffer> {
         ensure!(!data.is_empty(), "GPU_BUFFER_EMPTY");
+        ensure!(
+            data.len() <= self.buffer_limit(indices),
+            "GPU_BUFFER_SIZE: requested {} bytes, limit {} bytes (indices={indices})",
+            data.len(),
+            self.buffer_limit(indices)
+        );
         let raw = self.raw.create_buffer(&BufferDescriptor {
             label: Some("PCB immutable geometry"),
             size: data.len() as u64,
@@ -469,3 +488,7 @@ impl<'a> Device<'a> {
 #[cfg(test)]
 #[path = "../../../tests/unit/backend/wgpu/pixels.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/backend/wgpu/resources.rs"]
+mod resource_tests;

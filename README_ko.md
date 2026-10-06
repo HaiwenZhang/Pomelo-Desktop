@@ -11,6 +11,8 @@
 
 <p align="center"><a href="README.md">English</a> · <a href="README_zh-CN.md">简体中文</a> · <a href="README_zh-TW.md">繁體中文</a> · <a href="README_ja.md">日本語</a> · 한국어</p>
 
+<p align="center"><a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases">릴리스 다운로드</a></p>
+
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows, macOS, Linux">
   <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI_Kit-58752c" alt="Rust + GPUI Kit">
@@ -90,6 +92,7 @@ cargo run -p pomelo-import --bin pcb_inspect --locked -- --help
 | 플랫폼 / 아키텍처 | 형식 | 명령 |
 | --- | --- | --- |
 | Windows x64 | `.exe` | `scripts\build-windows.bat` |
+| Windows ARM64 | `.exe` | `scripts\build-windows.bat --arch arm64` |
 | macOS arm64 / x64 | `.dmg`, `.app.zip` | `scripts/build-macos.sh` |
 | Ubuntu 24.04+ amd64 / arm64 | `.deb`, `.tar.gz` | `scripts/build-ubuntu.sh` |
 

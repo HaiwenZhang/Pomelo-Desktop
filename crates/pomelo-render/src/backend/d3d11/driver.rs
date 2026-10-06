@@ -118,6 +118,10 @@ impl<'a> Device<'a> {
     pub fn buffer(&self, data: &[u8], index: bool) -> anyhow::Result<Buffer> {
         self.create_buffer(data.len(), Some(data), index, 16)
     }
+    /// Maximum byte count representable by a D3D11 buffer descriptor.
+    pub fn buffer_limit(&self, _: bool) -> usize {
+        u32::MAX as usize
+    }
     pub fn buffer_empty(&self, size: usize, index: bool) -> anyhow::Result<Buffer> {
         self.create_buffer(size, None, index, 16)
     }

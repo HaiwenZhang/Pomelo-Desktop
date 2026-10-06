@@ -337,7 +337,6 @@ fn metal_empty_curve_override_preserves_background_without_missing_buffers() {
                 annotation_owners: None,
                 overrides: Some(&overrides),
                 static_shapes_fill_solid: false,
-                network_selection: None,
             },
         )
         .unwrap();
