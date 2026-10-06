@@ -1,6 +1,6 @@
 use pomelo_import::{
     ImportError, TextEncoding,
-    allegro::header::{BrdHeader, HEADER_BYTES, resolve_version},
+    formats::allegro::header::{BrdHeader, HEADER_BYTES, resolve_version},
 };
 
 fn write(bytes: &mut [u8], offset: usize, value: u32) {

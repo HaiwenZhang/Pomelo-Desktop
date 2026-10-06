@@ -348,7 +348,7 @@ impl RecentStore {
         if entries.len() > RECENT_LIMIT
             || entries.iter().enumerate().any(|(index, entry)| {
                 !entry.path.is_absolute()
-                    || entry.format != "allegro"
+                    || pomelo_import::formats::BoardFormat::from_tag(&entry.format).is_none()
                     || entry
                         .presentation
                         .as_ref()
@@ -1060,6 +1060,33 @@ mod tests {
             Some("A".repeat(crate::services::preview::MAX_ENCODED_BYTES + 1));
         assert!(store.save(vec![enriched]).is_err());
         assert_eq!(fs::read(&store.0.path).unwrap(), original);
+    }
+
+    #[test]
+    fn recent_history_preserves_all_supported_board_formats() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = RecentStore(LanguageStore {
+            path: directory.path().join("recent.json"),
+        });
+        let entries: Vec<_> = ["allegro", "altium", "odb", "pads", "kicad", "hfss"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, format)| {
+                let mut entry = recent_entry(directory.path().join(format!("board-{i}")), i as u64);
+                entry.format = format.into();
+                entry
+            })
+            .collect();
+        store.save(entries).unwrap();
+        assert_eq!(
+            store
+                .load()
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.format)
+                .collect::<Vec<_>>(),
+            ["allegro", "altium", "odb", "pads", "kicad", "hfss"]
+        );
     }
 
     #[test]

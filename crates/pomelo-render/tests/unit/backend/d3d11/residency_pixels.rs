@@ -8,7 +8,8 @@ fn real_case_copper_source(name: &str) {
         preparation_memory::PreparationMemory,
     };
     use pomelo_import::{
-        BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+        BoardImporter, ImportContext, ImportOptions, TextEncoding,
+        formats::allegro::AllegroImporter,
     };
     let root = std::env::var_os("POMELO_LARGE_BOARD_CASES")
         .map(std::path::PathBuf::from)
@@ -152,7 +153,8 @@ fn hardware_arm_mcm_copper_source_matches_eager() {
 fn real_case_trace_residency(name: &str) {
     use crate::preparation_memory::PreparationMemory;
     use pomelo_import::{
-        BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+        BoardImporter, ImportContext, ImportOptions, TextEncoding,
+        formats::allegro::AllegroImporter,
     };
     let root = std::env::var_os("POMELO_LARGE_BOARD_CASES")
         .map(std::path::PathBuf::from)

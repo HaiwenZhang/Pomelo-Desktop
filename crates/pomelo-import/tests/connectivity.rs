@@ -1,7 +1,7 @@
 use pomelo_core::{i18n::Locale, model::NetId, task::CancellationToken};
 use pomelo_import::{
     ImportContext, ImportError, ImportOptions,
-    allegro::{
+    formats::allegro::{
         database::BrdDatabase,
         decoder::{
             DecodeLimits, DecodedRecord,

@@ -144,7 +144,8 @@ pub fn render(
                                 .to_string_lossy()
                                 .into_owned();
                             let path = entry.path.to_string_lossy().into_owned();
-                            let format = text(locale, Key::AllegroFormat);
+                            let format = pomelo_import::formats::format_display_name(&entry.format)
+                                .to_owned();
                             let summary = entry.presentation.as_ref().map_or_else(
                                 || format.clone(),
                                 |presentation| {

@@ -13,6 +13,7 @@ pub struct FileInformation<'a> {
     pub locale: Locale,
     pub expanded: bool,
     pub scene: &'a BoardScene,
+    pub format_name: &'a str,
 }
 
 pub fn render(
@@ -27,6 +28,7 @@ pub fn render(
         locale,
         expanded,
         scene,
+        format_name,
     } = information;
     // The Kit Accordion trigger in the pinned version has no keyboard focus
     // path. Compose its standard disclosure surface from Collapsible and Base
@@ -87,7 +89,7 @@ pub fn render(
                 .child(
                     div()
                         .text_color(cx.theme().muted_foreground)
-                        .child(text(locale, Key::BoardFormat)),
+                        .child(format_name.to_owned()),
                 )
                 .child(
                     Message::new(Key::SceneSummary)

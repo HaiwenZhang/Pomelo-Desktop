@@ -4,7 +4,9 @@ use pomelo_core::{
     search::{SearchIndex, SearchTarget},
     task::CancellationToken,
 };
-use pomelo_import::{BoardImporter, ImportContext, ImportOptions, allegro::AllegroImporter};
+use pomelo_import::{
+    BoardImporter, ImportContext, ImportOptions, formats::allegro::AllegroImporter,
+};
 use sha2::{Digest, Sha256};
 
 #[test]

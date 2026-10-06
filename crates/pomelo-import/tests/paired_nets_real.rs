@@ -2,7 +2,7 @@
 use pomelo_core::task::CancellationToken;
 use pomelo_import::{
     ImportContext, ImportOptions,
-    allegro::{
+    formats::allegro::{
         database::BrdDatabase,
         decoder::{DecodeLimits, DecodedRecord, variable::VariableRecord},
         index::{IndexLimits, RecordKey},

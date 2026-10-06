@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>逐層看清每一處連接。</strong><br>
-  基於 GPUI 和 GPUI Kit 的 PCB 檢視器，支援 Cadence Allegro (.brd)、Altium Designer、ODB++、PADS、Ansys HFSS 3D Layout(edb.def) 和 KiCad。
+  基於 GPUI 和 GPUI Kit 的本機唯讀 PCB 檢視器。
 </p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README_zh-CN.md">简体中文</a> · 繁體中文 · <a href="README_ja.md">日本語</a> · <a href="README_ko.md">한국어</a></p>
@@ -18,8 +18,6 @@
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
-![電路板工作區（英文介面）](images/pcb-example-en.png)
-
 ## 更清晰地檢視電路板
 
 - **設計檔案留在本機。** 在電腦上匯入與檢視電路板，無須上傳；檢視操作不會修改原始檔案。
@@ -29,17 +27,25 @@
 - **同時檢視多塊板。** 支援多文件、最近開啟的檔案與檢視偏好儲存，方便繼續檢視設計。
 - **選擇熟悉的語言。** 提供英文、簡體中文、繁體中文、日文、韓文介面，以及淺色和深色主題。
 
-> **開發中：** 完整 BRD MVP 驗收尚未完成。顯示精度、大型電路板效能、DPI／輸入法與長時間執行穩定性仍需更廣泛驗證。本專案是唯讀檢視器，不編輯電路板，也不執行 DRC。驗證範圍請見[開發進度](docs/development-progress.md)。
+> **開發中：** 相容性、顯示精度、效能與各平台穩定性仍需驗證。本專案用於唯讀檢視，不編輯電路板或執行 DRC。見[開發說明](docs/development-progress.md)。
 
 ## 支援的格式
 
-目前支援 **Cadence Allegro 二進位 `.brd` 檔案**。這不代表支援其他 EDA 工具使用的同名副檔名。匯入範圍與顯示精度取決於檔案版本及內容。Web 版支援的其他格式尚未整合至本桌面專案。
+支援 `.brd`、`.PcbDoc`、ODB++ 封存檔（`.tgz`、`.tar`、`.tar.gz`）、`.pcb`、`.kicad_pcb` 和 `edb.def`。匯入範圍取決於檔案版本與已儲存資料，未支援的內容透過診斷提示。
+
+所有格式解析均在 `crates/pomelo-import` 中使用 Rust 實作，無需 JavaScript 引擎或 Node.js。
 
 ## 快速開始
 
-macOS 需要支援 Metal 的 Mac 與 Xcode Command Line Tools。Linux 需要 fontconfig、FreeType、xkbcommon、Wayland/X11、ALSA、OpenSSL 開發套件，以及支援 Vulkan 的顯示卡驅動程式。下方建置命令適用於三個平台；macOS 應用程式快捷鍵使用 Cmd 取代 Ctrl。
+需要 Git 與儲存庫固定的 Rust **1.98.1**；依賴版本以 `Cargo.lock` 為準。
 
-需要 **Windows x64**、支援 **Direct3D 11** 的顯示卡與驅動程式、**Git**，以及 Rust、**MSVC C++ 建置工具和 Windows SDK**。儲存庫透過 `rust-toolchain.toml` 固定 Rust **1.98.1**，相依版本以 `Cargo.lock` 為準。
+| 平台 | 建置與執行條件 |
+| --- | --- |
+| Windows x64 | MSVC C++ 建置工具、Windows SDK、支援 Direct3D 11 的顯示卡與驅動程式 |
+| macOS | 支援 Metal 的 Mac、Xcode Command Line Tools |
+| Linux | fontconfig、FreeType、xkbcommon、Wayland/X11、ALSA、OpenSSL 開發套件與支援 Vulkan 的驅動程式 |
+
+下方建置命令適用於三個平台。macOS 的應用程式快捷鍵使用 Cmd 取代 Ctrl。
 
 ```powershell
 git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
@@ -49,13 +55,11 @@ cargo run -p pomelo --locked
 
 使用 **Ctrl+O**、拖放或啟動檔案路徑開啟電路板。在應用程式選單或工具列中選擇介面語言。
 
-![歡迎畫面（英文介面）](images/welcome-en.png)
-
 ```powershell
-cargo run -p pomelo --locked -- --locale zh-TW --encoding windows-1252 "C:\boards\example.brd"
+cargo run -p pomelo --locked -- --locale zh-TW --encoding windows-1252 "example.brd"
 ```
 
-`--locale` 支援 `en`、`zh-CN`、`zh-TW`、`ja`、`ko`，僅對本次啟動生效，不覆寫已儲存的語言偏好。`--encoding` 支援 `utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252`，預設為嚴格 UTF-8；所選編碼適用於本次程序開啟的檔案。介面語言與原始檔案編碼互相獨立。`--` 後的參數全部視為檔案路徑。
+`--locale` 支援 `en`、`zh-CN`、`zh-TW`、`ja`、`ko`，僅對本次啟動生效，不覆寫已儲存的語言偏好。`--encoding` 支援 `auto`、`utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252`，預設為 `auto`；自動識別不準確時可明確指定編碼。介面語言與來源編碼獨立，編碼選項適用於本次程序開啟的檔案。`--` 後的參數視為檔案路徑。
 
 ## 快捷操作
 
@@ -72,7 +76,7 @@ cargo run -p pomelo --locked -- --locale zh-TW --encoding windows-1252 "C:\board
 
 ## 建置與開發
 
-GPUI 暫時依賴 [HaiwenZhang/zed 的 gpui-pre-0.3.7-native-gpu 分支](https://github.com/HaiwenZhang/zed/tree/gpui-pre-0.3.7-native-gpu)，由 Cargo.lock 鎖定到 `8c92bda2dc9d718cd520d37fda20bca00fa3e274`。Cargo 直接取得此 fork，無須準備本機修補。薄包名適配層讓 GPUI Kit 0.7.0 使用同一套 GPUI 型別。詳見 [GPUI 依賴說明](docs/gpui-dependencies.md)。一般桌面執行不需要 Node.js 或 Web 儲存庫。Windows 使用 D3D11，macOS 使用 Metal，Linux 使用 wgpu；共用場景與批次邏輯，各平台獨立維護著色器。 GPUI Kit 直接使用 registry 原版套件，一般 Cargo 和 rust-analyzer 無須修補準備。
+依賴版本與來源以 `Cargo.toml` 和 `Cargo.lock` 為準。見 [GPUI 依賴說明](docs/gpui-dependencies.md)及[GPU 後端](docs/native-gpu-backends.md)。
 
 ```powershell
 cargo build -p pomelo --locked
@@ -99,24 +103,40 @@ macOS 預設臨時簽名，最低版本為 macOS 14.0。可設定 `MACOS_SIGNING
 
 [Release 工作流程](.github/workflows/release.yml)：推送 `vX.Y.Z` 標籤後建置全部平台，通過驗證後發佈安裝包與 `SHA256SUMS`；標籤必須與 `Cargo.toml` 的 workspace 版本一致。手動觸發僅上傳 Actions 產物。
 
+## 專案結構與文件
 
 | 目錄 | 用途 |
 | --- | --- |
 | [crates/pomelo-core](crates/pomelo-core) | 電路板模型、搜尋、選取與國際化 |
-| [crates/pomelo-import](crates/pomelo-import) | Allegro 解析與匯入診斷 |
+| [crates/pomelo-import](crates/pomelo-import) | 檔案匯入與診斷 |
 | [crates/pomelo-render](crates/pomelo-render) | 場景準備與 D3D11、Metal、wgpu 繪製 |
 | [crates/pomelo](crates/pomelo) | GPUI 桌面應用程式與文件管理 |
 | [locales](locales) | 五種語言的介面資源 |
-| [docs](docs) | 研發計畫與驗證證據 |
+| [docs](docs) | 通用開發說明 |
 
-- [研發計畫](docs/native-pcb-viewer-development-plan.md)
+- [文件](docs/README.md)
 - [開發進度與驗證範圍](docs/development-progress.md)
 - [i18n](docs/i18n.md)
-- [GPU / ADR](docs/adr/0001-gpui-pre-0.3.7-native-gpuing.md)
+- [GPU](docs/native-gpu-backends.md)
+
+## 開發計畫
+
+以下為待開發或待補齊的能力，不代表已交付功能。
+
+| 階段 | 計畫內容 |
+| --- | --- |
+| 日常審閱 | 兩點與折線測量、物件淨距、任意多選、持久多組高亮 |
+| 檢視與輸出 | 命名視圖、導覽歷史、自訂顯示、截圖與輕量本機匯出 |
+| 工程資訊 | 屬性查詢、逐層焊盤結構、物理疊層、網路分組、連接拓撲與指定路徑長度 |
+| 持續改善 | 檔案相容性、大型場景效能、跨平台穩定性、鍵盤操作與五語介面 |
+
+詳細優先順序與功能邊界見[審閱能力規劃](docs/viewer-review-capabilities-plan.md)，實作與驗收要求見[開發設計](docs/viewer-review-development-design.md)。
+
+功能圍繞唯讀檢視與審閱，不編輯來源設計或執行 DRC。
 
 ## 參與貢獻
 
-歡迎改善 Allegro 相容性、繪製精度、效能、翻譯與文件。[回報問題](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)時，請附上來源工具與檔案版本、作業系統和 GPU 資訊、重現步驟及匯入診斷。小型範例或對照截圖有助於定位問題；分享前請移除機密設計資料。解析或幾何變更應提供針對性的回歸測試，視覺變更應附截圖，並保持五種語言的 README 同步。
+歡迎改善檔案相容性、繪製精度、效能、翻譯與文件。[回報問題](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)時，請附上來源工具與檔案版本、作業系統和 GPU 資訊、重現步驟及匯入診斷。小型範例或對照截圖有助於定位問題；分享前請移除機密設計資料。解析或幾何變更應提供針對性的回歸測試，視覺變更應附截圖，並保持五種語言的 README 同步。
 
 ## 授權
 

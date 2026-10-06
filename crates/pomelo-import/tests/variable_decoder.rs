@@ -1,7 +1,7 @@
 use pomelo_core::task::CancellationToken;
 use pomelo_import::{
     ImportContext, ImportError, TextEncoding,
-    allegro::{
+    formats::allegro::{
         decoder::{DecodeLimits, DecodedRecord, RecordDecoder, variable::VariableRecord},
         header::BrdHeader,
         index::{FileOffset, RecordKey, RecordSpan},

@@ -8,7 +8,7 @@ use pomelo_core::{
     model::{Pin, Via, Zone, ZoneKind},
 };
 use pomelo_import::{
-    BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+    BoardImporter, ImportContext, ImportOptions, TextEncoding, formats::allegro::AllegroImporter,
 };
 use serde_json::json;
 

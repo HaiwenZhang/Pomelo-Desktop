@@ -5,7 +5,7 @@ use pomelo_core::{
 };
 use pomelo_import::{
     BoardImporter, ImportContext, ImportError, ImportOptions,
-    allegro::{
+    formats::allegro::{
         database::BrdDatabase,
         decoder::DecodeLimits,
         index::IndexLimits,
@@ -42,7 +42,7 @@ fn automatic_import_decodes_board_text_and_records_resolved_source_encoding() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("自动编码.brd");
     std::fs::write(&path, database.source_bytes()).unwrap();
-    let board = pomelo_import::allegro::AllegroImporter
+    let board = pomelo_import::formats::allegro::AllegroImporter
         .import(
             &path,
             &ImportOptions::default(),
@@ -87,7 +87,7 @@ fn importer_reads_real_file_to_shared_scene_and_attaches_source_paths_to_warning
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("电路板 日本語 한국어.brd");
     std::fs::write(&path, db.source_bytes()).unwrap();
-    let importer = pomelo_import::allegro::AllegroImporter;
+    let importer = pomelo_import::formats::allegro::AllegroImporter;
     let board = importer
         .import(
             &path,

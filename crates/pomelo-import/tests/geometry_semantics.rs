@@ -6,7 +6,7 @@ use pomelo_core::{
 };
 use pomelo_import::{
     ImportContext, ImportError, ImportOptions,
-    allegro::{
+    formats::allegro::{
         database::{BrdDatabase, LocatedRecord, ReferenceLocation},
         decoder::{
             DecodeLimits, DecodedRecord,

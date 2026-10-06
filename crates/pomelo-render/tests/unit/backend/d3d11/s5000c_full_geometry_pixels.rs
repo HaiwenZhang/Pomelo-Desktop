@@ -7,7 +7,7 @@ use pomelo_core::{
     interaction::Camera,
 };
 use pomelo_import::{
-    BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+    BoardImporter, ImportContext, ImportOptions, TextEncoding, formats::allegro::AllegroImporter,
 };
 use serde_json::json;
 use std::{collections::BTreeSet, path::PathBuf};

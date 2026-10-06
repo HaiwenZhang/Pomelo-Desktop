@@ -128,7 +128,8 @@ mod tests {
     #[ignore = "requires explicit local input; network run footprint diagnostic"]
     fn real_board_net_runs_profile() {
         use pomelo_import::{
-            BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+            BoardImporter, ImportContext, ImportOptions, TextEncoding,
+            formats::allegro::AllegroImporter,
         };
         let path = std::env::var_os("POMELO_FRAME_PROFILE_CASE").expect("explicit local case");
         let cancel = pomelo_core::task::CancellationToken::default();

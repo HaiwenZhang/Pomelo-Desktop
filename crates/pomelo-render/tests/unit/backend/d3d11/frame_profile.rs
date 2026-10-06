@@ -9,7 +9,8 @@ fn hardware_real_board_frame_profile() {
         preparation_memory::PreparationMemory,
     };
     use pomelo_import::{
-        BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+        BoardImporter, ImportContext, ImportOptions, TextEncoding,
+        formats::allegro::AllegroImporter,
     };
     let path =
         std::env::var_os("POMELO_FRAME_PROFILE_CASE").expect("explicit POMELO_FRAME_PROFILE_CASE");

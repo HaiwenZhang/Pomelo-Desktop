@@ -8,7 +8,7 @@ use pomelo_core::{
 mod kind;
 use pomelo_import::{
     ImportContext, ImportError, ImportOptions,
-    allegro::{
+    formats::allegro::{
         database::BrdDatabase,
         decoder::DecodeLimits,
         index::{IndexLimits, RecordKey},

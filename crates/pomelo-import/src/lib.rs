@@ -1,6 +1,6 @@
-//! Local PCB import contracts and Allegro binary reading.
+//! Local PCB import contracts and native board-format readers.
 
-pub mod allegro;
+pub mod formats;
 pub mod source;
 
 use std::{path::Path, sync::Arc};
@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
+    #[error("IMPORT_FORMAT_FAILED {format}: {details}")]
+    Format { format: String, details: String },
     #[error("BRD_NO_GEOMETRY")]
     NoGeometry,
     #[error("BRD_COPPER_LAYER_UNDEFINED key={key} layer={layer} offset=0x{offset:x}")]
@@ -122,6 +124,13 @@ impl ImportError {
     /// Keep source positions and typed arguments until the presentation boundary.
     pub fn diagnostic(&self) -> Diagnostic {
         match self {
+            Self::Format { format, details } => {
+                let mut diagnostic =
+                    Diagnostic::error("IMPORT_FORMAT_FAILED", MessageKey::FormatImportFailed)
+                        .with_details(details.clone());
+                diagnostic.message = diagnostic.message.arg("format", format.as_str());
+                diagnostic
+            }
             Self::NoGeometry => Diagnostic::error("BRD_NO_GEOMETRY", MessageKey::NoGeometry),
             Self::CopperLayerUndefined { key, layer, offset } => {
                 let mut diagnostic = Diagnostic::error(

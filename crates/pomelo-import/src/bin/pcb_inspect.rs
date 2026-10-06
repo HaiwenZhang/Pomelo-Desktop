@@ -6,7 +6,7 @@ use pomelo_core::{
 };
 use pomelo_import::{
     ImportContext, ImportError, ImportOptions, TextEncoding,
-    allegro::{
+    formats::allegro::{
         header::{BrdHeader, HEADER_BYTES},
         index::{BrdIndex, IndexLimits, IndexSummary},
     },
@@ -341,7 +341,7 @@ fn decode_record_probe(
     options: &ImportOptions,
     mode: &str,
 ) -> Result<(), Diagnostic> {
-    use pomelo_import::allegro::{
+    use pomelo_import::formats::allegro::{
         decoder::{DecodeLimits, DecodedRecord, RecordDecoder},
         index::{FileOffset, RecordKey, RecordSpan},
     };
@@ -473,7 +473,7 @@ fn scene_probe(
     locale: Locale,
     options: &ImportOptions,
 ) -> Result<(), Diagnostic> {
-    use pomelo_import::allegro::{
+    use pomelo_import::formats::allegro::{
         database::BrdDatabase,
         decoder::DecodeLimits,
         semantics::scene::{SceneBuilder, SceneLimits},
@@ -606,7 +606,7 @@ fn annotation_probe(
         i18n::Message,
         model::{BoardDrawing, BoardText, DrawingLayer, LayerId},
     };
-    use pomelo_import::allegro::{
+    use pomelo_import::formats::allegro::{
         database::BrdDatabase,
         decoder::DecodeLimits,
         semantics::{
@@ -736,7 +736,7 @@ fn connectivity_probe(
     locale: Locale,
     options: &ImportOptions,
 ) -> Result<(), Diagnostic> {
-    use pomelo_import::allegro::{
+    use pomelo_import::formats::allegro::{
         database::BrdDatabase,
         decoder::DecodeLimits,
         semantics::connectivity::{NetworkLimits, NetworkMap},
@@ -815,7 +815,7 @@ fn semantic_probe(
     options: &ImportOptions,
     mode: &str,
 ) -> Result<(), Diagnostic> {
-    use pomelo_import::allegro::{
+    use pomelo_import::formats::allegro::{
         database::{BrdDatabase, ReferenceLocation},
         decoder::{DecodeLimits, DecodedRecord, fixed::FixedRecord},
         index::{FileOffset, RecordKey},
@@ -1045,8 +1045,8 @@ fn semantic_probe(
 }
 
 fn preview_padstack(
-    stack: &pomelo_import::allegro::decoder::variable::Padstack,
-    pads: &mut pomelo_import::allegro::semantics::pad::PadDecoder<'_>,
+    stack: &pomelo_import::formats::allegro::decoder::variable::Padstack,
+    pads: &mut pomelo_import::formats::allegro::semantics::pad::PadDecoder<'_>,
     context: &ImportContext<'_>,
 ) -> Result<serde_json::Value, ImportError> {
     Ok(
@@ -1056,8 +1056,8 @@ fn preview_padstack(
 }
 
 fn resolved_padstack(
-    resolved: Option<pomelo_import::allegro::semantics::padstack::ResolvedStack>,
-    pads: &mut pomelo_import::allegro::semantics::pad::PadDecoder<'_>,
+    resolved: Option<pomelo_import::formats::allegro::semantics::padstack::ResolvedStack>,
+    pads: &mut pomelo_import::formats::allegro::semantics::pad::PadDecoder<'_>,
     context: &ImportContext<'_>,
 ) -> Result<serde_json::Value, ImportError> {
     let Some(resolved) = resolved else {
@@ -1070,12 +1070,14 @@ fn resolved_padstack(
         .map(|source| source.to_millimetres(pads.scale()));
     let effective = if let Some(definition) = &backdrill {
         let ordinary = pads.regular_pads(&resolved.stack, context)?;
-        Some(pomelo_import::allegro::semantics::pad::apply_backdrill(
-            &ordinary,
-            definition,
-            resolved.stack.layer_count,
-            context,
-        )?)
+        Some(
+            pomelo_import::formats::allegro::semantics::pad::apply_backdrill(
+                &ordinary,
+                definition,
+                resolved.stack.layer_count,
+                context,
+            )?,
+        )
     } else {
         None
     };
@@ -1086,13 +1088,13 @@ fn resolved_padstack(
 }
 
 fn padstack_probe_value(
-    record: &pomelo_import::allegro::database::LocatedRecord,
-    database: &pomelo_import::allegro::database::BrdDatabase,
-    stacks: &mut pomelo_import::allegro::semantics::padstack::PadstackResolver<'_>,
-    pads: &mut pomelo_import::allegro::semantics::pad::PadDecoder<'_>,
+    record: &pomelo_import::formats::allegro::database::LocatedRecord,
+    database: &pomelo_import::formats::allegro::database::BrdDatabase,
+    stacks: &mut pomelo_import::formats::allegro::semantics::padstack::PadstackResolver<'_>,
+    pads: &mut pomelo_import::formats::allegro::semantics::pad::PadDecoder<'_>,
     context: &ImportContext<'_>,
 ) -> Result<serde_json::Value, ImportError> {
-    use pomelo_import::allegro::{
+    use pomelo_import::formats::allegro::{
         decoder::{DecodedRecord, fixed::FixedRecord, variable::VariableRecord},
         index::RecordKey,
         semantics::padstack::bond_finger_angle,

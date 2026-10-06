@@ -1,4 +1,4 @@
-use pomelo_import::{ImportError, TextEncoding, allegro::reader::Reader};
+use pomelo_import::{ImportError, TextEncoding, formats::allegro::reader::Reader};
 
 #[test]
 fn explicit_source_code_pages_decode_without_using_the_ui_language() {

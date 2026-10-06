@@ -15,6 +15,8 @@ sha2.workspace = true
 hex.workspace = true
 anyhow.workspace = true
 chardetng = "=0.1.17"
+flate2 = "1"
+clipper2-rust = "=1.2.0"
 
 [lints]
 workspace = true

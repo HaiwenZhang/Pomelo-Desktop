@@ -419,7 +419,9 @@ fn cancelled_generation_has_no_preview_and_invalid_bounds_do_not_allocate_one() 
 #[test]
 #[ignore = "requires POMELO_PREVIEW_BOARD_PATH; writes only POMELO_PREVIEW_PNG when supplied"]
 fn external_board_thumbnail() {
-    use pomelo_import::{BoardImporter, ImportContext, ImportOptions, allegro::AllegroImporter};
+    use pomelo_import::{
+        BoardImporter, ImportContext, ImportOptions, formats::allegro::AllegroImporter,
+    };
     let path = std::path::PathBuf::from(
         std::env::var_os("POMELO_PREVIEW_BOARD_PATH").expect("external board path"),
     );

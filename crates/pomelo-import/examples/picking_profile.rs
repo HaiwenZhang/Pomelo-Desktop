@@ -7,7 +7,7 @@ use pomelo_core::{
     task::CancellationToken,
 };
 use pomelo_import::{
-    BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+    BoardImporter, ImportContext, ImportOptions, TextEncoding, formats::allegro::AllegroImporter,
 };
 use std::{path::PathBuf, sync::Arc, time::Instant};
 

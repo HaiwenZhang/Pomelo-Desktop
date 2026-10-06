@@ -5,7 +5,7 @@ use pomelo_core::{
     copper::MeshLimits, picking_index::SegmentIndex, search::SearchIndex, task::CancellationToken,
 };
 use pomelo_import::{
-    BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+    BoardImporter, ImportContext, ImportOptions, TextEncoding, formats::allegro::AllegroImporter,
 };
 use pomelo_render::{
     copper::{CopperLimits, PreparedCopper},

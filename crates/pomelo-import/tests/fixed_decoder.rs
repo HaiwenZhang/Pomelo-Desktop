@@ -1,7 +1,7 @@
 use pomelo_core::task::CancellationToken;
 use pomelo_import::{
     ImportContext, ImportError, TextEncoding,
-    allegro::{
+    formats::allegro::{
         decoder::{
             RecordDecoder,
             fixed::{FixedRecord, InlineOrReference},
@@ -348,7 +348,8 @@ fn every_fixed_layout_consumes_exact_declared_boundary_in_all_thirteen_versions(
     for version in [
         152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251,
     ] {
-        for kind in (1..=62).filter(|&kind| pomelo_import::allegro::decoder::fixed::supports(kind))
+        for kind in
+            (1..=62).filter(|&kind| pomelo_import::formats::allegro::decoder::fixed::supports(kind))
         {
             let (bytes, span) = fixture(version, kind, length(kind, version));
             assert!(

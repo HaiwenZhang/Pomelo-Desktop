@@ -2,7 +2,9 @@
 use std::{path::PathBuf, time::Instant};
 
 use pomelo_core::task::CancellationToken;
-use pomelo_import::{BoardImporter, ImportContext, ImportOptions, allegro::AllegroImporter};
+use pomelo_import::{
+    BoardImporter, ImportContext, ImportOptions, formats::allegro::AllegroImporter,
+};
 use pomelo_render::{
     copper::{CopperLimits, PreparedCopper},
     tracks::{PreparedTracks, TraceLimits},

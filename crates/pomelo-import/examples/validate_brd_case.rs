@@ -1,7 +1,7 @@
 //! Full CPU import smoke check, with compact JSON instead of exporting every scene object.
 use pomelo_core::{i18n::Locale, task::CancellationToken};
 use pomelo_import::{
-    BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+    BoardImporter, ImportContext, ImportOptions, TextEncoding, formats::allegro::AllegroImporter,
 };
 use serde_json::json;
 use std::{collections::BTreeMap, io::Write, path::PathBuf, time::Instant};

@@ -24,6 +24,7 @@ references/
 docs/gpu-validation/
 .cache/
 __pycache__/
+node_modules/
 dist/
 tests/fixtures
 

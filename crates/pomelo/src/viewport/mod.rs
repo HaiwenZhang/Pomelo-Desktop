@@ -83,6 +83,7 @@ pub struct BoardViewport {
     pads: Arc<pomelo_render::pads::PreparedPads>,
     drills: Arc<pomelo_render::pads::PreparedPads>,
     scene: Arc<BoardScene>,
+    format_name: String,
     render_diagnostics: Vec<pomelo_core::model::Diagnostic>,
     diagnostics_expanded: bool,
     diagnostics_page: usize,
@@ -414,6 +415,8 @@ impl BoardViewport {
         })
         .detach();
         let mut viewport = Self {
+            format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
+                .to_owned(),
             diagnostics_navigation: crate::panels::diagnostics::NavigationFocus::new(cx),
             inspector_focus: crate::panels::focus_scroll::InspectorFocus::new(cx),
             search_input,
@@ -2696,6 +2699,7 @@ impl Render for BoardViewport {
                                     locale,
                                     expanded: self.file_information_expanded,
                                     scene: &self.scene,
+                                    format_name: &self.format_name,
                                 },
                                 self.diagnostics_panel(window, cx),
                                 &self.inspector_focus.file_information,

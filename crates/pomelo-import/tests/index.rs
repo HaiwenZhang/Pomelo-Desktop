@@ -1,7 +1,7 @@
 use pomelo_core::task::{CancellationToken, ImportStage};
 use pomelo_import::{
     ImportContext, ImportError, ImportOptions, TextEncoding,
-    allegro::index::{BrdIndex, IndexLimits, RecordKey},
+    formats::allegro::index::{BrdIndex, IndexLimits, RecordKey},
 };
 
 const START: usize = 0x1200;

@@ -5,7 +5,9 @@ use pomelo_core::{
     picking_index::SegmentIndex,
     task::CancellationToken,
 };
-use pomelo_import::{BoardImporter, ImportContext, ImportOptions, allegro::AllegroImporter};
+use pomelo_import::{
+    BoardImporter, ImportContext, ImportOptions, formats::allegro::AllegroImporter,
+};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, time::Instant};
 

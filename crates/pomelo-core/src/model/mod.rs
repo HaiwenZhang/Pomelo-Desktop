@@ -388,6 +388,7 @@ pub struct BoardDrawing {
 pub enum SpecialLayerKind {
     BondWire,
     DiePad,
+    Graphic,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

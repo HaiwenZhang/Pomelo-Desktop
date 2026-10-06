@@ -5,7 +5,7 @@ use pomelo_core::{
 };
 use pomelo_import::{
     ImportContext, ImportError, ImportOptions,
-    allegro::{
+    formats::allegro::{
         database::BrdDatabase,
         decoder::DecodeLimits,
         index::{IndexLimits, RecordKey},
@@ -131,7 +131,7 @@ fn decode(
     limits: PlacementLimits,
 ) -> Result<
     (
-        pomelo_import::allegro::semantics::placement::PlacedFootprint,
+        pomelo_import::formats::allegro::semantics::placement::PlacedFootprint,
         Vec<pomelo_core::model::Diagnostic>,
     ),
     ImportError,

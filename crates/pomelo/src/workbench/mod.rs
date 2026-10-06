@@ -17,7 +17,10 @@ use pomelo_core::{
     i18n::{LanguagePreference, Locale, Message, MessageKey as Key, text},
     model::Diagnostic,
 };
-use pomelo_import::{BoardImporter, ImportContext, ImportOptions, allegro::AllegroImporter};
+use pomelo_import::{
+    BoardImporter, ImportContext, ImportOptions,
+    formats::{FormatImporter, format_display_name},
+};
 
 use crate::document::{DocumentSession, DocumentStatus, LoadError, PreparedDocument};
 use crate::i18n::{self, LanguageState};
@@ -246,7 +249,7 @@ impl Workbench {
         let import = cx.background_spawn(async move {
             let mut preparation_memory =
                 crate::services::preparation_memory::PreparationMemory::new(preparation_budget);
-            let board = AllegroImporter.import(
+            let board = FormatImporter.import(
                 &path,
                 &options,
                 &ImportContext {
@@ -1089,13 +1092,15 @@ impl Workbench {
                 }
                 content = content
                     .child(text(locale, Key::SceneImported))
-                    .child(
+                    .child(if board.source.format == "allegro" {
                         Message::new(Key::HeaderFormat)
-                            .arg("format", "Allegro")
+                            .arg("format", format_display_name(&board.source.format))
                             .arg("version", board.source.layout_version)
                             .arg("writer", board.source.writer_version.as_str())
-                            .display(locale),
-                    )
+                            .display(locale)
+                    } else {
+                        format_display_name(&board.source.format).to_owned()
+                    })
                     .child(
                         Message::new(Key::SceneSummary)
                             .arg("layers", board.scene.layers.len())
@@ -1405,11 +1410,7 @@ impl Render for Workbench {
                 let format = match &document.status {
                     DocumentStatus::Imported(prepared) => {
                         let format = prepared.board.source.format.as_str();
-                        Some(if format == "allegro" {
-                            text(locale, Key::AllegroFormat).into()
-                        } else {
-                            SharedString::from(format.to_owned())
-                        })
+                        Some(SharedString::from(format_display_name(format).to_owned()))
                     }
                     _ => None,
                 };

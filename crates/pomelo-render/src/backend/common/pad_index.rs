@@ -103,7 +103,8 @@ mod tests {
     fn real_board_pad_index_profile() {
         use crate::{drills::PreparedDrills, pads::PreparedPads};
         use pomelo_import::{
-            BoardImporter, ImportContext, ImportOptions, TextEncoding, allegro::AllegroImporter,
+            BoardImporter, ImportContext, ImportOptions, TextEncoding,
+            formats::allegro::AllegroImporter,
         };
         let path = std::env::var_os("POMELO_FRAME_PROFILE_CASE").expect("explicit local case");
         let cancel = pomelo_core::task::CancellationToken::default();

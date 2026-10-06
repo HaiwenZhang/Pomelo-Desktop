@@ -4,7 +4,7 @@ use std::{fs::File, io::Read, path::Path};
 
 use crate::{
     ImportContext, ImportError, ImportOptions,
-    allegro::header::{BrdHeader, HEADER_BYTES},
+    formats::allegro::header::{BrdHeader, HEADER_BYTES},
 };
 
 /// Hash the same owned source bytes that the database parses, without rereading

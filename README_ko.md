@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>모든 연결을 레이어별로 살펴보세요.</strong><br>
-  GPUI와 GPUI Kit를 기반으로 하는 PCB 뷰어로, Cadence Allegro (.brd), Altium Designer, ODB++, PADS, Ansys HFSS 3D Layout(edb.def), KiCad를 지원합니다.
+  GPUI와 GPUI Kit으로 만든 로컬 읽기 전용 PCB 뷰어입니다.
 </p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README_zh-CN.md">简体中文</a> · <a href="README_zh-TW.md">繁體中文</a> · <a href="README_ja.md">日本語</a> · 한국어</p>
@@ -18,8 +18,6 @@
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
-![PCB 작업 공간 (영어 UI)](images/pcb-example-en.png)
-
 ## 보드를 더 선명하게 살펴보기
 
 - **설계 파일은 로컬에 보관됩니다.** 업로드 없이 컴퓨터에서 보드를 가져오고 확인합니다. 원본 파일은 수정하지 않습니다.
@@ -29,17 +27,25 @@
 - **여러 보드 작업.** 다중 문서, 최근 파일, 보기 설정 저장을 지원합니다.
 - **언어와 테마 선택.** 영어, 중국어 간체, 중국어 번체, 일본어, 한국어 UI와 밝은 테마 및 어두운 테마를 제공합니다.
 
-> **개발 중:** 전체 BRD MVP 인수 검증은 아직 완료되지 않았습니다. 표시 정확도, 대형 보드 성능, DPI 및 입력기, 장시간 실행 안정성에는 추가 검증이 필요합니다. 읽기 전용 뷰어이며 보드를 편집하거나 DRC를 실행하지 않습니다. 검증 범위는 [개발 현황](docs/development-progress.md)을 참고하세요.
+> **개발 중:** 호환성, 표시 정확도, 성능 및 플랫폼별 안정성은 추가 검증이 필요합니다. 읽기 전용이며 보드 편집이나 DRC를 수행하지 않습니다. [개발 안내](docs/development-progress.md)를 참고하세요.
 
 ## 지원 형식
 
-현재 **Cadence Allegro 바이너리 `.brd` 파일**을 지원합니다. 같은 확장자를 사용하는 다른 EDA 도구의 형식까지 지원한다는 뜻은 아닙니다. 가져오기 범위와 표시 정확도는 파일 버전과 내용에 따라 달라집니다. 웹 버전이 지원하는 다른 형식은 아직 이 데스크톱 프로젝트에 구현되지 않았습니다.
+`.brd`, `.PcbDoc`, ODB++ 아카이브(`.tgz`, `.tar`, `.tar.gz`), `.pcb`, `.kicad_pcb`, `edb.def`를 지원합니다. 가져오기 범위는 파일 버전과 저장된 데이터에 따라 달라지며, 지원하지 않는 내용은 진단으로 표시합니다.
+
+모든 형식은 `crates/pomelo-import`의 Rust 구현으로 읽으며 JavaScript 엔진이나 Node.js를 사용하지 않습니다.
 
 ## 빠른 시작
 
-macOS에는 Metal을 지원하는 Mac과 Xcode Command Line Tools가 필요합니다. Linux에는 fontconfig, FreeType, xkbcommon, Wayland/X11, ALSA, OpenSSL 개발 패키지와 Vulkan 지원 GPU 드라이버가 필요합니다. 아래 빌드 명령은 세 플랫폼에서 동일하며, macOS 앱 단축키는 Ctrl 대신 Cmd를 사용합니다.
+Git과 저장소에 고정된 Rust **1.98.1**이 필요합니다. 의존성 버전은 `Cargo.lock`을 기준으로 합니다.
 
-**Windows x64**, **Direct3D 11**을 지원하는 GPU 및 드라이버, **Git**, Rust, **MSVC C++ 빌드 도구 및 Windows SDK**가 필요합니다. `rust-toolchain.toml`에서 Rust **1.98.1**을 고정하며, 의존성 버전은 `Cargo.lock`으로 관리합니다.
+| 플랫폼 | 빌드 및 실행 조건 |
+| --- | --- |
+| Windows x64 | MSVC C++ 빌드 도구, Windows SDK, Direct3D 11 지원 GPU 및 드라이버 |
+| macOS | Metal 지원 Mac, Xcode Command Line Tools |
+| Linux | fontconfig, FreeType, xkbcommon, Wayland/X11, ALSA, OpenSSL 개발 패키지 및 Vulkan 지원 드라이버 |
+
+아래 명령은 세 플랫폼에서 사용할 수 있습니다. macOS 앱 단축키는 Ctrl 대신 Cmd를 사용합니다.
 
 ```powershell
 git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
@@ -49,13 +55,11 @@ cargo run -p pomelo --locked
 
 **Ctrl+O**, 끌어서 놓기 또는 시작 시 파일 경로 지정으로 보드를 엽니다. 앱 메뉴나 도구 모음에서 UI 언어를 선택할 수 있습니다.
 
-![시작 화면 (영어 UI)](images/welcome-en.png)
-
 ```powershell
-cargo run -p pomelo --locked -- --locale ko --encoding windows-1252 "C:\boards\example.brd"
+cargo run -p pomelo --locked -- --locale ko --encoding windows-1252 "example.brd"
 ```
 
-`--locale`은 `en`, `zh-CN`, `zh-TW`, `ja`, `ko`를 지원합니다. 해당 실행에만 적용되며 저장된 언어 설정은 변경하지 않습니다. `--encoding`은 `utf-8`, `gbk`, `shift_jis`, `big5`, `windows-1252`를 지원하며 기본값은 엄격한 UTF-8입니다. 선택한 인코딩은 해당 프로세스에서 여는 파일에 적용됩니다. UI 언어와 원본 파일 인코딩은 서로 독립적입니다. `--` 뒤의 인수는 모두 파일 경로로 처리합니다.
+`--locale`은 `en`, `zh-CN`, `zh-TW`, `ja`, `ko`를 지원하며 현재 실행에만 적용됩니다. 저장된 언어 설정은 변경하지 않습니다. `--encoding`은 `auto`, `utf-8`, `gbk`, `shift_jis`, `big5`, `windows-1252`를 지원하며 기본값은 `auto`입니다. 자동 감지가 부정확하면 인코딩을 직접 지정하세요. 인터페이스 언어와 파일 인코딩은 독립적이며, 인코딩 옵션은 해당 프로세스에서 여는 파일에 적용됩니다. `--` 뒤의 인수는 파일 경로로 처리됩니다.
 
 ## 단축키
 
@@ -72,7 +76,7 @@ cargo run -p pomelo --locked -- --locale ko --encoding windows-1252 "C:\boards\e
 
 ## 빌드 및 개발
 
-GPUI는 당분간 [HaiwenZhang/zed의 gpui-pre-0.3.7-native-gpu 브랜치](https://github.com/HaiwenZhang/zed/tree/gpui-pre-0.3.7-native-gpu)를 사용하며 Cargo.lock으로 커밋 `8c92bda2dc9d718cd520d37fda20bca00fa3e274`에 고정합니다. Cargo가 fork를 직접 가져오므로 로컬 패치 준비가 필요 없습니다. 얇은 패키지 이름 호환 계층을 통해 GPUI Kit 0.7.0도 동일한 GPUI 타입을 사용합니다. [GPUI 의존성 설명](docs/gpui-dependencies.md)을 참고하세요. 일반 데스크톱 실행에는 Node.js나 웹 저장소가 필요하지 않습니다. Windows는 D3D11, macOS는 Metal, Linux는 wgpu를 사용합니다. 장면과 배치 로직은 공유하고 플랫폼별 셰이더는 독립적으로 관리합니다. GPUI Kit은 registry의 원본 패키지를 사용하며 일반 Cargo와 rust-analyzer는 패치 준비 없이 사용할 수 있습니다.
+의존성 버전과 출처는 `Cargo.toml`과 `Cargo.lock`을 기준으로 합니다. [GPUI 의존성](docs/gpui-dependencies.md)과 [GPU 백엔드](docs/native-gpu-backends.md)를 참고하세요.
 
 ```powershell
 cargo build -p pomelo --locked
@@ -99,24 +103,40 @@ macOS는 기본적으로 임시 서명하며 최소 macOS 14.0을 지원합니�
 
 [Release 워크플로](.github/workflows/release.yml): `vX.Y.Z` 태그를 push하면 모든 플랫폼을 빌드하고 검증 후 패키지와 `SHA256SUMS`를 게시합니다. 태그는 `Cargo.toml`의 workspace 버전과 일치해야 합니다. 수동 실행은 Actions 아티팩트만 생성합니다.
 
+## 프로젝트 구조 및 문서
 
 | 경로 | 용도 |
 | --- | --- |
 | [crates/pomelo-core](crates/pomelo-core) | 보드 모델, 검색, 선택 및 국제화 |
-| [crates/pomelo-import](crates/pomelo-import) | Allegro 파싱 및 가져오기 진단 |
+| [crates/pomelo-import](crates/pomelo-import) | 파일 가져오기 및 진단 |
 | [crates/pomelo-render](crates/pomelo-render) | 장면 준비 및 D3D11, Metal, wgpu 렌더러 |
 | [crates/pomelo](crates/pomelo) | GPUI 데스크톱 앱 및 문서 관리 |
 | [locales](locales) | 5개 언어의 UI 리소스 |
-| [docs](docs) | 개발 계획 및 검증 기록 |
+| [docs](docs) | 일반 개발 안내 |
 
-- [개발 계획](docs/native-pcb-viewer-development-plan.md)
+- [문서](docs/README.md)
 - [개발 현황 및 검증 범위](docs/development-progress.md)
 - [i18n](docs/i18n.md)
-- [GPU / ADR](docs/adr/0001-gpui-pre-0.3.7-native-gpuing.md)
+- [GPU](docs/native-gpu-backends.md)
+
+## 개발 계획
+
+다음은 개발 예정이거나 추가 구현이 필요한 기능이며, 제공 완료된 기능을 의미하지 않습니다.
+
+| 분야 | 계획 내용 |
+| --- | --- |
+| 일상 검토 | 두 점 및 꺾은선 측정, 객체 간 거리, 다중 선택, 지속 하이라이트 그룹 |
+| 뷰 및 출력 | 이름 있는 뷰, 탐색 기록, 사용자 표시 설정, 스크린샷 및 간단한 로컬 내보내기 |
+| 설계 정보 | 속성 검색, 레이어별 패드 구조, 물리 적층, 네트 그룹, 연결 구조 및 지정 경로 길이 |
+| 지속 개선 | 파일 호환성, 대형 장면 성능, 플랫폼 안정성, 키보드 접근성 및 5개 언어 UI |
+
+우선순위와 범위는 [기능 계획](docs/viewer-review-capabilities-plan.md), 구현 및 검증 기준은 [개발 설계](docs/viewer-review-development-design.md)를 참고하세요.
+
+읽기 전용 보기와 검토를 대상으로 하며 원본 설계 편집이나 DRC를 수행하지 않습니다.
 
 ## 기여
 
-Allegro 호환성, 렌더링 정확도, 성능, 번역 및 문서 개선을 환영합니다. [문제 보고](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)에는 원본 도구와 파일 버전, OS 및 GPU 정보, 재현 단계, 가져오기 진단을 포함해 주세요. 작은 샘플이나 비교 스크린샷이 도움이 됩니다. 공유 전에 기밀 설계 데이터를 제거하세요. 파서나 기하 처리 변경에는 관련 회귀 테스트를, 시각적 변경에는 스크린샷을 추가하고 5개 언어의 README를 동기화해 주세요.
+파일 호환성, 렌더링 정확도, 성능, 번역 및 문서 개선을 환영합니다. [문제 보고](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)에는 원본 도구와 파일 버전, OS 및 GPU 정보, 재현 단계, 가져오기 진단을 포함해 주세요. 작은 샘플이나 비교 스크린샷이 도움이 됩니다. 공유 전에 기밀 설계 데이터를 제거하세요. 파서나 기하 처리 변경에는 관련 회귀 테스트를, 시각적 변경에는 스크린샷을 추가하고 5개 언어의 README를 동기화해 주세요.
 
 ## 라이선스
 
