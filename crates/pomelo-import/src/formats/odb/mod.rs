@@ -2,7 +2,9 @@
 mod archive;
 mod features;
 mod symbols;
-use super::{Output, SourceDrawingLayer, SourceSpecialLayer, SourceZone, geometry, native};
+use super::{
+    ParsedBoard, SourceDrawingLayer, SourceSpecialLayer, SourceZone, geometry, scene_builder,
+};
 use crate::{ImportContext, ImportError};
 use archive::Archive;
 use features::Kind;
@@ -93,7 +95,7 @@ fn connections(
     archive: &mut Archive<'_>,
     step: &str,
     units: f64,
-    output: &mut Output,
+    output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<Connections, ImportError> {
     let mut toes = HashMap::new();
@@ -351,7 +353,7 @@ fn drill(
     Ok(())
 }
 fn add_edge(
-    output: &mut Output,
+    output: &mut ParsedBoard,
     mut edge: Segment,
     layer: LayerId,
     net: NetId,
@@ -370,7 +372,7 @@ fn add_edge(
     }
 }
 fn add_zone(
-    output: &mut Output,
+    output: &mut ParsedBoard,
     mut paths: Vec<Vec<Segment>>,
     rings: Option<Vec<Vec<Point>>>,
     layer: LayerId,
@@ -408,7 +410,7 @@ fn add_zone(
     });
     Ok(())
 }
-pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, ImportError> {
+pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
     let mut archive = Archive::read(bytes, context)?;
     let meta = fields(&archive.text("misc/info", false)?);
     let matrix = archive.text("matrix/matrix", true)?;
@@ -434,7 +436,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(usize::MAX)
     });
-    let mut output = native::output(format!(
+    let mut output = scene_builder::new_parsed_board(format!(
         "{}.{}",
         meta.get("ODB_VERSION_MAJOR").map_or("?", String::as_str),
         meta.get("ODB_VERSION_MINOR").map_or("0", String::as_str)
@@ -528,7 +530,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
     for l in layers {
         context.check_cancelled()?;
         if !copper(&l.kind) && copper_bounds.is_none() {
-            native::bounds(&mut output);
+            scene_builder::update_scene_bounds(&mut output);
             copper_bounds = Some(output.scene.bounds);
         }
         let text = archive.text(&format!("steps/{step}/layers/{}/features", l.name), false)?;
@@ -824,7 +826,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
         }
         Ok(())
     })?;
-    native::bounds(&mut output);
+    scene_builder::update_scene_bounds(&mut output);
     if let Some(b) = copper_bounds.filter(|b| b.is_valid()) {
         output.scene.bounds = b;
         for edge in &output.scene.outline {

@@ -4,10 +4,9 @@ mod altium;
 mod geometry;
 mod hfss;
 mod kicad;
-mod native;
 mod odb;
-mod pads;
-pub mod pads_copper;
+pub mod pads;
+mod scene_builder;
 mod sexpr;
 
 use std::{io::Read, path::Path, sync::Arc};
@@ -285,7 +284,7 @@ fn decompress(bytes: &[u8], context: &ImportContext<'_>) -> Result<Vec<u8>, Impo
     Ok(result)
 }
 
-struct Output {
+struct ParsedBoard {
     scene: BoardScene,
     zones: Vec<SourceZone>,
     drawing_layers: Vec<SourceDrawingLayer>,

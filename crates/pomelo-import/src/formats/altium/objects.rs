@@ -5,7 +5,7 @@ pub(super) fn regions(
     layers: &Layers,
     board: &Properties,
     polygons: &[Properties],
-    output: &mut Output,
+    output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<HashSet<u16>, ImportError> {
     let count = compound.count("Regions6", context)?;
@@ -105,7 +105,7 @@ pub(super) fn routes(
     board: &Properties,
     polygons: &[Properties],
     filled: &HashSet<u16>,
-    output: &mut Output,
+    output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
     let mut keepouts = 0;
@@ -313,7 +313,7 @@ pub(super) fn pads(
     layers: &Layers,
     board: &Properties,
     components: &[Properties],
-    output: &mut Output,
+    output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
     let count = compound.count("Pads6", context)?;
@@ -533,7 +533,7 @@ pub(super) fn fills(
     compound: &Compound<'_>,
     layers: &Layers,
     board: &Properties,
-    output: &mut Output,
+    output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
     let count = compound.count("Fills6", context)?;
@@ -576,7 +576,7 @@ pub(super) fn texts(
     compound: &Compound<'_>,
     layers: &Layers,
     board: &Properties,
-    output: &mut Output,
+    output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
     let wide = compound.stream("WideStrings6/Data", context)?;

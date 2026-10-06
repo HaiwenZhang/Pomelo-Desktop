@@ -3,7 +3,7 @@ use pomelo_core::{
     display::BoardDisplay,
     model::Point,
     picking::{PickCategory, PickFilter, PickQuery},
-    picking_index::SegmentIndex,
+    picking_index::BoardPickingIndex,
     task::CancellationToken,
 };
 use pomelo_import::{
@@ -50,7 +50,7 @@ fn main() -> anyhow::Result<()> {
                 .sum::<usize>()
         );
         let started = Instant::now();
-        let index = SegmentIndex::build(Arc::clone(&board.scene), u32::MAX as usize, &cancel)?;
+        let index = BoardPickingIndex::build(Arc::clone(&board.scene), u32::MAX as usize, &cancel)?;
         let index_us = started.elapsed().as_micros();
         let bounds = board.scene.bounds;
         let fit = (1280.0 / (bounds.max.x - bounds.min.x).max(1e-9))

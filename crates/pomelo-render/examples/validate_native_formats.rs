@@ -1,5 +1,5 @@
 //! Validate native render preparation and picking for every supplied board format.
-use pomelo_core::{picking_index::SegmentIndex, task::CancellationToken};
+use pomelo_core::{picking_index::BoardPickingIndex, task::CancellationToken};
 use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::FormatImporter};
 use pomelo_render::{
     copper::{CopperLimits, PreparedCopper},
@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
         let copper = PreparedCopper::build_scene(Arc::clone(s), CopperLimits::default(), &cancel)?;
         let _pads = PreparedPads::build(&s.pins, &s.vias, PadLimits::default(), &cancel)?;
         let _drills = PreparedDrills::build(&s.pins, &s.vias, PadLimits::default(), &cancel)?;
-        let _picking = SegmentIndex::build(Arc::clone(s), usize::MAX, &cancel)?;
+        let _picking = BoardPickingIndex::build(Arc::clone(s), usize::MAX, &cancel)?;
         println!(
             "{}: native preparation and picking passed; copper vertices={} indices={}; elapsed={:.2}s",
             path.display(),

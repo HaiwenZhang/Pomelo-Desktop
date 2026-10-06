@@ -11,7 +11,7 @@ use crate::{
         CloseDocument, FitActiveBoard, NextDocument, OpenFile, OpenSettings, PreviousDocument,
         Quit, ReloadDocument, ToggleLeftPanel, ToggleRightPanel,
     },
-    prefs::LanguageStore,
+    services::preferences::LanguageStore,
 };
 
 gpui_kit::actions!(

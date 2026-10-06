@@ -1,4 +1,4 @@
-//! Immutable, balanced bounds hierarchy for precise source-space track queries.
+//! Board-wide picking indexes for tracks, copper, pads, drawings and text.
 
 use crate::{
     display::BoardDisplay,
@@ -27,7 +27,7 @@ pub enum IndexError {
     Allocation,
 }
 
-pub struct SegmentIndex {
+pub struct BoardPickingIndex {
     scene: Arc<BoardScene>,
     order: Vec<usize>,
     bounds: Vec<Option<Bounds>>,
@@ -41,7 +41,7 @@ pub struct SegmentIndex {
     drawing_budget: usize,
 }
 
-impl SegmentIndex {
+impl BoardPickingIndex {
     /// Merge copper candidates by distance, then pin/via/segment/zone priority.
     /// Within a category equal distances preserve source order. Network queries
     /// discard net zero before each category's limit. Pads still scan; zone

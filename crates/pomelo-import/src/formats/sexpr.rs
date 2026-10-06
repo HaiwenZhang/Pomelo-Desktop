@@ -31,14 +31,14 @@ impl Node {
             _ => None,
         })
     }
-    pub fn child(&self, head: &str) -> Option<&Node> {
+    pub fn find_child(&self, head: &str) -> Option<&Node> {
         self.values.iter().find_map(|v| match v {
             Value::List(n) if n.head() == head => Some(n),
             _ => None,
         })
     }
     pub fn required(&self, head: &str) -> Result<&Node, ImportError> {
-        self.child(head)
+        self.find_child(head)
             .ok_or_else(|| error(format!("{} missing {head}", self.head())))
     }
     pub fn number(&self, index: usize) -> Result<f64, ImportError> {

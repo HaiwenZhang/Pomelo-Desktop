@@ -1,7 +1,7 @@
 //! Real file history with bounded, source-derived previews and maintenance menus.
 use super::ScrollState;
 use crate::panels::focus_scroll::FocusScroll;
-use crate::services::prefs::RecentEntry;
+use crate::services::preferences::RecentEntry;
 use crate::tooltips::ButtonTooltipExt;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -129,7 +129,7 @@ pub fn render(
                     entries
                         .iter()
                         .take(if presentation == Presentation::All {
-                            crate::prefs::RECENT_LIMIT
+                            crate::services::preferences::RECENT_LIMIT
                         } else {
                             3
                         })
@@ -155,7 +155,7 @@ pub fn render(
                                         .display(locale)
                                 },
                             );
-                            let opened = crate::recent::opened_message(
+                            let opened = crate::services::recent::opened_message(
                                 entry.opened_unix_seconds,
                                 &chrono::Local::now(),
                             )

@@ -19,7 +19,7 @@ fn include(
     Ok(())
 }
 
-impl SegmentIndex {
+impl BoardPickingIndex {
     /// Bounds of all indexed selection geometry, including hidden entries.
     /// No placement origin or approximate text rectangle is added. Run off the
     /// UI thread; cancellation prevents publishing a partial result.

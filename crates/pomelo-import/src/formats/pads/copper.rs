@@ -1,7 +1,5 @@
-use super::super::{
-    SourceZone,
-    pads_copper::{self, Contour, Fill, Thermal},
-};
+use super::super::SourceZone;
+use super::saved_fill::{self, Contour, Fill, Thermal};
 use super::{
     binary::{MM, Reader, invalid},
     connectivity::Junctions,
@@ -355,7 +353,7 @@ pub(super) fn zones(
             let display = *physical
                 .get(&layer)
                 .ok_or_else(|| invalid("Invalid fill copper layer"))?;
-            for region in pads_copper::build(&fill, context.cancellation)? {
+            for region in saved_fill::build(&fill, context.cancellation)? {
                 let rings = std::iter::once(region.outer)
                     .chain(region.holes)
                     .map(|ring| ring.into_iter().map(|p| Point::new(p[0], p[1])).collect())

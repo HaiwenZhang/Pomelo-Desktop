@@ -3,7 +3,7 @@ mod binary;
 mod geometry;
 mod pads;
 mod text;
-use super::{Output, SourceSpecialLayer, SourceZone, geometry as shared, native};
+use super::{ParsedBoard, SourceSpecialLayer, SourceZone, geometry as shared, scene_builder};
 use crate::{ImportContext, ImportError};
 use binary::Object;
 use pomelo_core::model::*;
@@ -51,7 +51,7 @@ fn net(raw: i32, ids: &HashMap<i32, NetId>) -> Result<NetId, ImportError> {
             .ok_or_else(|| error("Missing source network"))
     }
 }
-pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, ImportError> {
+pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
     let root = binary::read(bytes, context)?;
     let groups = root.field(2)?.object(Some(1))?.field(0)?.array()?;
     let mut cells = Vec::new();
@@ -73,7 +73,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
     let mut layers = Vec::new();
     let mut layer_ids = HashMap::new();
     let mut source_ids = HashSet::new();
-    let mut output = native::output("12.1");
+    let mut output = scene_builder::new_parsed_board("12.1");
     let colors = [
         "#58b5ed", "#83ce94", "#edb963", "#ba8bec", "#eb819d", "#54c7bd", "#a5b8df", "#e18d61",
     ];
@@ -340,6 +340,6 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
         &mut next,
         context,
     )?;
-    native::bounds(&mut output);
+    scene_builder::update_scene_bounds(&mut output);
     Ok(output)
 }

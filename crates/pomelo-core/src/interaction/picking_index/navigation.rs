@@ -91,7 +91,7 @@ fn pad_pass(pad: &Pad) -> usize {
     }
 }
 
-impl SegmentIndex {
+impl BoardPickingIndex {
     /// Highest visible indexed entry, falling back to the highest hidden entry.
     /// All group members participate; visibility never reduces navigation bounds.
     /// Run on a worker with the same display snapshot as the locate request.

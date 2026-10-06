@@ -1,6 +1,6 @@
 //! Native KiCad board reader, with source layer/net identities shared across object families.
 use super::{
-    Output, SourceDrawingLayer, SourceZone, native,
+    ParsedBoard, SourceDrawingLayer, SourceZone, scene_builder,
     sexpr::{self, Node, Value, error},
 };
 use crate::{ImportContext, ImportError};
@@ -74,10 +74,10 @@ fn arc(a: Point, m: Point, b: Point) -> Result<Option<Arc>, ImportError> {
 }
 fn net(
     node: &Node,
-    output: &mut Output,
+    output: &mut ParsedBoard,
     names: &mut HashMap<String, u32>,
 ) -> Result<NetId, ImportError> {
-    let Some(field) = node.child("net") else {
+    let Some(field) = node.find_child("net") else {
         return Ok(NetId(0));
     };
     let value = field.atom(1)?;
@@ -227,13 +227,13 @@ fn pad_kind(name: &str) -> Result<PadKind, ImportError> {
     }))
 }
 
-pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, ImportError> {
+pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
     let root = sexpr::read(bytes, context)?;
     if root.head() != "kicad_pcb" {
         return Err(error("Root is not kicad_pcb"));
     }
     let version = id(root.required("version")?.number(1)?)?;
-    let mut output = native::output(version);
+    let mut output = scene_builder::new_parsed_board(version);
     if root.children("layers").count() != 1 {
         return Err(error("Missing or duplicate layer table"));
     }
@@ -305,7 +305,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
     }
     for node in root.children("via") {
         context.check_cancelled()?;
-        if node.child("padstack").is_some() {
+        if node.find_child("padstack").is_some() {
             return Err(error("Per-layer via padstack not supported"));
         }
         let at = point(node.required("at")?)?;
@@ -414,7 +414,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
                 height: 0.0,
                 plated: kind != "np_thru_hole",
             };
-            if let Some(drill) = node.child("drill") {
+            if let Some(drill) = node.find_child("drill") {
                 let oval = drill.atom(1)? == "oval";
                 drill_shape.width = drill.number(if oval { 2 } else { 1 })?;
                 drill_shape.height = if oval {
@@ -425,14 +425,14 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
                 if drill_shape.width <= 0.0 || drill_shape.height <= 0.0 {
                     return Err(error("Invalid pad drill"));
                 }
-                if drill.child("offset").is_some() {
+                if drill.find_child("offset").is_some() {
                     output
                         .diagnostics
                         .push("KiCad offset drill position is not represented".into());
                 }
             }
             let mut overrides = HashMap::new();
-            if let Some(stack) = node.child("padstack") {
+            if let Some(stack) = node.find_child("padstack") {
                 for row in stack.children("layer") {
                     let name = row.atom(1)?;
                     let shape = row.required("shape")?.atom(1)?;
@@ -550,7 +550,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
         context.check_cancelled()?;
         let fills: Vec<_> = node.children("filled_polygon").collect();
         if fills.is_empty() {
-            if node.child("keepout").is_none() {
+            if node.find_child("keepout").is_none() {
                 output
                     .diagnostics
                     .push("KiCad design zone without saved fill; no repour performed".into());
@@ -578,13 +578,13 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
         }
     }
     graphics(&root, &mut output, context)?;
-    native::bounds(&mut output);
+    scene_builder::update_scene_bounds(&mut output);
     Ok(output)
 }
 
 fn graphics(
     root: &Node,
-    output: &mut Output,
+    output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
     let mut drawing_layers = HashMap::new();
@@ -609,16 +609,16 @@ fn graphics(
                 });
                 LayerId(id)
             };
-            let width = if let Some(stroke) = node.child("stroke") {
+            let width = if let Some(stroke) = node.find_child("stroke") {
                 stroke.required("width")?.number(1)?
             } else {
-                node.child("width")
+                node.find_child("width")
                     .map(|w| w.number(1))
                     .transpose()?
                     .unwrap_or(0.0)
             };
             if node
-                .child("fill")
+                .find_child("fill")
                 .and_then(|n| n.atom(1).ok())
                 .is_some_and(|v| v == "yes" || v == "solid")
             {

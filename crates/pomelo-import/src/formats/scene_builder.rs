@@ -1,11 +1,11 @@
 //! Shared scene construction for native source readers.
-use super::Output;
+use super::ParsedBoard;
 use pomelo_core::{
     geometry::pad::PadPlacement,
     model::{BoardScene, Bounds, Point},
 };
-pub(super) fn output(version: impl Into<serde_json::Value>) -> Output {
-    Output {
+pub(super) fn new_parsed_board(version: impl Into<serde_json::Value>) -> ParsedBoard {
+    ParsedBoard {
         scene: BoardScene {
             layers: Vec::new(),
             special_layers: Vec::new(),
@@ -32,7 +32,7 @@ pub(super) fn output(version: impl Into<serde_json::Value>) -> Output {
         info: serde_json::json!({"version":version.into()}),
     }
 }
-pub(super) fn bounds(output: &mut Output) {
+pub(super) fn update_scene_bounds(output: &mut ParsedBoard) {
     let scene = &mut output.scene;
     let bounds = &mut scene.bounds;
     let mut include = |b: Bounds| {

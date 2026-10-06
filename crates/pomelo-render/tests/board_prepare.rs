@@ -2,7 +2,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use pomelo_core::{
-    copper::MeshLimits, picking_index::SegmentIndex, search::SearchIndex, task::CancellationToken,
+    copper::MeshLimits, picking_index::BoardPickingIndex, search::SearchIndex,
+    task::CancellationToken,
 };
 use pomelo_import::{
     BoardImporter, ImportContext, ImportOptions, TextEncoding, formats::allegro::AllegroImporter,
@@ -47,7 +48,7 @@ fn real_board_import_and_prepare_with_production_limits() -> anyhow::Result<()> 
     let custom = pads.build_custom_meshes(limits, &MeshLimits::default(), &cancel)?;
     let drills = PreparedDrills::build(&scene.pins, &scene.vias, PadLimits::default(), &cancel)?;
     let search = SearchIndex::build(&scene, &cancel)?.expect("search must complete");
-    let picking = SegmentIndex::build(Arc::clone(&scene), traces.max_instances, &cancel)?;
+    let picking = BoardPickingIndex::build(Arc::clone(&scene), traces.max_instances, &cancel)?;
 
     assert_eq!(picking.segment_count(), scene.segments.len());
     assert!(copper.vertices.len() <= limits.max_vertices);

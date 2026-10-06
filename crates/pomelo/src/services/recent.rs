@@ -1,6 +1,6 @@
 //! Successful import history, persisted independently of document lifetimes.
 
-use crate::prefs::{RecentEntry, RecentStore};
+use crate::services::preferences::{RecentEntry, RecentStore};
 use chrono::{DateTime, Datelike, TimeZone, Timelike};
 use gpui_kit::{App, AppContext, BorrowAppContext, Global, RenderImage, Task};
 use pomelo_core::{
@@ -103,7 +103,7 @@ pub fn remember(
 ) {
     cx.update_global::<RecentState, _>(|state, _| {
         let path = entry.path.clone();
-        crate::prefs::remember_relocated(&mut state.entries, entry, replaced_path);
+        crate::services::preferences::remember_relocated(&mut state.entries, entry, replaced_path);
         state.previews.remove(&path);
         if let Some(preview) = preview {
             state.previews.insert(path, preview);
@@ -206,7 +206,7 @@ pub fn opened_message<Tz: TimeZone>(seconds: u64, now: &DateTime<Tz>) -> Message
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prefs::RecentPresentation;
+    use crate::services::preferences::RecentPresentation;
 
     #[test]
     fn date_labels_use_local_midnight_and_retain_translation_parameters() {

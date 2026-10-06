@@ -1,5 +1,5 @@
 //! Window-wide side panel layout, shared by every PCB document.
-use crate::prefs::PanelPreferences;
+use crate::services::preferences::PanelPreferences;
 use gpui_kit::{App, AppContext, Context, Entity, component::ResizableState};
 
 // Keep the existing canvas command bar usable when both sidebars are wide.

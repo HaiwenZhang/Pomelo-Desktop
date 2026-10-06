@@ -108,7 +108,7 @@ fn main() -> anyhow::Result<()> {
         "msdf_text={:?}",
         texts.as_ref().map(|source| source.pick_quads.len())
     );
-    let picking = pomelo_core::picking_index::SegmentIndex::build(
+    let picking = pomelo_core::picking_index::BoardPickingIndex::build(
         std::sync::Arc::clone(&imported.scene),
         TraceLimits::default().max_instances,
         &cancel,

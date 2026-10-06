@@ -79,7 +79,7 @@ impl Call {
     }
 }
 impl Block {
-    pub fn child(&self, name: &str) -> Result<&Block, ImportError> {
+    pub fn require_child(&self, name: &str) -> Result<&Block, ImportError> {
         self.children
             .iter()
             .find(|b| b.name == name)

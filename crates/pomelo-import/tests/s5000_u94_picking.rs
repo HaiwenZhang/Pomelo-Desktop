@@ -9,7 +9,7 @@ use pomelo_core::{
         Pin, Point, Segment, Via, Zone, ZoneKind,
     },
     picking::{PickCategory, PickFilter, PickQuery},
-    picking_index::{SegmentIndex, SelectionAnchor},
+    picking_index::{BoardPickingIndex, SelectionAnchor},
     selection::SelectedObject,
     task::CancellationToken,
 };
@@ -168,8 +168,9 @@ fn real_u94_subset_uses_production_canvas_picking_and_filters() {
         diagnostics: Vec::new(),
     });
     let cancel = CancellationToken::default();
-    let index = SegmentIndex::build_with_budget(Arc::clone(&scene), 16, 4 * 1024 * 1024, &cancel)
-        .expect("bounded production index");
+    let index =
+        BoardPickingIndex::build_with_budget(Arc::clone(&scene), 16, 4 * 1024 * 1024, &cancel)
+            .expect("bounded production index");
     let hole = Point::new(16.9801794, 75.1774214);
     let gap = Point::new(17.265, 75.1774214);
     let fill = Point::new(16.98, 75.60);
@@ -379,7 +380,7 @@ fn real_u94_subset_uses_production_canvas_picking_and_filters() {
         .filter(|c| c["passed"] != true)
         .map(|c| c["name"].clone())
         .collect();
-    let report = json!({"method":"Production SegmentIndex::query_visible_hits / signed coverage / display rank with exact source paths restored from prior importer-output subset", "input_target":input,"input_target_bytes":bytes.len(),"input_target_sha256":input_sha256,"source":target.source,"index_budget_bytes":4*1024*1024,"counts":{"pins":scene.pins.len(),"vias":scene.vias.len(),"segments":scene.segments.len(),"zones":scene.zones.len()},"cases":results,"failure_names":failures,"passed":failures.is_empty(),"full_board_reimported_this_run":false,"gpu_mesh_validated":false,"allegro_visual_validated":false,"limitations":["Prior parsed-source subset only; omitted neighbors and global board ordering are not tested","Target SHA256 calculated inside this test from the exact bytes deserialized","No original BRD, full scene, GUI, screenshot, font or ANSI access","Display/category/alpha behavior is current Pomelo CPU product semantics, not Allegro parity","Imported GPU mesh is not restored; canvas query uses exact preserved analytic paths"]});
+    let report = json!({"method":"Production BoardPickingIndex::query_visible_hits / signed coverage / display rank with exact source paths restored from prior importer-output subset", "input_target":input,"input_target_bytes":bytes.len(),"input_target_sha256":input_sha256,"source":target.source,"index_budget_bytes":4*1024*1024,"counts":{"pins":scene.pins.len(),"vias":scene.vias.len(),"segments":scene.segments.len(),"zones":scene.zones.len()},"cases":results,"failure_names":failures,"passed":failures.is_empty(),"full_board_reimported_this_run":false,"gpu_mesh_validated":false,"allegro_visual_validated":false,"limitations":["Prior parsed-source subset only; omitted neighbors and global board ordering are not tested","Target SHA256 calculated inside this test from the exact bytes deserialized","No original BRD, full scene, GUI, screenshot, font or ANSI access","Display/category/alpha behavior is current Pomelo CPU product semantics, not Allegro parity","Imported GPU mesh is not restored; canvas query uses exact preserved analytic paths"]});
     std::fs::write(output, serde_json::to_vec_pretty(&report).unwrap())
         .expect("write explicit report");
     assert!(

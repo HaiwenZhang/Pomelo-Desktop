@@ -8,7 +8,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use pomelo_core::i18n::{LanguagePreference, Locale, MessageKey as Key, text};
 
-use crate::{i18n, prefs::ThemePreference, theme};
+use crate::{i18n, services::preferences::ThemePreference, theme};
 
 pub fn open(window: &mut Window, cx: &mut App) {
     // Repeated menu/shortcut activation must not stack settings surfaces.

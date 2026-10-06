@@ -6,8 +6,9 @@ mod definitions;
 mod outline;
 mod owners;
 mod routes;
+pub mod saved_fill;
 
-use super::Output;
+use super::ParsedBoard;
 use crate::{ImportContext, ImportError};
 use pomelo_core::{
     geometry::pad::PadPlacement,
@@ -15,7 +16,7 @@ use pomelo_core::{
 };
 use std::collections::{BTreeMap, HashMap};
 
-pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, ImportError> {
+pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
     let reader = binary::Reader::read(bytes, context)?;
     let metadata = definitions::metadata(&reader, context)?;
     let stacks = definitions::stacks(&reader, context)?;
@@ -144,7 +145,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
         bounds,
         diagnostics: Vec::new(),
     };
-    Ok(Output {
+    Ok(ParsedBoard {
         scene,
         zones,
         drawing_layers: Vec::new(),

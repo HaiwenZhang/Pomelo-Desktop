@@ -48,7 +48,7 @@ impl RankedHit {
     }
 }
 
-impl SegmentIndex {
+impl BoardPickingIndex {
     /// Web's five-logical-pixel tolerance, signed pad/stroke coverage, topmost exact
     /// hit before nearest misses. Truncation follows ordering, never precedes it.
     pub fn query_visible_objects(
@@ -602,8 +602,8 @@ mod contour_tests {
             diagnostics: vec![],
         });
         let cancel = CancellationToken::default();
-        let cached = SegmentIndex::build(Arc::clone(&scene), 1, &cancel).unwrap();
-        let mut unpruned = SegmentIndex::build(scene, 1, &cancel).unwrap();
+        let cached = BoardPickingIndex::build(Arc::clone(&scene), 1, &cancel).unwrap();
+        let mut unpruned = BoardPickingIndex::build(scene, 1, &cancel).unwrap();
         unpruned.zone_paths[0].fill(Some(bounds));
         for opacity in [0.0, 0.25] {
             let display = BoardDisplay {
@@ -616,7 +616,7 @@ mod contour_tests {
                         let query =
                             PickQuery::new(Point::new(f64::from(x) * 0.5, f64::from(y) * 0.5), 0.1)
                                 .unwrap();
-                        let values = |index: &SegmentIndex| {
+                        let values = |index: &BoardPickingIndex| {
                             index
                                 .query_visible_hits(
                                     query,

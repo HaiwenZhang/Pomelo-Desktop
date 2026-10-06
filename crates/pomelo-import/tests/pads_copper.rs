@@ -5,7 +5,7 @@ use pomelo_core::{
 };
 use pomelo_import::{
     ImportError,
-    formats::pads_copper::{self, Contour, Fill, Thermal},
+    formats::pads::saved_fill::{self, Contour, Fill, Thermal},
 };
 
 fn rectangle(a: f64, b: f64) -> Contour {
@@ -15,7 +15,7 @@ fn rectangle(a: f64, b: f64) -> Contour {
     }
 }
 fn mesh(fill: &Fill, cancel: &CancellationToken) -> CopperMesh {
-    let regions = pads_copper::build(fill, cancel).unwrap();
+    let regions = saved_fill::build(fill, cancel).unwrap();
     let rings = regions
         .into_iter()
         .flat_map(|r| std::iter::once(r.outer).chain(r.holes))
@@ -73,12 +73,12 @@ fn invalid_geometry_and_cancelled_fill_fail_before_clipping() {
     };
     fill.outer.ring[0][0] = f64::NAN;
     assert!(matches!(
-        pads_copper::build(&fill, &cancel),
+        saved_fill::build(&fill, &cancel),
         Err(ImportError::Format { .. })
     ));
     cancel.cancel();
     assert!(matches!(
-        pads_copper::build(&fill, &cancel),
+        saved_fill::build(&fill, &cancel),
         Err(ImportError::Cancelled)
     ));
 }

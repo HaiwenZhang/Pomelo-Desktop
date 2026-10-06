@@ -1,5 +1,7 @@
 //! Each document owns cancellation and rejects results from earlier requests.
 
+pub(crate) mod preparation;
+
 use std::{path::PathBuf, sync::Arc};
 
 use pomelo_core::i18n::MessageKey as Key;
@@ -21,7 +23,7 @@ pub struct PreparedDocument {
     pub render_diagnostics: Vec<Diagnostic>,
     pub board: ImportedBoard,
     pub search: Arc<pomelo_core::search::SearchIndex>,
-    pub picking: Arc<pomelo_core::picking_index::SegmentIndex>,
+    pub picking: Arc<pomelo_core::picking_index::BoardPickingIndex>,
     pub tracks: Arc<PreparedTracks>,
     pub zone_outlines: Arc<PreparedTracks>,
     pub copper: Arc<PreparedCopper>,
@@ -327,7 +329,7 @@ mod tests {
                     .unwrap(),
             ),
             picking: Arc::new(
-                pomelo_core::picking_index::SegmentIndex::build(scene, 10, &cancel).unwrap(),
+                pomelo_core::picking_index::BoardPickingIndex::build(scene, 10, &cancel).unwrap(),
             ),
             tracks,
             copper: Arc::new(

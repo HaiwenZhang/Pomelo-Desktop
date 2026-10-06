@@ -171,7 +171,7 @@ impl DrawingIndex {
         })
     }
 }
-impl SegmentIndex {
+impl BoardPickingIndex {
     /// Glyph metrics are supplied by the shared renderer; core retains only f64 geometry.
     pub fn with_text_quads(
         mut self,

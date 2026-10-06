@@ -4,8 +4,9 @@ use crate::actions::{
     PreviousDocument, Quit, ReloadDocument, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
 };
 use crate::services::startup_error;
+use crate::services::{recent, startup};
 use crate::workbench::Workbench;
-use crate::{i18n, recent, startup, theme};
+use crate::{i18n, theme};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use crate::{native_gpu_demo, viewport};
 use gpui_kit::component::{Theme, ThemeMode};

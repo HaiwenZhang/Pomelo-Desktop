@@ -1,5 +1,5 @@
 //! Pad definitions and bindings are decoded once and shared by placed instances.
-use super::super::{Output, SourceSpecialLayer, geometry as shared};
+use super::super::{ParsedBoard, SourceSpecialLayer, geometry as shared};
 use super::{
     Layer,
     binary::Object,
@@ -61,7 +61,7 @@ pub(super) fn build(
     layer_ids: &HashMap<i32, LayerId>,
     net_ids: &HashMap<i32, NetId>,
     components: &HashMap<i32, String>,
-    output: &mut Output,
+    output: &mut ParsedBoard,
     next: &mut u32,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
@@ -74,7 +74,7 @@ pub(super) fn build(
                 return Err(error("Unknown padstack definition"));
             }
             let id = integer(record.prop("id")?)?;
-            let source = record.child("psd")?;
+            let source = record.require_child("psd")?;
             let mut pads = HashMap::new();
             if let Some(pds) = source.children.iter().find(|c| c.name == "pds") {
                 for layer in &pds.children {
@@ -122,7 +122,7 @@ pub(super) fn build(
         if !matches!(source.prop("flp")?, Value::Bool(_)) {
             return Err(error("Invalid padstack flip flag"));
         }
-        let forward = call(source.child("lm")?, "forward")?
+        let forward = call(source.require_child("lm")?, "forward")?
             .args
             .iter()
             .map(|a| integer(&a.1))

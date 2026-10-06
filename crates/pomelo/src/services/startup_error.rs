@@ -12,12 +12,12 @@ use pomelo_core::{
     model::Diagnostic,
 };
 
-use super::prefs;
+use super::preferences;
 
 const LOG_LIMIT: usize = 16 * 1024;
 
 pub fn preferred_locale() -> Locale {
-    let preference = prefs::LanguageStore::platform_default()
+    let preference = preferences::LanguageStore::platform_default()
         .and_then(|store| store.load().ok())
         .unwrap_or_default();
     resolve_locale(preference, sys_locale::get_locale().as_deref())
@@ -45,7 +45,7 @@ pub fn report(locale: Locale, diagnostic: &Diagnostic) {
     let presentation = prepare(
         locale,
         diagnostic,
-        prefs::configuration_directory().as_deref(),
+        preferences::configuration_directory().as_deref(),
     );
     #[cfg(target_os = "windows")]
     {

@@ -19,4 +19,4 @@ Current coverage limits remain visible through diagnostics: PADS ordinary graphi
 
 The local retired TS files are archived in the ignored `.cache/retired-format-import` directory for recovery only. They are outside the active source tree and have no build or runtime entry point.
 
-See `docs/native-format-validation.md` at the repository root for cases, measured timings and validation commands.
+See [the validation guide](../../../../docs/validation-guide.md) for validation commands and [the code organization guide](../../../../docs/code-organization.md) for module responsibilities.

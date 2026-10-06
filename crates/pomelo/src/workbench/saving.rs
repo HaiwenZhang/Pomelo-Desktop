@@ -4,8 +4,8 @@ use super::*;
 
 #[derive(serde::Serialize)]
 pub(super) struct ViewSaveSnapshot {
-    pub(super) entries: Vec<crate::prefs::ViewEntry>,
-    pub(super) panels: crate::prefs::PanelPreferences,
+    pub(super) entries: Vec<crate::services::preferences::ViewEntry>,
+    pub(super) panels: crate::services::preferences::PanelPreferences,
 }
 
 impl ViewSaveSnapshot {

@@ -11,3 +11,5 @@ pub mod picking;
 pub mod search;
 pub mod sidebar;
 pub mod tabs;
+
+pub mod selection_details;

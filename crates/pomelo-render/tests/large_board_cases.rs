@@ -1,7 +1,7 @@
 //! External large-board regressions. Private BRD input is never checked in.
 use pomelo_core::{
-    copper::MeshLimits, memory::MemoryBudget, picking_index::SegmentIndex, search::SearchIndex,
-    task::CancellationToken,
+    copper::MeshLimits, memory::MemoryBudget, picking_index::BoardPickingIndex,
+    search::SearchIndex, task::CancellationToken,
 };
 use pomelo_import::{
     BoardImporter, ImportContext, ImportOptions, TextEncoding, formats::allegro::AllegroImporter,
@@ -114,7 +114,7 @@ fn prepare_case(name: &str) -> anyhow::Result<()> {
     let search =
         SearchIndex::build(scene, &cancel)?.ok_or_else(|| anyhow::anyhow!("cancelled search"))?;
     record_stage("search");
-    let picking = SegmentIndex::build(Arc::clone(scene), u32::MAX as usize, &cancel)?
+    let picking = BoardPickingIndex::build(Arc::clone(scene), u32::MAX as usize, &cancel)?
         .with_text_quads(&texts.pick_quads, &cancel)?;
     record_stage("picking");
     assert_eq!(picking.segment_count(), scene.segments.len());

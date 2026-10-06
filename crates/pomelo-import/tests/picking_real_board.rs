@@ -2,7 +2,7 @@ use pomelo_core::{
     display::BoardDisplay,
     model::Point,
     picking::{PickFilter, PickQuery},
-    picking_index::SegmentIndex,
+    picking_index::BoardPickingIndex,
     task::CancellationToken,
 };
 use pomelo_import::{
@@ -131,7 +131,7 @@ fn real_board_mixed_candidates_match_category_reference_queries() {
             },
         )
         .unwrap();
-    let index = SegmentIndex::build(board.scene.clone(), 4_000_000, &cancel).unwrap();
+    let index = BoardPickingIndex::build(board.scene.clone(), 4_000_000, &cancel).unwrap();
     let mut points = Vec::new();
     let mut sample = |values: Vec<(Point, pomelo_core::model::LayerId)>| {
         let step = (values.len() / 32).max(1);
@@ -312,7 +312,7 @@ fn real_board_index_matches_precise_reference_scan() {
         )
         .unwrap();
     let started = Instant::now();
-    let index = SegmentIndex::build(board.scene.clone(), 4_000_000, &cancel).unwrap();
+    let index = BoardPickingIndex::build(board.scene.clone(), 4_000_000, &cancel).unwrap();
     let build_ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut probes = Vec::new();
     let step = (board.scene.segments.len() / 128).max(1);

@@ -59,7 +59,7 @@ fn canvas_backdrill_picking_uses_cut_scope_and_independent_switch_with_base_fall
         display::{BoardDisplay, LayerPrimitives},
         model::{Backdrill, BackdrillDefinition, BackdrillSpan, DrillShape, Pad, Via},
         picking::{PickFilter, PickQuery},
-        picking_index::SegmentIndex,
+        picking_index::BoardPickingIndex,
         selection::SelectedObject,
     };
     let mut board = scene();
@@ -105,7 +105,7 @@ fn canvas_backdrill_picking_uses_cut_scope_and_independent_switch_with_base_fall
         finger: None,
     });
     let cancel = CancellationToken::default();
-    let index = SegmentIndex::build(std::sync::Arc::new(board), 0, &cancel).unwrap();
+    let index = BoardPickingIndex::build(std::sync::Arc::new(board), 0, &cancel).unwrap();
     for (back, drill, filled, layer, radius, expected) in [
         (true, false, true, 1, 0.0, true),
         (true, false, false, 1, 0.0, true),
@@ -172,7 +172,7 @@ fn rotated_text_quads_pick_last_source_owner_and_respect_text_visibility() {
         interaction::SelectionMode,
         model::{BoardDrawing, BoardText, TextAlignment},
         picking::{PickCategory, PickFilter, PickQuery},
-        picking_index::{SegmentIndex, TextPickQuad},
+        picking_index::{BoardPickingIndex, TextPickQuad},
         selection::{SelectedObject, resolve_canvas_candidates},
     };
     let mut board = scene();
@@ -243,7 +243,7 @@ fn rotated_text_quads_pick_last_source_owner_and_respect_text_visibility() {
     ));
     let cancel = CancellationToken::default();
     let board = std::sync::Arc::new(board);
-    let index = SegmentIndex::build_with_budget(board.clone(), 10, 64 * 1024, &cancel)
+    let index = BoardPickingIndex::build_with_budget(board.clone(), 10, 64 * 1024, &cancel)
         .unwrap()
         .with_text_quads(&quads, &cancel)
         .unwrap();
@@ -355,7 +355,7 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
         display::BoardDisplay,
         model::{DrillShape, Pad, Pin, Via, Zone},
         picking::{PickFilter, PickQuery},
-        picking_index::SegmentIndex,
+        picking_index::BoardPickingIndex,
         selection::SelectedObject,
     };
     let mut board = scene();
@@ -420,7 +420,7 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
     let cancel = CancellationToken::default();
     board.components[0].pins = vec![ObjectId(0)];
     let board = std::sync::Arc::new(board);
-    let index = SegmentIndex::build(board.clone(), 100, &cancel).unwrap();
+    let index = BoardPickingIndex::build(board.clone(), 100, &cancel).unwrap();
     let display = BoardDisplay::default();
     let query = PickQuery::new(Point::new(0.5, 0.0), 1.0).unwrap();
     let hits = index
@@ -848,7 +848,7 @@ fn zone_candidates_exclude_holes_and_filter_before_truncation() {
     board.zones = indexed_scene.zones.clone();
     let indexed_scene = std::sync::Arc::new(indexed_scene);
     let index =
-        pomelo_core::picking_index::SegmentIndex::build(indexed_scene.clone(), 100, &cancel)
+        pomelo_core::picking_index::BoardPickingIndex::build(indexed_scene.clone(), 100, &cancel)
             .unwrap();
     for x in [
         -1.0, 0.0, 2.0, 4.0, 5.0, 5.5, 6.0, 6.5, 7.0, 8.0, 10.0, 11.0,
@@ -910,7 +910,7 @@ fn zone_candidates_exclude_holes_and_filter_before_truncation() {
         );
     }
     assert!(matches!(
-        pomelo_core::picking_index::SegmentIndex::build_with_budget(
+        pomelo_core::picking_index::BoardPickingIndex::build_with_budget(
             indexed_scene,
             100,
             100,
@@ -927,7 +927,7 @@ fn zone_candidates_exclude_holes_and_filter_before_truncation() {
     malformed.segments.clear();
     malformed.zones = board.zones.clone();
     assert!(matches!(
-        pomelo_core::picking_index::SegmentIndex::build(
+        pomelo_core::picking_index::BoardPickingIndex::build(
             std::sync::Arc::new(malformed),
             100,
             &cancel
@@ -1020,7 +1020,7 @@ fn via_candidates_follow_copper_layers_and_ignore_drill_visibility() {
 fn mode_eligibility_is_applied_before_the_candidate_limit() {
     use pomelo_core::{
         picking::{PickFilter, PickQuery},
-        picking_index::SegmentIndex,
+        picking_index::BoardPickingIndex,
     };
     let mut board = scene();
     let mut connected = board.segments[0].clone();
@@ -1035,7 +1035,7 @@ fn mode_eligibility_is_applied_before_the_candidate_limit() {
         .collect();
     board.segments.push(connected);
     let cancel = CancellationToken::default();
-    let index = SegmentIndex::build(std::sync::Arc::new(board), 66, &cancel).unwrap();
+    let index = BoardPickingIndex::build(std::sync::Arc::new(board), 66, &cancel).unwrap();
     let hits = index
         .query_where(
             PickQuery::new(Point::new(0.5, 0.0), 0.15).unwrap(),
@@ -1055,7 +1055,7 @@ fn track_bounds_index_matches_reference_candidates_and_rejects_partial_builds() 
     use pomelo_core::{
         geometry::PathError,
         picking::{PickFilter, PickQuery},
-        picking_index::SegmentIndex,
+        picking_index::BoardPickingIndex,
     };
     use std::sync::Arc;
     let mut board = scene();
@@ -1071,12 +1071,12 @@ fn track_bounds_index_matches_reference_candidates_and_rejects_partial_builds() 
         .collect();
     let board = Arc::new(board);
     let cancel = CancellationToken::default();
-    let index = SegmentIndex::build(board.clone(), 1025, &cancel).unwrap();
+    let index = BoardPickingIndex::build(board.clone(), 1025, &cancel).unwrap();
     assert!(matches!(
-        SegmentIndex::build_with_budget(board.clone(), 1025, 0, &cancel),
+        BoardPickingIndex::build_with_budget(board.clone(), 1025, 0, &cancel),
         Err(pomelo_core::picking_index::IndexError::ByteLimit { actual, limit: 0 }) if actual > 0
     ));
-    assert!(SegmentIndex::build_with_budget(board.clone(), 1025, 256 * 1024, &cancel).is_ok());
+    assert!(BoardPickingIndex::build_with_budget(board.clone(), 1025, 256 * 1024, &cancel).is_ok());
     let mut display = pomelo_core::display::BoardDisplay::default();
     display.hidden_layers.insert(LayerId(1));
     for x in [0.0, 1.0, 20.5, 40.5, 100.0] {
@@ -1103,7 +1103,7 @@ fn track_bounds_index_matches_reference_candidates_and_rejects_partial_builds() 
         }
     }
     assert!(matches!(
-        SegmentIndex::build(board.clone(), 1024, &cancel),
+        BoardPickingIndex::build(board.clone(), 1024, &cancel),
         Err(pomelo_core::picking_index::IndexError::Geometry(
             PathError::PointLimit {
                 actual: 1025,
@@ -1123,14 +1123,15 @@ fn track_bounds_index_matches_reference_candidates_and_rejects_partial_builds() 
         Err(PathError::Cancelled)
     ));
     assert!(matches!(
-        SegmentIndex::build(board, 1025, &cancel),
+        BoardPickingIndex::build(board, 1025, &cancel),
         Err(pomelo_core::picking_index::IndexError::Geometry(
             PathError::Cancelled
         ))
     ));
     let mut empty = scene();
     empty.segments.clear();
-    let empty = SegmentIndex::build(Arc::new(empty), 0, &CancellationToken::default()).unwrap();
+    let empty =
+        BoardPickingIndex::build(Arc::new(empty), 0, &CancellationToken::default()).unwrap();
     assert!(
         empty
             .query(

@@ -1,6 +1,6 @@
 //! Theme restoration and serialized preference writes.
 
-use crate::prefs::{ThemePreference, ThemeStore};
+use crate::services::preferences::{ThemePreference, ThemeStore};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext, BorrowAppContext, Global, Task, Window};
 use pomelo_core::{i18n::MessageKey, model::Diagnostic};

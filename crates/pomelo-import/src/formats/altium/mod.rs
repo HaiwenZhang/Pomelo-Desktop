@@ -1,7 +1,7 @@
 //! Native Altium PcbDoc source import.
 mod compound;
 mod objects;
-use super::{Output, SourceDrawingLayer, geometry, native};
+use super::{ParsedBoard, SourceDrawingLayer, geometry, scene_builder};
 use crate::{ImportContext, ImportError};
 use compound::Compound;
 use pomelo_core::model::*;
@@ -190,7 +190,7 @@ struct Layers {
     v7: HashMap<u32, LayerId>,
     raw: Vec<u32>,
 }
-fn layers(board: &Properties, output: &mut Output) -> Result<Layers, ImportError> {
+fn layers(board: &Properties, output: &mut ParsedBoard) -> Result<Layers, ImportError> {
     let collect = |prefix: &str, suffix: &str| -> Result<Vec<(u32, u32, String)>, ImportError> {
         let mut rows = Vec::new();
         for (key, value) in board {
@@ -292,7 +292,7 @@ fn layers(board: &Properties, output: &mut Output) -> Result<Layers, ImportError
 fn copper(layers: &Layers, v6: u32, v7: u32) -> Option<LayerId> {
     layers.v7.get(&v7).or_else(|| layers.v6.get(&v6)).copied()
 }
-fn drawing(output: &mut Output, board: &Properties, raw: u32) -> LayerId {
+fn drawing(output: &mut ParsedBoard, board: &Properties, raw: u32) -> LayerId {
     let id = LayerId(0x20000 + raw);
     if !output.drawing_layers.iter().any(|l| l.id == id) {
         output.drawing_layers.push(SourceDrawingLayer {
@@ -314,7 +314,7 @@ fn drawing(output: &mut Output, board: &Properties, raw: u32) -> LayerId {
     }
     id
 }
-fn net(raw: u16, output: &Output) -> Result<NetId, ImportError> {
+fn net(raw: u16, output: &ParsedBoard) -> Result<NetId, ImportError> {
     if raw == 0xffff {
         return Ok(NetId(0));
     }
@@ -324,7 +324,7 @@ fn net(raw: u16, output: &Output) -> Result<NetId, ImportError> {
     }
     Ok(id)
 }
-fn draw(output: &mut Output, id: ObjectId, layer: LayerId, mut segments: Vec<Segment>) {
+fn draw(output: &mut ParsedBoard, id: ObjectId, layer: LayerId, mut segments: Vec<Segment>) {
     let first = output
         .scene
         .drawings
@@ -347,7 +347,7 @@ fn draw(output: &mut Output, id: ObjectId, layer: LayerId, mut segments: Vec<Seg
         text_ids: Vec::new(),
     });
 }
-fn outline(board: &Properties, output: &mut Output) -> Result<(), ImportError> {
+fn outline(board: &Properties, output: &mut ParsedBoard) -> Result<(), ImportError> {
     let mut first = None;
     let mut last = None;
     let mut push = |a, b, arc| {
@@ -425,9 +425,9 @@ fn outline(board: &Properties, output: &mut Output) -> Result<(), ImportError> {
     }
     Ok(())
 }
-pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, ImportError> {
+pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
     let compound = Compound::read(bytes, context)?;
-    let mut output = native::output("PcbDoc");
+    let mut output = scene_builder::new_parsed_board("PcbDoc");
     let properties = |name: &str| -> Result<Vec<Properties>, ImportError> {
         let count = compound.count(name, context)?;
         let data = compound.stream(&format!("{name}/Data"), context)?;
@@ -469,7 +469,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Output, 
     )?;
     objects::fills(&compound, &layers, &board, &mut output, context)?;
     objects::texts(&compound, &layers, &board, &mut output, context)?;
-    native::bounds(&mut output);
+    scene_builder::update_scene_bounds(&mut output);
     if polygons.len() > filled.len() {
         output.diagnostics.push(format!(
             "Altium {} polygons have no saved region fill; no repour performed",
