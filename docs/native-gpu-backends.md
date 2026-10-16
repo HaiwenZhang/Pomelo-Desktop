@@ -10,6 +10,8 @@
 
 应用通过 GPUI 的 GPU 绘制入口接入当前设备和帧目标；业务几何、批次、缓存和着色器由渲染 crate 管理。构建按目标平台启用对应后端。
 
+`NativeGpuRenderer::Snapshot` 与 `GpuPainterHandle<Snapshot>` 共享快照类型，`paint_gpu` 接收对应的 `Arc<Snapshot>`。当前三个后端通过独立 pass 的 painter 注册入口接入，以便管理 PCB 绘制所需的 stencil 附件。Metal 和 wgpu 的共享 pass 接口需另外实现对应的 shared painter。
+
 像素测试使用合成几何，并需要相应平台的实际 GPU。平台实现存在不代表跨平台视觉、性能和长期稳定性已完成验收。通用检查入口见[开发与验证](development-progress.md)。
 
 ## 代码布局
@@ -25,6 +27,8 @@ HLSL、MSL、WGSL 位于各平台着色器目录，分别维护；运行时不�
 Metal 的单次画布回调共用渲染编码器及附件，返回前结束编码。wgpu 的上传与绘制接入当前编码器。设备替换或窗口销毁时释放并重建关联资源。
 
 空裁剪和已上传的空曲线覆盖应跳过对应绘制，不能继续访问不存在的顶点缓冲区。错误展示不应改变画布布局，从而引起相机或缓存的重复失效。
+
+GPUI 的准备与绘制回调错误保留在 `status().last_error` 中，成功绘制不会自动清除；需要消费错误时使用 `take_error()`。`status().encoded` 仅表示回调成功编码，不代表 GPU 执行完成。
 
 ## 平台检查
 

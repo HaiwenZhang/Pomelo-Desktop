@@ -4,15 +4,16 @@ mod shaders;
 use super::{NativeGpuContext, NativeGpuRenderer};
 pub(crate) use driver::{Atlas, Buffer, Device, Pipeline};
 use gpui::ContentMask;
-use std::any::Any;
 
 struct PainterAdapter<R>(R);
 
 impl<R: NativeGpuRenderer> gpui_windows::D3D11Painter for PainterAdapter<R> {
+    type Snapshot = R::Snapshot;
+
     fn paint(
         &mut self,
         context: &mut gpui_windows::D3D11PaintContext<'_>,
-        data: &(dyn Any + Send + Sync),
+        data: &Self::Snapshot,
     ) -> anyhow::Result<()> {
         self.0.draw(
             &NativeGpuContext {
@@ -33,7 +34,7 @@ impl<R: NativeGpuRenderer> gpui_windows::D3D11Painter for PainterAdapter<R> {
 }
 
 /// Wrap an application renderer in the fork's window-scoped D3D11 painter.
-pub fn painter(renderer: impl NativeGpuRenderer) -> impl gpui::GpuPainter {
+pub fn painter<R: NativeGpuRenderer>(renderer: R) -> gpui::GpuPainter<R::Snapshot> {
     gpui_windows::d3d11_painter(PainterAdapter(renderer))
 }
 

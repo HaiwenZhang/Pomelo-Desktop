@@ -2,14 +2,11 @@
 use super::{NativeGpuContext, NativeGpuRenderer, probe_pipeline as pipeline};
 use anyhow::Context as _;
 use serde::Serialize;
-use std::{
-    any::Any,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
-/// Small immutable frame snapshot, passed opaquely through GPUI.
+/// Small immutable frame snapshot retained by GPUI.
 pub struct ProbeScene {
     pub(crate) palette: u32,
     pub(crate) triangle: bool,
@@ -69,14 +66,13 @@ impl PcbProbeRenderer {
 }
 
 impl NativeGpuRenderer for PcbProbeRenderer {
+    type Snapshot = ProbeScene;
+
     fn draw(
         &mut self,
         context: &NativeGpuContext<'_>,
-        data: &(dyn Any + Send + Sync),
+        scene: &Self::Snapshot,
     ) -> anyhow::Result<()> {
-        let scene = data
-            .downcast_ref::<ProbeScene>()
-            .context("GPU_PROBE_PAYLOAD_INVALID")?;
         if self.pipeline.is_none() {
             self.pipeline = Some(pipeline::Pipeline::new(&context.device)?);
             self.telemetry

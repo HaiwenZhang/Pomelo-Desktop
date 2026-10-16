@@ -148,7 +148,7 @@ pub struct BoardViewport {
     layer_scroll_target: Option<usize>,
     display: Arc<pomelo_core::display::BoardDisplay>,
     colors: Arc<BTreeMap<pomelo_core::model::LayerId, [f32; 4]>>,
-    renderer: Result<GpuPainterHandle, String>,
+    renderer: Result<GpuPainterHandle<BoardFrame>, String>,
     telemetry: Arc<TraceTelemetry>,
     copper_telemetry: Arc<CopperTelemetry>,
     pad_telemetry: Arc<TraceTelemetry>,

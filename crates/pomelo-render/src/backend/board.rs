@@ -1,4 +1,4 @@
-//! Real scene trace renderer. The GPUI callback only transports this opaque frame.
+//! Real scene trace renderer with typed GPUI frame snapshots.
 
 use super::trace_pipeline::{InstanceSource, Pipeline, UploadedTracks};
 use super::{NativeGpuContext, NativeGpuRenderer};
@@ -9,7 +9,6 @@ use pomelo_core::{
     model::{Bounds, LayerId},
 };
 use std::{
-    any::Any,
     collections::BTreeMap,
     sync::{
         Arc,
@@ -475,14 +474,13 @@ impl<S: InstanceSource> TraceRenderer<S> {
 }
 
 impl<S: InstanceSource> NativeGpuRenderer for TraceRenderer<S> {
+    type Snapshot = TraceFrame<S>;
+
     fn draw(
         &mut self,
         context: &NativeGpuContext<'_>,
-        data: &(dyn Any + Send + Sync),
+        frame: &Self::Snapshot,
     ) -> anyhow::Result<()> {
-        let frame = data
-            .downcast_ref::<TraceFrame<S>>()
-            .context("GPU_TRACE_PAYLOAD_INVALID")?;
         self.prepare(context, frame)?;
         self.draw_prepared(context, frame, TraceScope::All)
     }

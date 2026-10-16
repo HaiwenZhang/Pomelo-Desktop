@@ -18,7 +18,7 @@ pub struct NativeGpuDemo {
     color_rotation: u32,
     clipped: bool,
     dark: bool,
-    renderer: Result<GpuPainterHandle, String>,
+    renderer: Result<GpuPainterHandle<ProbeScene>, String>,
     telemetry: Arc<ProbeTelemetry>,
     triangle: bool,
 }

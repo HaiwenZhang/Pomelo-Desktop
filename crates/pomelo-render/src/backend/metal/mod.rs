@@ -3,13 +3,14 @@ mod driver;
 mod shaders;
 use super::{NativeGpuContext, NativeGpuRenderer};
 pub(crate) use driver::{Atlas, Buffer, Device, Pipeline};
-use std::any::Any;
 struct PainterAdapter<R>(R);
 impl<R: NativeGpuRenderer> gpui_apple::MetalPainter for PainterAdapter<R> {
+    type Snapshot = R::Snapshot;
+
     fn paint(
         &mut self,
         context: &mut gpui_apple::MetalPaintContext<'_>,
-        data: &(dyn Any + Send + Sync),
+        data: &Self::Snapshot,
     ) -> anyhow::Result<()> {
         let device = Device::new(context);
         self.0.draw(
@@ -28,7 +29,7 @@ impl<R: NativeGpuRenderer> gpui_apple::MetalPainter for PainterAdapter<R> {
         self.0.reset();
     }
 }
-pub fn painter(renderer: impl NativeGpuRenderer) -> impl gpui::GpuPainter {
+pub fn painter<R: NativeGpuRenderer>(renderer: R) -> gpui::GpuPainter<R::Snapshot> {
     gpui_apple::metal_painter(PainterAdapter(renderer))
 }
 pub const NAME: &str = "GPUI_METAL";

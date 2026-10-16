@@ -17,7 +17,6 @@ use super::metal::Device;
 #[cfg(target_os = "linux")]
 use super::wgpu::Device;
 use gpui::{Bounds, ContentMask, ScaledPixels};
-use std::any::Any;
 #[derive(Clone, Copy)]
 pub(crate) struct Rect {
     pub(crate) left: i32,
@@ -32,10 +31,12 @@ pub struct NativeGpuContext<'a> {
     pub content_mask: ContentMask<ScaledPixels>,
 }
 pub trait NativeGpuRenderer: Send + 'static {
+    type Snapshot: Send + Sync + 'static;
+
     fn draw(
         &mut self,
         context: &NativeGpuContext<'_>,
-        data: &(dyn Any + Send + Sync),
+        snapshot: &Self::Snapshot,
     ) -> anyhow::Result<()>;
     fn reset(&mut self);
 }

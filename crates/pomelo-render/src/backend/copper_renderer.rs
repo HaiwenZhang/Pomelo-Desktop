@@ -8,7 +8,6 @@ use super::{
 use crate::copper::PreparedCopper;
 use anyhow::Context as _;
 use std::{
-    any::Any,
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
@@ -475,14 +474,13 @@ impl BoardRenderer {
     }
 }
 impl NativeGpuRenderer for BoardRenderer {
+    type Snapshot = BoardFrame;
+
     fn draw(
         &mut self,
         context: &NativeGpuContext<'_>,
-        data: &(dyn Any + Send + Sync),
+        frame: &Self::Snapshot,
     ) -> anyhow::Result<()> {
-        let frame = data
-            .downcast_ref::<BoardFrame>()
-            .context("GPU_BOARD_PAYLOAD_INVALID")?;
         let timing = crate::frame_timing::begin();
         let mut category_us = [[0u64; 10]; 3];
         let mut category_primary_draw_calls = [[[0u64; 4]; 10]; 3];
