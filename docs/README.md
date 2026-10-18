@@ -7,6 +7,7 @@ Pomelo Desktop 是基于 Rust、GPUI 和 GPUI Kit 的本地 PCB 查看器。本�
 - [功能与操作](viewer-features.md)：导入、查看、搜索、显示控制及功能边界。
 - [开发进展与验证](development-progress.md)：已有能力、检查命令及验收范围。
 - [后续开发计划](native-pcb-viewer-development-plan.md)：改进方向与完成标准。
+- [HFSS 3D Layout 三维显示调研](hfss3d-layout-3d-rendering-reference.md)：当前版本界面核查、功能目录、官方来源与未验证边界。
 
 ## 工程设计
 
