@@ -20,6 +20,8 @@
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
+![Pomelo Desktop PCB 查看器中的多层电路板](images/pcb-example-en.png)
+
 ## 更清晰地查看电路板
 
 - **设计文件留在本地。** 在电脑上导入和查看电路板，无需上传；查看操作不会修改源文件。
@@ -143,7 +145,7 @@ macOS 默认临时签名，最低版本为 macOS 14.0。可设置 `MACOS_SIGNING
 
 ## 许可证
 
-项目代码采用 [MIT 许可证](LICENSE)。内置字体保留各自的许可证，详见[思源黑体](assets/fonts/source-han-sans/README.md)。
+Copyright (c) 2026 HaiwenZhang。项目代码采用 [Apache 2.0 许可证](LICENSE)（`Apache-2.0`）。内置字体保留各自的许可证，详见[思源黑体](assets/fonts/source-han-sans/README.md)。
 
 ## 致谢
 

@@ -20,6 +20,8 @@
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
+![Pomelo Desktop PCB ビューアーで表示した多層基板](images/pcb-example-en.png)
+
 ## 基板をより見やすく
 
 - **設計データはローカルに。** 基板ファイルをアップロードせずに読み込み、表示できます。元のファイルは変更しません。
@@ -143,7 +145,7 @@ macOS は既定でアドホック署名、最低 macOS 14.0 です。`MACOS_SIGN
 
 ## ライセンス
 
-プロジェクトのコードは [MIT ライセンス](LICENSE)です。同梱フォントにはそれぞれのライセンスが適用されます。[Source Han Sans](assets/fonts/source-han-sans/README.md)を参照してください。
+Copyright (c) 2026 HaiwenZhang。プロジェクトのコードには [Apache License 2.0](LICENSE)（`Apache-2.0`）が適用されます。同梱フォントにはそれぞれのライセンスが適用されます。[Source Han Sans](assets/fonts/source-han-sans/README.md)を参照してください。
 
 ## 謝辞
 

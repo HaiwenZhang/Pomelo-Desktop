@@ -20,6 +20,8 @@
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
+![Pomelo Desktop PCB viewer showing a multilayer board](images/pcb-example-en.png)
+
 ## Your board, a clearer view
 
 - **Keep designs local.** Import and view board files on your computer without uploading them. Viewing does not modify the source board.
@@ -143,7 +145,7 @@ Contributions to file compatibility, rendering accuracy, performance, translatio
 
 ## License
 
-Project code is licensed under [MIT](LICENSE). Bundled font assets retain their own licenses; see [Source Han Sans](assets/fonts/source-han-sans/README.md).
+Copyright (c) 2026 HaiwenZhang. Project code is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`). Bundled font assets retain their own licenses; see [Source Han Sans](assets/fonts/source-han-sans/README.md).
 
 ## Acknowledgments
 

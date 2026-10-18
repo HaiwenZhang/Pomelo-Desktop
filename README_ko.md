@@ -20,6 +20,8 @@
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
+![Pomelo Desktop PCB 뷰어에 표시된 다층 기판](images/pcb-example-en.png)
+
 ## 보드를 더 선명하게 살펴보기
 
 - **설계 파일은 로컬에 보관됩니다.** 업로드 없이 컴퓨터에서 보드를 가져오고 확인합니다. 원본 파일은 수정하지 않습니다.
@@ -143,7 +145,7 @@ macOS는 기본적으로 임시 서명하며 최소 macOS 14.0을 지원합니�
 
 ## 라이선스
 
-프로젝트 코드는 [MIT 라이선스](LICENSE)를 따릅니다. 포함된 글꼴에는 각각의 라이선스가 적용됩니다. [Source Han Sans](assets/fonts/source-han-sans/README.md)를 참고하세요.
+Copyright (c) 2026 HaiwenZhang. 프로젝트 코드는 [Apache License 2.0](LICENSE)(`Apache-2.0`)을 따릅니다. 포함된 글꼴에는 각각의 라이선스가 적용됩니다. [Source Han Sans](assets/fonts/source-han-sans/README.md)를 참고하세요.
 
 ## 감사의 말
 

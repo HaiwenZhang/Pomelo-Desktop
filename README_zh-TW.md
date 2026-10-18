@@ -20,6 +20,8 @@
   <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
 </p>
 
+![Pomelo Desktop PCB 檢視器中的多層電路板](images/pcb-example-en.png)
+
 ## 更清晰地檢視電路板
 
 - **設計檔案留在本機。** 在電腦上匯入與檢視電路板，無須上傳；檢視操作不會修改原始檔案。
@@ -143,7 +145,7 @@ macOS 預設臨時簽名，最低版本為 macOS 14.0。可設定 `MACOS_SIGNING
 
 ## 授權
 
-專案程式碼採用 [MIT 授權](LICENSE)。內附字型保留各自的授權，詳見[思源黑體](assets/fonts/source-han-sans/README.md)。
+Copyright (c) 2026 HaiwenZhang。專案程式碼採用 [Apache 2.0 授權條款](LICENSE)（`Apache-2.0`）。內附字型保留各自的授權，詳見[思源黑體](assets/fonts/source-han-sans/README.md)。
 
 ## 致謝
 
