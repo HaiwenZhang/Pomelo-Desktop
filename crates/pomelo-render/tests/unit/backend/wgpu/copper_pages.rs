@@ -365,7 +365,9 @@ fn copper_pages_preserve_pixels_and_holes_across_upload_boundaries() {
 #[test]
 #[ignore = "requires POMELO_TEST_BOARD and a GPU adapter; real board copper upload"]
 fn copper_pages_upload_large_source_backed_board() {
-    use pomelo_import::{BoardImporter, ImportContext, ImportOptions, allegro::AllegroImporter};
+    use pomelo_import::{
+        BoardImporter, ImportContext, ImportOptions, formats::allegro::AllegroImporter,
+    };
     let path = std::env::var_os("POMELO_TEST_BOARD").expect("set POMELO_TEST_BOARD");
     let cancel = CancellationToken::default();
     let imported = AllegroImporter

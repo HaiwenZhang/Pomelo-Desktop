@@ -118,3 +118,65 @@ fn native_readers_preserve_case_counts_connectivity_and_finite_geometry() {
         }
     }
 }
+
+/// Run with POMELO_ALLEGRO_261_CASES=debug and --ignored.
+#[test]
+#[ignore = "requires POMELO_ALLEGRO_261_CASES pointing at the local Allegro 26.1 boards"]
+fn allegro_261_cases_import_without_diagnostics() {
+    let root = PathBuf::from(
+        std::env::var_os("POMELO_ALLEGRO_261_CASES").expect("set POMELO_ALLEGRO_261_CASES"),
+    );
+    let cancel = CancellationToken::default();
+    for (file, counts) in [
+        (
+            "DDR5_RDIMM_ARM_26.1.brd",
+            [18, 5581, 277334, 26912, 4859, 24797, 13174],
+        ),
+        (
+            "874140_NVL_H_LP5X_CAMM_T3_Rev_0p7_23p1_26.1.brd",
+            [18, 4707, 149767, 19623, 5727, 13419, 1647],
+        ),
+    ] {
+        let board = FormatImporter
+            .import(
+                &root.join(file),
+                &ImportOptions::default(),
+                &ImportContext {
+                    cancellation: &cancel,
+                    progress: &|_| {},
+                },
+            )
+            .unwrap();
+        let s = &board.scene;
+        assert_eq!(board.source.layout_version, 261, "{file}");
+        assert!(s.diagnostics.is_empty(), "{file}: {:?}", s.diagnostics);
+        assert!(s.bounds.is_valid(), "{file}");
+        assert_eq!(
+            [
+                s.layers.len(),
+                s.nets.len(),
+                s.segments.len(),
+                s.pins.len(),
+                s.components.len(),
+                s.vias.len(),
+                s.zones.len(),
+            ],
+            counts,
+            "{file}"
+        );
+        for pin in &s.pins {
+            assert!(pin.at.x.is_finite() && pin.at.y.is_finite(), "{file}");
+            assert!(
+                pin.net == pomelo_core::model::NetId(0) || s.nets.contains_key(&pin.net),
+                "{file}"
+            );
+        }
+        for edge in &s.segments {
+            assert!(edge.bounds().is_some(), "{file}");
+            assert!(
+                edge.net == pomelo_core::model::NetId(0) || s.nets.contains_key(&edge.net),
+                "{file}"
+            );
+        }
+    }
+}

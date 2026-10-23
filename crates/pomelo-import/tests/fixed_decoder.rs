@@ -30,6 +30,7 @@ fn fixture(version: u16, kind: u8, size: usize) -> (Vec<u8>, RecordSpan) {
         180 => 0x150000,
         181 => 0x150200,
         251 => 0x160100,
+        261 => 0x170300,
         _ => unreachable!(),
     };
     let mut bytes = vec![0; OFFSET + size];
@@ -344,9 +345,9 @@ fn length(kind: u8, version: u16) -> usize {
     }
 }
 #[test]
-fn every_fixed_layout_consumes_exact_declared_boundary_in_all_thirteen_versions() {
+fn every_fixed_layout_consumes_exact_declared_boundary_in_all_supported_versions() {
     for version in [
-        152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251,
+        152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251, 261,
     ] {
         for kind in
             (1..=62).filter(|&kind| pomelo_import::formats::allegro::decoder::fixed::supports(kind))

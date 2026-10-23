@@ -16,6 +16,14 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 ## 几何与交互
 
+Allegro 26.1 的合成测试覆盖文件标识 `0x00170300`、头部字段、记录边界和解码。另有本地样例回归，检查完整导入的对象数量、网络引用、有限坐标和无诊断结果：
+
+```sh
+POMELO_ALLEGRO_261_CASES=/path/to/local/cases cargo test -p pomelo-import --locked --test native_cases allegro_261 -- --ignored
+```
+
+该检查只验证 CPU 导入，不代表 GPU 显示验证。
+
 几何检查覆盖直线、圆弧、退化路径、凹轮廓、孔洞、重复点和极端坐标。相机检查覆盖坐标往返、光标锚点缩放、适应整板及最小可见范围。
 
 搜索与拾取检查覆盖排序、对象分组、类别过滤、隐藏图层、组成员边界及定位范围。合成数据应有可独立计算的预期结果，不能仅复述实现。

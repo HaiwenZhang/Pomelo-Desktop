@@ -31,6 +31,7 @@ fn supported_layout_families_ignore_low_revision_byte() {
         (0x150000, 180),
         (0x150200, 181),
         (0x160100, 251),
+        (0x170300, 261),
     ] {
         assert_eq!(resolve_version(magic | 0x42).unwrap(), version);
     }
@@ -84,4 +85,41 @@ fn unknown_magic_is_rejected() {
         resolve_version(0xdeadbeef),
         Err(ImportError::UnsupportedMagic(0xdeadbeef))
     ));
+}
+
+#[test]
+fn v261_header_preserves_metadata_lists_and_sentinels() {
+    let mut bytes = fixture(0x170300);
+    write(&mut bytes, 0x14, 12345);
+    write(&mut bytes, 0x28, 0x2000);
+    write(&mut bytes, 0x34, 42);
+    write(&mut bytes, 0x60, 101);
+    write(&mut bytes, 0x64, 999);
+    write(&mut bytes, 0x80, 105);
+    write(&mut bytes, 0x84, 222);
+    write(&mut bytes, 0xb0, 111);
+    write(&mut bytes, 0xb4, 333);
+    bytes[0x144..0x148].copy_from_slice(b"26.1");
+    bytes[0x1ac] = 3;
+    write(&mut bytes, 0x26c, 0);
+    write(&mut bytes, 0x28c, 10000);
+    write(&mut bytes, 0x428, 6);
+    write(&mut bytes, 0x42c, 444);
+    let header = BrdHeader::read(&bytes, TextEncoding::Utf8).unwrap();
+    assert_eq!(header.version, 261);
+    assert_eq!(header.writer_version, "26.1");
+    assert_eq!(header.object_count, 12345);
+    assert_eq!(header.constraint_end, 0x2000);
+    assert_eq!(header.string_count, 42);
+    assert_eq!((header.units, header.divisor), (3, 10000));
+    assert_eq!((header.text_list.head, header.text_list.tail), (333, 111));
+    assert_eq!(
+        (header.graphic_list.head, header.graphic_list.tail),
+        (222, 105)
+    );
+    assert_eq!(header.sentinel_keys, [101, 105, 111]);
+    assert_eq!(
+        (header.layer_map[0].class_id, header.layer_map[0].record_id),
+        (6, 444)
+    );
 }

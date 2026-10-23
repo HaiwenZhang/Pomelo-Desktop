@@ -495,7 +495,7 @@ impl State<'_, '_, '_, '_> {
     }
 
     fn paired_nets(&mut self) -> Result<PairedNets, ImportError> {
-        if ![152, 157, 165, 166, 172, 174, 251].contains(&self.version) {
+        if ![152, 157, 165, 166, 172, 174, 251, 261].contains(&self.version) {
             return Err(ImportError::UnsupportedRecordLayout {
                 record_type: 0x1a,
                 version: self.version,

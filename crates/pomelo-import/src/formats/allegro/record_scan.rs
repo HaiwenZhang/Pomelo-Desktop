@@ -27,7 +27,7 @@ pub(super) fn scan_record(
         0x03 => scan_field(reader, version, limits, offset)?,
         0x1a => {
             // V165/V166 paired nets retain the 88-byte layout, verified against real records.
-            if ![152, 157, 165, 166, 172, 174, 251].contains(&version) {
+            if ![152, 157, 165, 166, 172, 174, 251, 261].contains(&version) {
                 return Err(ImportError::UnsupportedRecordLayout {
                     record_type: kind,
                     version,

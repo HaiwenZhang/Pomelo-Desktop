@@ -9,8 +9,8 @@ use pomelo_import::{
 };
 
 const START: usize = 0x1200;
-const VERSIONS: [u16; 13] = [
-    152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251,
+const VERSIONS: [u16; 14] = [
+    152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251, 261,
 ];
 fn put16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
@@ -33,6 +33,7 @@ fn fixture(version: u16, kind: u8, size: usize) -> (Vec<u8>, RecordSpan) {
         180 => 0x150000,
         181 => 0x150200,
         251 => 0x160100,
+        261 => 0x170300,
         _ => unreachable!(),
     };
     let mut bytes = vec![0; START + size];
@@ -194,8 +195,8 @@ fn modern_padstacks_retain_extended_drill_metadata_and_last_shape_word() {
 
 #[test]
 fn fonts_distinguish_spacing_word_positions_capacity_and_used_count() {
-    for version in [174, 181, 251] {
-        let stride = if version == 251 { 64 } else { 68 };
+    for version in [174, 181, 251, 261] {
+        let stride = if version >= 251 { 64 } else { 68 };
         let (mut bytes, span) = fixture(version, 0x36, 36 + stride * 2);
         put16(&mut bytes, START + 2, 8);
         put32(&mut bytes, START + 16, 2);
@@ -208,7 +209,7 @@ fn fonts_distinguish_spacing_word_positions_capacity_and_used_count() {
         put32(&mut bytes, entry + spacing + 4, 400);
         put32(
             &mut bytes,
-            entry + if version == 251 { 28 } else { 32 },
+            entry + if version >= 251 { 28 } else { 32 },
             500,
         );
         let VariableRecord::DefinitionTable(record) = variable(&bytes, &span) else {
@@ -467,7 +468,7 @@ fn every_variable_layout_obeys_version_specific_empty_boundaries() {
                 _ => {}
             }
             let result = decode(&bytes, &span, &DecodeLimits::default());
-            if kind == 0x1a && ![152, 157, 165, 166, 172, 174, 251].contains(&version) {
+            if kind == 0x1a && ![152, 157, 165, 166, 172, 174, 251, 261].contains(&version) {
                 assert!(matches!(
                     result,
                     Err(ImportError::UnsupportedRecordLayout { .. })

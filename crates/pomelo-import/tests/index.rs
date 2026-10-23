@@ -54,6 +54,7 @@ fn board(version: u16, strings: u32) -> Vec<u8> {
         180 => 0x150000,
         181 => 0x150200,
         251 => 0x160100,
+        261 => 0x170300,
         _ => unreachable!(),
     };
     let mut bytes = vec![0; START];
@@ -177,9 +178,9 @@ fn explicit_encoding_overrides_auto_detection_and_keeps_strict_errors() {
 }
 
 #[test]
-fn boundaries_and_unsigned_keys_are_exact_for_all_thirteen_families() {
+fn boundaries_and_unsigned_keys_are_exact_for_all_supported_families() {
     for version in [
-        152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251,
+        152, 157, 160, 162, 164, 165, 166, 172, 174, 175, 180, 181, 251, 261,
     ] {
         let length = if version >= 174 { 24 } else { 20 };
         let mut bytes = board(version, 2);
