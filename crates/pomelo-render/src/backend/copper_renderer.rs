@@ -349,6 +349,8 @@ impl CopperRenderer {
 }
 
 pub struct BoardFrame {
+    pub placement_outlines: Option<Arc<crate::tracks::PreparedTracks>>,
+    pub placements: Option<Arc<PreparedCopper>>,
     pub curves: Option<Arc<crate::scene::curves::CurveFillCache>>,
     pub glyphs: Option<Arc<crate::text::msdf::PreparedGlyphs>>,
     pub labels: Option<Arc<crate::text::msdf::PreparedGlyphs>>,
@@ -366,6 +368,8 @@ pub struct BoardFrame {
     pub layer_order: Arc<Vec<pomelo_core::model::LayerId>>,
 }
 pub struct BoardRenderer {
+    placement_outlines: TraceRenderer,
+    placements: CopperRenderer,
     glyphs: TraceRenderer<crate::text::msdf::PreparedGlyphs>,
     labels: TraceRenderer<crate::text::msdf::PreparedGlyphs>,
     zone_outlines: TraceRenderer,
@@ -411,6 +415,8 @@ impl BoardRenderer {
         texts: Arc<TraceTelemetry>,
     ) -> Self {
         Self {
+            placements: CopperRenderer::new(Arc::new(CopperTelemetry::default())),
+            placement_outlines: TraceRenderer::new(Arc::new(TraceTelemetry::default())),
             glyphs: TraceRenderer::new(Arc::clone(&texts)),
             labels: TraceRenderer::new(Arc::new(TraceTelemetry::default())),
             zone_outlines: TraceRenderer::new(Arc::new(TraceTelemetry::default())),
@@ -430,6 +436,14 @@ impl BoardRenderer {
     }
     pub fn with_label_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
         self.labels.set_telemetry(telemetry);
+        self
+    }
+    pub fn with_placement_telemetry(mut self, telemetry: Arc<CopperTelemetry>) -> Self {
+        self.placements.telemetry = telemetry;
+        self
+    }
+    pub fn with_placement_outline_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
+        self.placement_outlines.set_telemetry(telemetry);
         self
     }
     pub fn with_custom_outline_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
@@ -482,8 +496,8 @@ impl NativeGpuRenderer for BoardRenderer {
         frame: &Self::Snapshot,
     ) -> anyhow::Result<()> {
         let timing = crate::frame_timing::begin();
-        let mut category_us = [[0u64; 10]; 3];
-        let mut category_primary_draw_calls = [[[0u64; 4]; 10]; 3];
+        let mut category_us = [[0u64; 11]; 3];
+        let mut category_primary_draw_calls = [[[0u64; 4]; 11]; 3];
         self.copper.static_shapes_fill_solid = frame.display.static_shapes_fill_solid;
         // Defer copper uploads until this exact trace source is uploaded. Combined application
         // upload traffic remains <= 4 MiB/frame, including scene revisions and device recovery.
@@ -559,8 +573,15 @@ impl NativeGpuRenderer for BoardRenderer {
         let label_frame = frame.labels.as_ref().map(|source| {
             let mut labels = frame.traces.base().with_source(Arc::clone(source));
             labels.opacity = frame.display.global_opacity;
+            labels.object_filter = frame.display.object_filter;
             labels
         });
+        let placement_label_owners: BTreeSet<_> = label_frame
+            .iter()
+            .flat_map(|label| &label.tracks.instances)
+            .filter(|glyph| glyph.ids[1] == pomelo_core::display::DisplayCategory::Placement as u32)
+            .map(|glyph| pomelo_core::model::ObjectId(glyph.ids[0]))
+            .collect();
         // Most zones have no embedded labels. Resolve owners once per frame,
         // rather than entering stencil and scanning all glyphs for every zone.
         let zone_label_owners: BTreeSet<_> = label_frame
@@ -660,6 +681,28 @@ impl NativeGpuRenderer for BoardRenderer {
             &mut upload_budget,
         )?;
         let mut layers = Vec::new();
+        let placement_ready = if frame.display.quickview.is_some()
+            && let Some(source) = &frame.placements
+        {
+            self.placements.prepare_with_budget(
+                context,
+                source,
+                allow_label_upload,
+                &mut upload_budget,
+            )?
+        } else {
+            false
+        };
+        if frame.display.quickview.is_some()
+            && placement_ready
+            && let Some(source) = &frame.placement_outlines
+        {
+            self.placement_outlines.prepare_with_budget(
+                context,
+                &frame.traces.with_source(Arc::clone(source)),
+                &mut upload_budget,
+            )?;
+        }
         for layer in frame
             .layer_order
             .iter()
@@ -720,7 +763,11 @@ impl NativeGpuRenderer for BoardRenderer {
         use super::board::{OverlayPass, TraceScope};
         use pomelo_core::display::{DisplayCategory as Category, LayerPrimitive};
         let mut base = frame.traces.base();
+        base.net_colors = (!frame.display.appearance.hide_net_colors
+            && !frame.display.appearance.nets.is_empty())
+        .then(|| Arc::clone(&frame.display));
         base.opacity = frame.display.global_opacity;
+        base.object_filter = frame.display.object_filter;
         let outline_calls = timing.map(|_| self.primary_draw_calls());
         let outline_started = timing.map(|_| std::time::Instant::now());
         self.traces
@@ -741,6 +788,7 @@ impl NativeGpuRenderer for BoardRenderer {
                     Category::ZoneOutline,
                     Category::Trace,
                     Category::Text,
+                    Category::Placement,
                     Category::Pin,
                     Category::Via,
                 ]
@@ -765,6 +813,7 @@ impl NativeGpuRenderer for BoardRenderer {
                 frame.traces.clone()
             };
             traces.filled = frame.display.filled;
+            traces.object_filter = frame.display.object_filter;
             traces.pass = if pass == OverlayPass::Hover
                 && traces.hover_selection.as_ref().is_some_and(|(target, _)| {
                     !matches!(target, pomelo_core::selection::SelectionTarget::Object(_))
@@ -774,10 +823,22 @@ impl NativeGpuRenderer for BoardRenderer {
                 pass
             };
             for &(layer, category) in &commands {
-                if category != Category::Drill && !frame.display.layer_visible(layer) {
+                if category != Category::Drill && !frame.display.category_visible(layer, category) {
                     continue;
                 }
                 traces.material_override = frame.display.appearance.material(layer, category);
+                traces.pattern = if pass == OverlayPass::Base
+                    && (frame.display.filled || !matches!(category, Category::Pin | Category::Via))
+                {
+                    frame.display.appearance.material_pattern(layer, category)
+                } else {
+                    None
+                };
+                traces.brightness = if pass == OverlayPass::Base {
+                    frame.display.layer_brightness(layer)
+                } else {
+                    1.0
+                };
                 let command_calls = timing.map(|_| self.primary_draw_calls());
                 let command_started = timing.map(|_| std::time::Instant::now());
                 // Allegro's shapes slider overrides global alpha for shape fill;
@@ -790,6 +851,66 @@ impl NativeGpuRenderer for BoardRenderer {
                     frame.display.global_opacity
                 };
                 match category {
+                    Category::Placement if pass == OverlayPass::Base && placement_ready => {
+                        let mut placement = traces.clone();
+                        placement.net_colors = None;
+                        placement.object_colors = None;
+                        // Placement coverage clips labels without adding a material fill.
+                        placement.material_override = Some([0.55, 0.58, 0.62, 0.0]);
+                        placement.object_filter = Default::default();
+                        placement.pattern = None;
+                        placement.color_mode = pomelo_core::display::ColorMode::Layer;
+                        if let Some(label) = &label_frame
+                            && self.labels.is_uploaded(&label.tracks)
+                        {
+                            self.placements.draw_annotated(
+                                context,
+                                &placement,
+                                1.0,
+                                layer,
+                                Some(&placement_label_owners),
+                                &mut |batch| {
+                                    self.labels.draw_prepared(
+                                        context,
+                                        label,
+                                        TraceScope::Labels(
+                                            layer,
+                                            Category::Placement,
+                                            Some(batch.object),
+                                        ),
+                                    )
+                                },
+                            )?;
+                        } else {
+                            self.placements
+                                .draw_prepared(context, &placement, 1.0, Some(layer))?;
+                        }
+                        if let Some(source) = &frame.placement_outlines
+                            && self.placement_outlines.is_uploaded(source)
+                        {
+                            let mut outline = placement.with_source(Arc::clone(source));
+                            outline.material_override = Some([0.85, 0.87, 0.89, 0.3]);
+                            self.placement_outlines.draw_prepared(
+                                context,
+                                &outline,
+                                TraceScope::Layer(layer),
+                            )?;
+                        }
+                    }
+                    Category::Placement if pass != OverlayPass::Base && placement_ready => {
+                        if let Some(source) = &frame.placement_outlines
+                            && self.placement_outlines.is_uploaded(source)
+                        {
+                            let mut outline = traces.with_source(Arc::clone(source));
+                            outline.pattern = None;
+                            outline.object_filter = Default::default();
+                            self.placement_outlines.draw_prepared(
+                                context,
+                                &outline,
+                                TraceScope::Layer(layer),
+                            )?;
+                        }
+                    }
                     Category::Zone
                         if copper_ready
                             && frame.display.show_copper
@@ -808,7 +929,11 @@ impl NativeGpuRenderer for BoardRenderer {
                                 &mut |batch| {
                                     self.labels.draw_prepared(
                                         context,
-                                        label,
+                                        &{
+                                            let mut label = label.clone();
+                                            label.brightness = traces.brightness;
+                                            label
+                                        },
                                         TraceScope::Labels(
                                             layer,
                                             Category::Zone,
@@ -932,6 +1057,9 @@ impl NativeGpuRenderer for BoardRenderer {
                                     drawing.pass = pass;
                                     drawing.material_override = traces.material_override;
                                     drawing.opacity = traces.opacity;
+                                    drawing.brightness = traces.brightness;
+                                    drawing.pattern = traces.pattern;
+                                    drawing.object_filter = traces.object_filter;
                                     drawing
                                 },
                                 TraceScope::Layer(layer),
@@ -949,6 +1077,9 @@ impl NativeGpuRenderer for BoardRenderer {
                                     glyph.pass = pass;
                                     glyph.material_override = traces.material_override;
                                     glyph.opacity = traces.opacity;
+                                    glyph.brightness = traces.brightness;
+                                    glyph.pattern = traces.pattern;
+                                    glyph.object_filter = traces.object_filter;
                                     glyph
                                 },
                                 TraceScope::Layer(layer),
@@ -964,6 +1095,9 @@ impl NativeGpuRenderer for BoardRenderer {
                                     text.pass = traces.pass;
                                     text.material_override = traces.material_override;
                                     text.opacity = traces.opacity;
+                                    text.brightness = traces.brightness;
+                                    text.pattern = traces.pattern;
+                                    text.object_filter = traces.object_filter;
                                     text
                                 },
                                 TraceScope::Layer(layer),
@@ -976,6 +1110,7 @@ impl NativeGpuRenderer for BoardRenderer {
                             && self.drills.has_source(source)
                         {
                             let mut drill_frame = traces.clone();
+                            drill_frame.net_colors = None;
                             drill_frame.color_mode = pomelo_core::display::ColorMode::Layer;
                             drill_frame.material_override =
                                 Some(traces.material_override.unwrap_or(frame.drill_color));
@@ -993,7 +1128,11 @@ impl NativeGpuRenderer for BoardRenderer {
                         {
                             self.labels.draw_prepared(
                                 context,
-                                label,
+                                &{
+                                    let mut label = label.clone();
+                                    label.brightness = traces.brightness;
+                                    label
+                                },
                                 TraceScope::Labels(layer, Category::Drill, None),
                             )?;
                         }
@@ -1013,7 +1152,11 @@ impl NativeGpuRenderer for BoardRenderer {
                     if frame.display.primitive_visible(layer, primitive) {
                         self.labels.draw_prepared(
                             context,
-                            label,
+                            &{
+                                let mut label = label.clone();
+                                label.brightness = traces.brightness;
+                                label
+                            },
                             TraceScope::Labels(layer, category, None),
                         )?;
                     }
@@ -1047,7 +1190,7 @@ impl NativeGpuRenderer for BoardRenderer {
                 "zones": frame.copper.batches.len(),
                 "net": frame.traces.highlighted_net.map(|(id, _)|id.0),
                 "visible_layers": frame.layer_order.iter().filter(|&&id|frame.display.layer_visible(id)).map(|id|id.0).collect::<Vec<_>>(),
-                "category_order":["outline","drawing","zone","zone_outline","trace","bond_wire","text","pin","via","drill"],
+                "category_order":["outline","drawing","zone","zone_outline","trace","bond_wire","text","pin","via","drill","placement"],
                 "category_us": category_us,
                 "pass_order": ["base", "selection", "hover"],
                 "primary_renderer_order": ["trace", "pad", "drill", "copper"],
@@ -1063,6 +1206,8 @@ impl NativeGpuRenderer for BoardRenderer {
         Ok(())
     }
     fn reset(&mut self) {
+        self.placement_outlines.reset();
+        self.placements.reset();
         self.glyphs.clear_if_cached();
         self.labels.reset();
         self.zone_outlines.reset();

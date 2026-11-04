@@ -202,7 +202,14 @@ fn hardware_category_colors_cover_analytic_custom_copper_text_and_drills_without
             .unwrap(),
         };
         let mut frame = BoardFrame {
+            placement_outlines: None,
+            placements: None,
             traces: TraceFrame {
+                net_colors: None,
+                pattern: None,
+                object_filter: Default::default(),
+                brightness: 1.0,
+                object_colors: None,
                 tracks,
                 bounds: Bounds {
                     min: Point::new(-6.0, -6.0),
@@ -454,6 +461,134 @@ fn hardware_category_colors_cover_analytic_custom_copper_text_and_drills_without
             baseline,
             "restoring colors must restore all production materials"
         );
+        use pomelo_core::appearance::net::NetColorKind;
+        let net_target = |kind| ColorTarget::Net(NetId(1), kind);
+        Arc::make_mut(&mut frame.display).appearance.set_color(
+            net_target(NetColorKind::All),
+            Some(RgbColor([71, 131, 211])),
+        );
+        for mode in [
+            pomelo_core::display::ColorMode::Layer,
+            pomelo_core::display::ColorMode::Net,
+        ] {
+            frame.traces.color_mode = mode;
+            target.bind(&context);
+            renderer.draw(&gpu, &frame).unwrap();
+            let pixels = target.read(&context);
+            for (x, y) in [(64, 44), (44, 64), (104, 64)] {
+                assert_eq!(
+                    rgb(&pixels, x, y),
+                    [71, 131, 211],
+                    "whole net custom={custom}, mode={mode:?}"
+                );
+            }
+            assert_eq!(rgb(&pixels, 64, 104), [28, 52, 84]);
+            assert_eq!(rgb(&pixels, 34, 64), [51; 3]);
+        }
+        let appearance = &mut Arc::make_mut(&mut frame.display).appearance;
+        for (kind, color) in [
+            (NetColorKind::Traces, [211, 71, 131]),
+            (NetColorKind::Pins, [13, 241, 17]),
+            (NetColorKind::Vias, [19, 23, 239]),
+            (NetColorKind::Shapes, [111, 71, 21]),
+        ] {
+            appearance.set_color(net_target(kind), Some(RgbColor(color)));
+        }
+        for mode in [
+            pomelo_core::display::ColorMode::Layer,
+            pomelo_core::display::ColorMode::Net,
+        ] {
+            frame.traces.color_mode = mode;
+            for alpha in [1.0, 128.0 / 255.0] {
+                Arc::make_mut(&mut frame.display).global_opacity = alpha;
+                target.bind(&context);
+                renderer.draw(&gpu, &frame).unwrap();
+                let pixels = target.read(&context);
+                for (x, y, color) in [
+                    (64, 44, [211, 71, 131]),
+                    (44, 64, [13, 241, 17]),
+                    (104, 64, [19, 23, 239]),
+                ] {
+                    let actual = rgb(&pixels, x, y);
+                    assert!(
+                        actual
+                            .into_iter()
+                            .zip(color)
+                            .all(|(a, b)| (f32::from(a) - b as f32 * alpha).abs() <= 1.0),
+                        "category custom={custom}, mode={mode:?}, alpha={alpha}, {x},{y}: {actual:?}"
+                    );
+                }
+                // A translucent drill still composites over the independently colored pad.
+                for (x, pad) in [(34, [13u8, 241, 17]), (94, [19, 23, 239])] {
+                    let actual = rgb(&pixels, x, 64);
+                    let expected = pad.map(|channel| {
+                        let under = if custom {
+                            0.0
+                        } else {
+                            (f32::from(channel) * alpha).round()
+                        };
+                        (51.0 * alpha + under * (1.0 - alpha)).round() as u8
+                    });
+                    assert!(
+                        actual
+                            .into_iter()
+                            .zip(expected)
+                            .all(|(a, b)| a.abs_diff(b) <= 1),
+                        "independent drill material: {actual:?}/{expected:?}"
+                    );
+                }
+                assert_eq!(
+                    rgb(&pixels, 64, 104),
+                    [44, 28, 8],
+                    "shape alpha is independent"
+                );
+                // The source text and generated name above the geometry retain their own colors.
+                for y in 4..35 {
+                    for x in 10..112 {
+                        let before = rgb(&baseline, x, y);
+                        let after = rgb(&pixels, x, y);
+                        assert!(
+                            after
+                                .into_iter()
+                                .zip(before)
+                                .all(|(a, b)| (f32::from(a) - f32::from(b) * alpha).abs() <= 1.0),
+                            "labels must not inherit net material at {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
+        Arc::make_mut(&mut frame.display).global_opacity = 1.0;
+        frame.traces.object_colors = Some(Arc::new(BTreeMap::from([(
+            pomelo_core::selection::SelectedObject::Pin(ObjectId(50)),
+            [1.0, 0.0, 1.0],
+        )])));
+        target.bind(&context);
+        renderer.draw(&gpu, &frame).unwrap();
+        let pixels = target.read(&context);
+        assert_eq!(
+            rgb(&pixels, 44, 64),
+            [255, 0, 255],
+            "object override wins over net assignment"
+        );
+        assert_eq!(rgb(&pixels, 104, 64), [19, 23, 239]);
+        frame.traces.object_colors = None;
+        frame.traces.color_mode = pomelo_core::display::ColorMode::Layer;
+        Arc::make_mut(&mut frame.display).appearance.hide_net_colors = true;
+        target.bind(&context);
+        renderer.draw(&gpu, &frame).unwrap();
+        assert_eq!(
+            target.read(&context),
+            baseline,
+            "hiding net colors preserves assignments and restores automatic materials"
+        );
+        let appearance = &mut Arc::make_mut(&mut frame.display).appearance;
+        appearance.hide_net_colors = false;
+        appearance.set_color(net_target(NetColorKind::All), None);
+        assert!(appearance.nets.is_empty());
+        target.bind(&context);
+        renderer.draw(&gpu, &frame).unwrap();
+        assert_eq!(target.read(&context), baseline);
         assert_eq!(
             [
                 trace_stats.snapshot().uploaded_bytes,

@@ -60,7 +60,7 @@ pub fn render(
                     .id("document-tabs-scroll")
                     .flex()
                     .items_end()
-                    .h_10()
+                    .h_full()
                     .pl_2()
                     .gap_1()
                     .overflow_x_scroll()
@@ -77,18 +77,19 @@ pub fn render(
                             .flex_shrink_0()
                             .min_w_0()
                             .max_w(window.rem_size() * 24.0)
-                            .h_9()
-                            .px_3()
+                            .h_8()
+                            .pl_3()
+                            .pr_1()
                             .gap_2()
-                            .border_t_1()
-                            .border_l_1()
-                            .border_r_1()
-                            .border_color(theme.border)
-                            .rounded_t(theme.radius)
-                            .bg(if active {
-                                theme.background
-                            } else {
-                                theme.secondary
+                            .rounded_t(theme.radius_lg)
+                            // The active document joins the work surface below it.
+                            .when(active, |tab| {
+                                tab.mb(px(-1.0))
+                                    .border_t_1()
+                                    .border_l_1()
+                                    .border_r_1()
+                                    .border_color(theme.border)
+                                    .bg(theme.background)
                             })
                             .text_sm()
                             .text_color(if active {
@@ -96,7 +97,7 @@ pub fn render(
                             } else {
                                 theme.muted_foreground
                             })
-                            .hover(|tab| tab.bg(theme.accent))
+                            .when(!active, |tab| tab.hover(|tab| tab.bg(theme.list_hover)))
                             .on_click(move |_, window, cx| activate(&index, window, cx))
                             .child(
                                 div()

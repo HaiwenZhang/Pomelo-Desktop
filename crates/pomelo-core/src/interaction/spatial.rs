@@ -28,18 +28,14 @@ impl BoundsIndex {
         cancel: &CancellationToken,
     ) -> Result<Self, super::picking_index::IndexError> {
         use super::picking_index::IndexError;
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled.into());
-        }
+        cancel.check()?;
         let bounds = bounds.into_iter();
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(bounds.size_hint().0)
             .map_err(|_| IndexError::Allocation)?;
         for (index, bounds) in bounds.enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             if let Some(bounds) = bounds {
                 if !bounds.is_valid() {
                     return Err(PathError::Invalid(crate::model::ObjectId(index as u32)).into());
@@ -58,9 +54,7 @@ impl BoundsIndex {
             nodes: &mut Vec<Node>,
             cancel: &CancellationToken,
         ) -> Result<usize, IndexError> {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             let mut bounds = entries[0].bounds;
             for e in &entries[1..] {
                 bounds.include(e.bounds.min);
@@ -113,9 +107,7 @@ impl BoundsIndex {
         let mut result = Vec::new();
         let mut pending = vec![0];
         while let Some(i) = pending.pop() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             let Some(node) = self.nodes.get(i) else {
                 continue;
             };

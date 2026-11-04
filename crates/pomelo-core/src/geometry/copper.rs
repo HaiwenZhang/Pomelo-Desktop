@@ -41,6 +41,12 @@ pub enum MeshError {
     Allocation,
 }
 
+impl From<crate::task::Cancelled> for MeshError {
+    fn from(_: crate::task::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+
 /// A bounded range of nearby holes, indexed in Morton-sorted `ring_order`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CopperChunk {
@@ -70,6 +76,15 @@ impl CopperMesh {
     /// Curved rings use their fill approximation here; exact path picking is separate.
     /// Hole boundaries are excluded, while the exterior boundary is included.
     pub fn covers_fill(&self, point: Point, cancel: &CancellationToken) -> Result<bool, MeshError> {
+        self.covers_fill_where(point, cancel, |_| true)
+    }
+    /// Display-only hole filtering; source contours and their validation are retained.
+    pub fn covers_fill_where(
+        &self,
+        point: Point,
+        cancel: &CancellationToken,
+        mut include: impl FnMut(usize) -> bool,
+    ) -> Result<bool, MeshError> {
         check_cancelled(cancel)?;
         if !point.x.is_finite() || !point.y.is_finite() {
             return Err(MeshError::Invalid {
@@ -109,7 +124,9 @@ impl CopperMesh {
         contours_cover(
             self.ring_offsets
                 .windows(2)
-                .map(|range| &self.vertices[range[0] as usize..range[1] as usize]),
+                .enumerate()
+                .filter(|(ring, _)| *ring == 0 || include(*ring))
+                .map(|(_, range)| &self.vertices[range[0] as usize..range[1] as usize]),
             point,
             cancel,
         )

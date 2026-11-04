@@ -447,7 +447,8 @@ impl Pipeline {
                 .highlighted_related_objects
                 .as_ref()
                 .is_none_or(|(objects, _)| objects.is_empty())
-            && frame.hovered_object.is_none();
+            && frame.hovered_object.is_none()
+            && !frame.has_color_overrides();
         let selected_net = overlay_net(frame);
         let overlay_key =
             (!legacy && frame.pass != board::OverlayPass::Base).then(|| OverlayKey::new(frame));
@@ -562,6 +563,22 @@ impl Pipeline {
                         context.device.draw(
                             &self.pipeline,
                             Draw {
+                                pattern_mask: frame
+                                    .pattern
+                                    .map_or([0xffff; 16], |pattern| pattern.rows()),
+                                pixel_filter: if matches!(visibility, Visibility::Pads { .. }) {
+                                    [
+                                        frame.object_filter.threshold(
+                                            pomelo_core::display::filter::FilterKind::Pin,
+                                        ),
+                                        frame.object_filter.threshold(
+                                            pomelo_core::display::filter::FilterKind::Via,
+                                        ),
+                                    ]
+                                } else {
+                                    [0.0; 2]
+                                },
+                                brightness: frame.brightness,
                                 uniforms: bytemuck::bytes_of(&uniforms),
                                 vertices: &chunk.buffer,
                                 indices: None,

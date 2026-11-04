@@ -101,19 +101,14 @@ pub fn current(cx: &App) -> Locale {
 /// Each save awaits its predecessor, so rapid choices cannot reorder disk writes.
 pub fn select(preference: LanguagePreference, cx: &mut App) {
     let locale = preference.resolve(sys_locale::get_locale().as_deref());
-    let (previous, store, revision) = cx
-        .update_global::<LanguageState, _>(|state, _| {
-            let revision = state.revision.checked_add(1)?;
-            state.revision = revision;
-            state.preference = preference;
-            state.locale = locale;
-            state.warning = None;
-            Some((state.save_task.take(), state.store.clone(), revision))
-        })
-        .unwrap_or_else(|| (None, None, 0));
-    if revision == 0 {
-        return;
-    }
+    // Same revision strategy as theme selection: only the latest save may report.
+    let (previous, store, revision) = cx.update_global::<LanguageState, _>(|state, _| {
+        state.revision = state.revision.wrapping_add(1);
+        state.preference = preference;
+        state.locale = locale;
+        state.warning = None;
+        (state.save_task.take(), state.store.clone(), state.revision)
+    });
     gpui_kit::component::set_locale(locale.tag());
     crate::theme::apply_ui_font(cx);
     rebuild_menus(cx);

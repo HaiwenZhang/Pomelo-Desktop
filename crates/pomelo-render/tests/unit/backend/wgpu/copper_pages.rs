@@ -239,6 +239,11 @@ fn render(
     )
     .unwrap();
     let frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         tracks: Arc::new(tracks),
         bounds,
         camera: None,

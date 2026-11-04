@@ -108,8 +108,15 @@ fn hardware_die_pads_follow_etch_visibility_and_priority_without_reupload() {
             ));
         }
         let mut frame = BoardFrame {
+            placement_outlines: None,
+            placements: None,
             curves: None,
             traces: TraceFrame {
+                net_colors: None,
+                pattern: None,
+                object_filter: Default::default(),
+                brightness: 1.0,
+                object_colors: None,
                 tracks: Arc::new(
                     PreparedTracks::build(&[], TraceLimits::default(), &cancel).unwrap(),
                 ),

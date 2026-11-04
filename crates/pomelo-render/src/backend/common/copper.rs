@@ -285,6 +285,8 @@ pub(crate) struct Pipeline {
     pipeline: GpuPipeline,
 }
 struct DirectRun<'a> {
+    pattern_mask: [u32; 16],
+    brightness: f32,
     page: &'a CopperPage,
     indices: std::ops::Range<u32>,
     uniforms: Uniforms,
@@ -295,6 +297,9 @@ impl DirectRun<'_> {
         context.device.draw(
             pipeline,
             Draw {
+                pattern_mask: self.pattern_mask,
+                pixel_filter: [0.0; 2],
+                brightness: self.brightness,
                 uniforms: bytemuck::bytes_of(&self.uniforms),
                 vertices: self
                     .page
@@ -421,6 +426,7 @@ impl Pipeline {
             {
                 continue;
             }
+            let filter_bounds = batch.bounds;
             let replacement = overrides
                 .and_then(|entries| entries.get(&batch.object))
                 .filter(|entry| {
@@ -451,6 +457,24 @@ impl Pipeline {
                 batch.selected_object,
                 pomelo_core::selection::SelectedObject::Zone(_)
             );
+            let filter_kind = match batch.selected_object {
+                pomelo_core::selection::SelectedObject::Pin(_) => {
+                    pomelo_core::display::filter::FilterKind::Pin
+                }
+                pomelo_core::selection::SelectedObject::Via(_) => {
+                    pomelo_core::display::filter::FilterKind::Via
+                }
+                _ => pomelo_core::display::filter::FilterKind::Copper,
+            };
+            if filter_bounds.is_some_and(|b| {
+                !frame.object_filter.bounds_visible(
+                    filter_kind,
+                    b,
+                    camera.pixels_per_mm / f64::from(frame.scale_factor),
+                )
+            }) {
+                continue;
+            }
             let zone_overlay = zone && frame.pass != board::OverlayPass::Base;
             if zone && opacity <= 0.0 && !zone_overlay {
                 continue;
@@ -461,7 +485,8 @@ impl Pipeline {
                 6.0
             } else {
                 f32::from(u8::from(
-                    !static_shapes_fill_solid
+                    frame.pattern.is_none()
+                        && !static_shapes_fill_solid
                         && frame.pass == board::OverlayPass::Base
                         && batch.kind == pomelo_core::model::ZoneKind::Static
                         && zone,
@@ -543,6 +568,9 @@ impl Pipeline {
                 context.device.draw(
                     &self.pipeline,
                     Draw {
+                        pattern_mask: frame.pattern.map_or([0xffff; 16], |pattern| pattern.rows()),
+                        pixel_filter: [0.0; 2],
+                        brightness: frame.brightness,
                         uniforms: bytemuck::bytes_of(&uniforms),
                         vertices,
                         indices: index_buffer,
@@ -573,6 +601,9 @@ impl Pipeline {
                     && std::ptr::eq(run.page, page)
                     && run.indices.end == outer.start
                     && run.uniforms == direct_uniforms
+                    && run.brightness == frame.brightness
+                    && run.pattern_mask
+                        == frame.pattern.map_or([0xffff; 16], |pattern| pattern.rows())
                 {
                     run.indices.end = outer.end;
                     run.rect.left = run.rect.left.min(rect.left);
@@ -585,6 +616,8 @@ impl Pipeline {
                         draws += 1;
                     }
                     pending = Some(DirectRun {
+                        pattern_mask: frame.pattern.map_or([0xffff; 16], |pattern| pattern.rows()),
+                        brightness: frame.brightness,
                         page,
                         indices: outer,
                         uniforms: direct_uniforms,
@@ -605,6 +638,17 @@ impl Pipeline {
             draws += 1;
             if let Some(rings) = &batch.parity_rings {
                 for ring in rings {
+                    if !ring.outer
+                        && ring.filter_bounds.is_some_and(|b| {
+                            !frame.object_filter.bounds_visible(
+                                pomelo_core::display::filter::FilterKind::Void,
+                                b,
+                                camera.pixels_per_mm / f64::from(frame.scale_factor),
+                            )
+                        })
+                    {
+                        continue;
+                    }
                     encode(StencilMode::Toggle, Some(ring.indices.clone()))?;
                     encode(
                         if ring.outer {
@@ -621,8 +665,26 @@ impl Pipeline {
                 encode(StencilMode::Exterior, Some(outer.clone()))?;
                 draws += 1;
                 if !holes.is_empty() {
-                    encode(StencilMode::Holes, Some(holes.clone()))?;
-                    draws += 1;
+                    if zone
+                        && frame
+                            .object_filter
+                            .threshold(pomelo_core::display::filter::FilterKind::Void)
+                            > 0.0
+                    {
+                        for hole in &batch.hole_ranges {
+                            if frame.object_filter.bounds_visible(
+                                pomelo_core::display::filter::FilterKind::Void,
+                                hole.bounds,
+                                camera.pixels_per_mm / f64::from(frame.scale_factor),
+                            ) {
+                                encode(StencilMode::Holes, Some(hole.indices.clone()))?;
+                                draws += 1;
+                            }
+                        }
+                    } else {
+                        encode(StencilMode::Holes, Some(holes.clone()))?;
+                        draws += 1;
+                    }
                 }
             }
             encode(

@@ -14,6 +14,8 @@ use pomelo_render::copper::PreparedCopper;
 use pomelo_render::tracks::{PrepareError, PreparedTracks};
 
 pub struct PreparedDocument {
+    pub placements: Arc<PreparedCopper>,
+    pub placement_outlines: Arc<PreparedTracks>,
     pub label_index: Option<Arc<pomelo_render::text::msdf::LabelIndex>>,
     pub preview: Option<crate::services::preview::PreparedPreview>,
     pub restored_view: Option<Box<pomelo_core::view_state::ViewState>>,
@@ -301,6 +303,11 @@ mod tests {
             .unwrap(),
         );
         PreparedDocument {
+            placements: Arc::new(
+                PreparedCopper::build(&[], pomelo_render::copper::CopperLimits::default(), &cancel)
+                    .unwrap(),
+            ),
+            placement_outlines: Arc::clone(&tracks),
             preview: None,
             restored_view: None,
             texts: None,

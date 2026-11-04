@@ -4,6 +4,7 @@ StructuredBuffer<Glyph> glyphs:register(t0);
 Texture2D<float4> atlas:register(t0);
 SamplerState linear_sampler:register(s0);
 cbuffer Frame:register(b0){float4 viewport;float4 canvas;float4 clip_bounds;float4 camera;float4 view;float4 color;uint4 batch;float4 highlight;    float4 inherited;
+    uint4 material_pattern[4];
 };
 float2 ds_add(float2 a,float2 b){precise float sum=a.x+b.x;precise float v=sum-a.x;precise float error=(a.x-(sum-v))+(b.x-v)+a.y+b.y;precise float high=sum+error;return float2(high,error-(high-sum));}
 struct Out{float4 position:SV_Position;float2 uv:TEXCOORD0;float4 color:COLOR0;};
@@ -32,4 +33,9 @@ float4 fragment_color(Out input) {
     return float4(view.w>.5?overlay:input.color.rgb,input.color.a*body);
 }
 
-float4 trace_fragment(Out input) : SV_Target { float4 result = fragment_color(input); return float4(result.rgb, result.a * inherited.x); }
+float material_ink(float2 p) {
+    uint2 cell=uint2(max(floor((p-canvas.xy)/viewport.z),0.0))&15u;
+    uint row=material_pattern[cell.y>>2u][cell.y&3u];return float((row>>cell.x)&1u);
+}
+float4 trace_fragment(Out input) : SV_Target { float4 result = fragment_color(input); return float4(result.rgb * inherited.y, result.a * inherited.x * material_ink(input.position.xy)); }
+

@@ -12,6 +12,7 @@ use std::sync::Arc;
 mod drawings;
 mod locate;
 mod navigation;
+mod placements;
 mod visible;
 pub use drawings::TextPickQuad;
 pub use navigation::SelectionAnchor;
@@ -27,25 +28,31 @@ pub enum IndexError {
     Allocation,
 }
 
+impl From<crate::task::Cancelled> for IndexError {
+    fn from(cancelled: crate::task::Cancelled) -> Self {
+        Self::Geometry(cancelled.into())
+    }
+}
+
 pub struct BoardPickingIndex {
     scene: Arc<BoardScene>,
     order: Vec<usize>,
     bounds: Vec<Option<Bounds>>,
     leaf_start: usize,
-    zones: crate::zone_index::ZoneFillIndex,
     drawings: drawings::DrawingIndex,
     pins: super::spatial::BoundsIndex,
     vias: super::spatial::BoundsIndex,
     zone_bounds: super::spatial::BoundsIndex,
     zone_paths: Vec<Vec<Option<Bounds>>>,
+    placements: super::spatial::BoundsIndex,
     drawing_budget: usize,
 }
 
 impl BoardPickingIndex {
     /// Merge copper candidates by distance, then pin/via/segment/zone priority.
     /// Within a category equal distances preserve source order. Network queries
-    /// discard net zero before each category's limit. Pads still scan; zone
-    /// fill checks use validated exterior and hole bounds.
+    /// discard net zero before each category's limit. Segments use the index; pads
+    /// and zone fills use the reference scans. Canvas picking uses `query_visible_hits`.
     pub fn query_objects(
         &self,
         query: PickQuery,
@@ -56,9 +63,7 @@ impl BoardPickingIndex {
         connected_only: bool,
     ) -> Result<Vec<crate::picking::ObjectHit>, PathError> {
         use crate::{model::NetId, picking::ObjectHit};
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         let limit = limit.min(64);
         if limit == 0 {
             return Ok(Vec::new());
@@ -97,22 +102,16 @@ impl BoardPickingIndex {
                 distance_mm: hit.distance_mm,
             });
         }
-        for hit in self
-            .zones
-            .query(&self.scene, query, filter, display, cancel, connected_only)?
-            .into_iter()
-            .take(limit)
-        {
+        for hit in query.zones_where(&self.scene, filter, display, limit, cancel, |zone| {
+            !connected_only || zone.net != NetId(0)
+        })? {
             insert(ObjectHit {
                 object: SelectedObject::Zone(hit.zone.id),
                 distance_mm: hit.distance_mm,
             });
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(hits)
-        }
+        cancel.check()?;
+        Ok(hits)
     }
 
     pub fn segment_count(&self) -> usize {
@@ -134,9 +133,7 @@ impl BoardPickingIndex {
         max_bytes: usize,
         cancel: &CancellationToken,
     ) -> Result<Self, IndexError> {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled.into());
-        }
+        cancel.check()?;
         let count = scene.segments.len();
         if count > max_segments {
             return Err(PathError::PointLimit {
@@ -180,18 +177,14 @@ impl BoardPickingIndex {
             .try_reserve_exact(count)
             .map_err(|_| IndexError::Allocation)?;
         for (index, segment) in scene.segments.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             // Validate analytic inputs before publishing the hierarchy.
             segment_distance_mm(segment, segment.a)?;
             let bounds = segment.bounds().ok_or(PathError::Invalid(segment.id))?;
             leaves.push((index, bounds));
         }
         leaves.sort_unstable_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x).then(a.0.cmp(&b.0)));
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled.into());
-        }
+        cancel.check()?;
         let mut bounds = Vec::new();
         bounds
             .try_reserve_exact(node_count)
@@ -202,16 +195,12 @@ impl BoardPickingIndex {
             .try_reserve_exact(count)
             .map_err(|_| IndexError::Allocation)?;
         for (position, (index, extent)) in leaves.into_iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             bounds[leaf_start + position] = Some(extent);
             order.push(index);
         }
         for index in (1..leaf_start).rev() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             bounds[index] = match (bounds[index * 2], bounds[index * 2 + 1]) {
                 (Some(mut a), Some(b)) => {
                     a.include(b.min);
@@ -233,18 +222,29 @@ impl BoardPickingIndex {
                 limit: max_bytes,
             });
         }
-        let zones =
-            crate::zone_index::ZoneFillIndex::build(&scene, max_bytes - peak_bytes, cancel)?;
+        // Reject malformed fill meshes now rather than on a later pick that reaches them.
+        for zone in &scene.zones {
+            cancel.check()?;
+            zone.mesh
+                .covers_fill(crate::model::Point::default(), cancel)
+                .map_err(|error| match error {
+                    crate::copper::MeshError::Cancelled => PathError::Cancelled,
+                    _ => PathError::Invalid(zone.id),
+                })?;
+        }
         // Bound each hierarchy's actual entry/node layout. BoundsIndex reserves
         // these buffers once instead of retaining geometric growth slack.
-        let owner_bytes = [scene.pins.len(), scene.vias.len(), scene.zones.len()]
-            .into_iter()
-            .fold(0usize, |bytes, count| {
-                bytes.saturating_add(super::spatial::BoundsIndex::max_allocation_bytes(count))
-            });
-        let used = peak_bytes
-            .saturating_add(zones.bytes)
-            .saturating_add(owner_bytes);
+        let owner_bytes = [
+            scene.pins.len(),
+            scene.vias.len(),
+            scene.zones.len(),
+            scene.components.len(),
+        ]
+        .into_iter()
+        .fold(0usize, |bytes, count| {
+            bytes.saturating_add(super::spatial::BoundsIndex::max_allocation_bytes(count))
+        });
+        let used = peak_bytes.saturating_add(owner_bytes);
         if used > max_bytes {
             return Err(IndexError::ByteLimit {
                 actual: used,
@@ -287,6 +287,20 @@ impl BoardPickingIndex {
                 .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, p.drill_shape)),
             cancel,
         )?;
+        for component in &scene.components {
+            if let Some(body) = &component.body {
+                for path in body.regions.iter().flat_map(|region| &region.paths) {
+                    crate::geometry::path_contains(path, crate::model::Point::default(), cancel)?;
+                }
+            }
+        }
+        let placements = super::spatial::BoundsIndex::build(
+            scene
+                .components
+                .iter()
+                .map(|component| component.body.as_ref().and_then(placements::bounds)),
+            cancel,
+        )?;
         let mut zone_paths = Vec::new();
         zone_paths
             .try_reserve_exact(scene.zones.len())
@@ -297,9 +311,7 @@ impl BoardPickingIndex {
                 .try_reserve_exact(zone.paths.len())
                 .map_err(|_| IndexError::Allocation)?;
             for path in &zone.paths {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled.into());
-                }
+                cancel.check()?;
                 paths.push(crate::geometry::path_bounds(path));
             }
             zone_paths.push(paths);
@@ -322,12 +334,12 @@ impl BoardPickingIndex {
             vias,
             zone_bounds,
             zone_paths,
+            placements,
             drawing_budget,
             scene,
             order,
             bounds,
             leaf_start,
-            zones,
         })
     }
 
@@ -356,9 +368,7 @@ impl BoardPickingIndex {
         let mut hits: Vec<(usize, SegmentHit<'_>)> = Vec::new();
         let mut pending = vec![1usize];
         while let Some(index) = pending.pop() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if limit == 0 {
                 break;
             }
@@ -409,9 +419,7 @@ impl BoardPickingIndex {
                 ),
             );
         }
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         Ok(hits.into_iter().map(|(_, hit)| hit).collect())
     }
 }

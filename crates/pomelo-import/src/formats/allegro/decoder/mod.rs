@@ -75,7 +75,7 @@ impl<'a> RecordDecoder<'a> {
         self.decode_with(
             span,
             context,
-            |reader, kind| fixed::read(reader, kind, self.header.version),
+            |reader, kind| fixed::read(reader, kind, self.header.version, &DecodeLimits::default()),
             fixed::FixedRecord::key,
         )
     }
@@ -98,7 +98,7 @@ impl<'a> RecordDecoder<'a> {
                     variable::read(reader, kind, self.header, limits, context)
                         .map(DecodedRecord::Variable)
                 } else {
-                    fixed::read(reader, kind, self.header.version).map(DecodedRecord::Fixed)
+                    fixed::read(reader, kind, self.header.version, limits).map(DecodedRecord::Fixed)
                 }
             },
             DecodedRecord::key,

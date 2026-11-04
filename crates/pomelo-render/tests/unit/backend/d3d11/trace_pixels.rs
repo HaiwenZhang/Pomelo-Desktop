@@ -30,6 +30,14 @@ const SIDE: u32 = 128;
 
 #[path = "appearance_pixels.rs"]
 mod appearance;
+#[path = "object_filter_pixels.rs"]
+mod object_filter;
+#[path = "pattern_pixels.rs"]
+mod patterns;
+#[path = "placement_pixels.rs"]
+mod placement;
+#[path = "ui_viewport_pixels.rs"]
+mod ui_viewport;
 
 #[path = "compositor_parity_pixels.rs"]
 mod compositor_parity;
@@ -229,6 +237,11 @@ fn hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache() {
         .unwrap(),
     );
     let traces = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         tracks,
         bounds: Bounds {
             min: Point::new(-6.0, -6.0),
@@ -264,6 +277,8 @@ fn hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache() {
         ..BoardDisplay::default()
     };
     let mut frame = BoardFrame {
+        placement_outlines: None,
+        placements: None,
         curves: None,
         traces,
         display: Arc::new(display),
@@ -418,6 +433,11 @@ fn hardware_msdf_atlas_matches_web_sampling_rotation_mirroring_and_dpi() {
     let mut colors = BTreeMap::new();
     colors.insert(LayerId(0), [0.3, 0.7, 0.4, 1.0]);
     let base = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         tracks,
         bounds: Bounds {
             min: Point::new(-6.0, -6.0),
@@ -654,6 +674,11 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         bond_wire: None,
     };
     let mut frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         pass: crate::backend::OverlayPass::Base,
         filled: true,
         hover_selection: None,
@@ -814,12 +839,8 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     target.bind(&context);
     renderer.draw(&gpu, &frame, &copper, 0.5, false).unwrap();
     let copper_highlight = target.read(&context);
-    let tinted_fill = rgb(&copper_highlight, 23, 105);
-    assert!(
-        (126..=129).contains(&tinted_fill[0])
-            && tinted_fill[1] == 0
-            && (126..=129).contains(&tinted_fill[2])
-    );
+    // Net selection is a separate compositor pass; base copper keeps its material.
+    assert_eq!(rgb(&copper_highlight, 23, 105), fill);
     assert_eq!(rgb(&copper_highlight, 64, 64), [0; 3]);
     frame.highlighted_net = None;
     frame.highlighted_object = Some((
@@ -857,7 +878,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     target.bind(&context);
     traces.draw(&gpu, &frame).unwrap();
     renderer.draw(&gpu, &frame, &copper, 1.0, false).unwrap();
-    assert_eq!(rgb(&target.read(&context), 23, 105), [0, 255, 255]);
+    assert_eq!(rgb(&target.read(&context), 23, 105), [0, 255, 0]);
     frame.highlighted_net = None;
     frame.hovered_object = Some((
         pomelo_core::selection::SelectedObject::Via(ObjectId(2)),
@@ -971,6 +992,8 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         Arc::clone(&composite_text_stats),
     );
     let mut board_frame = crate::backend::BoardFrame {
+        placement_outlines: None,
+        placements: None,
         curves: None,
         glyphs: None,
         labels: None,
@@ -1248,7 +1271,8 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         class_id: 0,
         subclass: 0,
         text: "A".into(),
-        at: Point::new(2.0, 2.0),
+        // Cross a real copper hole so layer ordering leaves some unobscured blue ink.
+        at: Point::new(2.0, 6.0),
         angle: 0.0,
         mirrored: false,
         align: pomelo_core::model::TextAlignment::Left,
@@ -1928,7 +1952,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         )
         .unwrap();
     let custom_highlight = target.read(&context);
-    assert_eq!(rgb(&custom_highlight, 73, 64), [255, 0, 255]);
+    assert_eq!(rgb(&custom_highlight, 73, 64), [0, 0, 255]);
     assert_eq!(rgb(&custom_highlight, 64, 64), [0; 3]);
     let custom_uploaded = custom_probe_stats.snapshot().lifetime_uploaded_bytes;
     board_frame.traces.highlighted_net = None;
@@ -2349,6 +2373,11 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         palette_pins.push(value);
     }
     let mut palette_frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         pass: crate::backend::OverlayPass::Base,
         filled: true,
         hover_selection: None,
@@ -2649,6 +2678,11 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
         (LayerId(3), [0.0, 0.0, 1.0, 1.0]),
     ]));
     let mut frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         pass: crate::backend::OverlayPass::Base,
         filled: true,
         hover_selection: None,
@@ -3007,6 +3041,11 @@ fn hardware_trace_pixels_preserve_caps_arc_hole_clip_and_cache() {
     )
     .unwrap();
     let mut text_frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         pass: crate::backend::OverlayPass::Base,
         filled: true,
         hover_selection: None,

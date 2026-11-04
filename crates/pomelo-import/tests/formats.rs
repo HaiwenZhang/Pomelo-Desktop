@@ -15,6 +15,7 @@ const KICAD: &str = include_str!("data/basic.kicad_pcb");
 fn dispatcher_recognizes_extensions_case_insensitively() {
     for (name, expected) in [
         ("B.BRD", BoardFormat::Allegro),
+        ("Package.MCM", BoardFormat::Allegro),
         ("B.PcbDoc", BoardFormat::Altium),
         ("B.tar.gz", BoardFormat::Odb),
         ("B.TGZ", BoardFormat::Odb),
@@ -124,6 +125,53 @@ fn kicad_tracks_pads_and_fill_share_net_identity_and_component_membership() {
             .unwrap()
     );
     assert_eq!(scene.pins[0].at, Point::new(10.0, -20.0));
+}
+
+#[test]
+fn kicad_closed_board_outline_controls_fit_without_discarding_distant_graphics() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("outline.kicad_pcb");
+    let cancel = CancellationToken::default();
+    for closed in [true, false] {
+        let finish = if closed {
+            "(gr_line (start 0 10) (end 0 0) (layer \"Edge.Cuts\"))"
+        } else {
+            ""
+        };
+        let text = format!(
+            "(kicad_pcb (version 20260206) (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal))
+            (gr_line (start 0 0) (end 10 0) (layer \"Edge.Cuts\"))
+            (gr_line (start 10 0) (end 10 10) (layer \"Edge.Cuts\"))
+            (gr_line (start 10 10) (end 0 10) (layer \"Edge.Cuts\")) {finish}
+            (gr_circle (center 2147 -2147) (end -2108 -2147) (layer \"User.34\")))"
+        );
+        std::fs::write(&path, text).unwrap();
+        let board = FormatImporter
+            .import(
+                &path,
+                &ImportOptions::default(),
+                &ImportContext {
+                    cancellation: &cancel,
+                    progress: &|_| {},
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            board.scene.drawings.len(),
+            1,
+            "the auxiliary circle is retained"
+        );
+        assert_eq!(board.scene.drawings[0].segments.len(), 4);
+        if closed {
+            assert_eq!(board.scene.bounds.min, Point::new(0.0, -10.0));
+            assert_eq!(board.scene.bounds.max, Point::new(10.0, 0.0));
+        } else {
+            assert!(
+                board.scene.bounds.max.x > 6000.0,
+                "incomplete outlines retain the previous geometry fallback"
+            );
+        }
+    }
 }
 
 #[test]

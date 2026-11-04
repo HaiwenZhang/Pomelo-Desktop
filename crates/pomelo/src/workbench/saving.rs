@@ -1,6 +1,14 @@
-//! Ordinary exits flush outside GPUI's 200ms shutdown budget.
+//! View persistence and exit flushing outside GPUI's shutdown budget.
 
-use super::*;
+use futures::future::{FutureExt as _, Shared};
+use gpui_kit::*;
+use pomelo_core::{
+    i18n::{Locale, MessageKey as Key},
+    model::Diagnostic,
+};
+
+use super::Workbench;
+use crate::{document::DocumentStatus, i18n};
 
 #[derive(serde::Serialize)]
 pub(super) struct ViewSaveSnapshot {
@@ -18,6 +26,98 @@ impl ViewSaveSnapshot {
 }
 
 impl Workbench {
+    pub(super) fn save_views(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        let pending = self.queue_view_save(index, cx);
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = pending.await {
+                let _ = this.update(cx, |this, cx| {
+                    report_save_error(&error, i18n::current(cx));
+                    this.error = Some(error);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn queue_view_save(
+        &mut self,
+        index: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> Shared<Task<Result<(), Diagnostic>>> {
+        let snapshot = self.view_save_snapshot(index, cx);
+        self.enqueue_view_save(snapshot, cx)
+    }
+
+    fn view_save_snapshot(&self, index: Option<usize>, cx: &Context<Self>) -> ViewSaveSnapshot {
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        let entries = {
+            let mut entries: Vec<_> = self
+                .documents
+                .iter()
+                .enumerate()
+                .filter(|(position, _)| index.is_none_or(|index| index == *position))
+                .filter_map(|(position, document)| {
+                    let DocumentStatus::Imported(prepared) = &document.status else {
+                        return None;
+                    };
+                    let viewport = document.viewport.as_ref()?;
+                    Some((
+                        position,
+                        crate::services::preferences::ViewEntry {
+                            path: document.path.clone(),
+                            state: viewport.read(cx).snapshot(&prepared.board.identity)?,
+                        },
+                    ))
+                })
+                .collect();
+            // Updates are most-recent first; keep the active document if the store truncates.
+            entries.sort_by_key(|(position, _)| Some(*position) != self.active);
+            entries.into_iter().map(|(_, entry)| entry).collect()
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        let entries: Vec<crate::services::preferences::ViewEntry> = {
+            let _ = index;
+            Vec::new()
+        };
+        let panels = self.panel_layout.read(cx).snapshot(cx);
+        ViewSaveSnapshot { entries, panels }
+    }
+
+    fn enqueue_view_save(
+        &mut self,
+        snapshot: ViewSaveSnapshot,
+        cx: &mut Context<Self>,
+    ) -> Shared<Task<Result<(), Diagnostic>>> {
+        let ViewSaveSnapshot { entries, panels } = snapshot;
+        self.view_save_generation = self.view_save_generation.wrapping_add(1);
+        let panel_store = crate::services::preferences::PanelStore::platform_default();
+        let previous = self.view_save_task.take();
+        let store = crate::services::preferences::ViewStore::platform_default();
+        // GPUI blocks the main thread during shutdown; disk writes must not depend on it.
+        let pending = cx
+            .background_executor()
+            .spawn(async move {
+                if let Some(previous) = previous {
+                    let _ = previous.await;
+                }
+                let panel_store = panel_store.ok_or_else(|| {
+                    Diagnostic::error("CONFIG_DIRECTORY_MISSING", Key::ConfigDirectoryMissing)
+                })?;
+                panel_store.save(panels)?;
+                if !entries.is_empty() {
+                    let store = store.ok_or_else(|| {
+                        Diagnostic::error("CONFIG_DIRECTORY_MISSING", Key::ConfigDirectoryMissing)
+                    })?;
+                    store.save_updates(entries)?;
+                }
+                Ok(())
+            })
+            .shared();
+        self.view_save_task = Some(pending.clone());
+        pending
+    }
+
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
         if self.quit_flushed || self.quit_task.is_some() {
             return;
@@ -47,11 +147,8 @@ impl Workbench {
             cx.quit();
             return;
         }
-        self.enqueue_view_save(snapshot, cx);
+        let pending = self.enqueue_view_save(snapshot, cx);
         self.quit_snapshot = Some((encoded, self.view_save_generation));
-        let Some(pending) = self.view_save_task.clone() else {
-            return;
-        };
         self.quit_task = Some(cx.spawn(async move |this, cx| {
             let result = pending.await;
             let _ = this.update(cx, |this, cx| {

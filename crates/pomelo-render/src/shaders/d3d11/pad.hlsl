@@ -9,6 +9,7 @@ cbuffer Frame : register(b0) {
     float4 viewport; float4 canvas; float4 clip_bounds;
     float4 camera; float4 view; float4 color; uint4 batch; float4 highlight;
     float4 inherited;
+    uint4 material_pattern[4];
 };
 float2 ds_add(float2 a, float2 b) {
     precise float sum = a.x + b.x;
@@ -35,6 +36,8 @@ Out pad_vertex(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID) {
     Pad pad = pads[batch.x + instance_id];
     Out output = (Out)0;
     output.position = float4(2, 2, 0, 1);
+    float minimum = pad.source.x == 0u ? inherited.z : inherited.w;
+    if (min(pad.shape.x,pad.shape.y) * view.x / viewport.z < minimum) return output;
     uint category = batch.z & 12u;
     if ((batch.w == 2u && pad.ids.z != batch.y) ||
         (category == 4u && pad.source.x != 0u) ||
@@ -94,4 +97,9 @@ float4 fragment_color(Out input) {
     return float4(input.tint.rgb, input.tint.a * coverage);
 }
 
-float4 pad_fragment(Out input) : SV_Target { float4 result = fragment_color(input); return float4(result.rgb, result.a * inherited.x); }
+float material_ink(float2 p) {
+    uint2 cell=uint2(max(floor((p-canvas.xy)/viewport.z),0.0))&15u;
+    uint row=material_pattern[cell.y>>2u][cell.y&3u];return float((row>>cell.x)&1u);
+}
+float4 pad_fragment(Out input) : SV_Target { float4 result = fragment_color(input); return float4(result.rgb * inherited.y, result.a * inherited.x * material_ink(input.position.xy)); }
+

@@ -1,17 +1,15 @@
 //! Source-name matching with explicit Unicode ordering; results retain domain identity.
 
 use icu_collator::Collator;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 mod collation;
 pub use collation::CollationError;
 
 use crate::{
-    geometry::PathError,
     i18n::Locale,
     interaction::component_reference::ComponentAnchor,
-    model::{BoardScene, Bounds, NetId, ObjectId},
-    pad::PadPlacement,
+    model::{BoardScene, NetId, ObjectId},
     task::CancellationToken,
 };
 
@@ -22,134 +20,18 @@ pub enum SearchTarget {
     ComponentGroup(ComponentAnchor),
 }
 
+/// Result groups presented separately, each with its own result limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchCategory {
+    Net,
+    Component,
+}
+
 impl SearchTarget {
-    /// Source-space bounds independent of current layer visibility and camera.
-    /// Run off the UI thread for large boards; cancellation discards partial bounds.
-    pub fn bounds(
-        self,
-        scene: &BoardScene,
-        cancel: &CancellationToken,
-    ) -> Result<Option<Bounds>, PathError> {
-        if let Self::ComponentGroup(anchor) = self {
-            return crate::selection::SelectionTarget::ComponentGroup(anchor).bounds(scene, cancel);
-        }
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
-        if self == Self::Net(NetId(0)) {
-            return Ok(None);
-        }
-        let mut result: Option<Bounds> = None;
-        let mut include = |bounds: Option<Bounds>, id| -> Result<(), PathError> {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            let bounds = bounds
-                .filter(|value| value.is_valid())
-                .ok_or(PathError::Invalid(id))?;
-            if let Some(result) = &mut result {
-                result.include(bounds.min);
-                result.include(bounds.max);
-            } else {
-                result = Some(bounds);
-            }
-            Ok(())
-        };
-        let component = match self {
-            Self::Component(id) => scene.components.iter().find(|value| value.id == id),
-            Self::Net(_) | Self::ComponentGroup(_) => None,
-        };
-        if let Some(component) = component {
-            include(Bounds::from_points([component.at]), component.id)?;
-        }
-        let mut remaining_pins = BTreeSet::new();
-        if let Some(component) = component {
-            for id in &component.pins {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
-                if !remaining_pins.insert(*id) {
-                    return Err(PathError::Invalid(*id));
-                }
-            }
-        }
-        for segment in &scene.segments {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if matches!(self, Self::Net(net) if net == segment.net) {
-                include(segment.bounds(), segment.id)?;
-            }
-        }
-        for pin in &scene.pins {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            let selected = match self {
-                Self::Net(net) => pin.net == net,
-                Self::Component(_) | Self::ComponentGroup(_) => remaining_pins.remove(&pin.id),
-            };
-            if !selected {
-                continue;
-            }
-            let owner = PadPlacement {
-                at: pin.at,
-                angle: pin.angle,
-                mirrored: pin.mirrored,
-            };
-            include(Bounds::from_points([pin.at]), pin.id)?;
-            for pad in &pin.pads {
-                include(pad.bounds(owner), pin.id)?;
-            }
-            if let Some(pad) = pin.drill_shape.pad() {
-                include(pad.bounds(owner), pin.id)?;
-            }
-        }
-        if let Some(id) = remaining_pins.first() {
-            return Err(PathError::Invalid(*id));
-        }
-        if let Self::Net(net) = self {
-            for via in &scene.vias {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
-                if via.net != net {
-                    continue;
-                }
-                let owner = PadPlacement {
-                    at: via.at,
-                    angle: via.angle,
-                    mirrored: via.mirrored,
-                };
-                include(Bounds::from_points([via.at]), via.id)?;
-                for pad in via.pads.iter() {
-                    include(pad.bounds(owner), via.id)?;
-                }
-                if let Some(pad) = via.drill_shape.pad() {
-                    include(pad.bounds(owner), via.id)?;
-                }
-            }
-            for zone in &scene.zones {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
-                if zone.net != net {
-                    continue;
-                }
-                for bounds in &zone.mesh.ring_bounds {
-                    include(Some(*bounds), zone.id)?;
-                }
-                for path in &zone.paths {
-                    for segment in path {
-                        include(segment.centreline_bounds(), zone.id)?;
-                    }
-                }
-            }
-        }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(result)
+    pub fn category(self) -> SearchCategory {
+        match self {
+            Self::Net(_) => SearchCategory::Net,
+            Self::Component(_) | Self::ComponentGroup(_) => SearchCategory::Component,
         }
     }
 }
@@ -199,6 +81,7 @@ impl SearchIndex {
             .chain(scene.vias.iter().map(|value| value.net))
             .chain(scene.pins.iter().map(|value| value.net))
             .chain(scene.zones.iter().map(|value| value.net))
+            .chain(scene.drawings.iter().map(|value| value.net))
         {
             if cancel.is_cancelled() {
                 return Ok(None);
@@ -287,11 +170,6 @@ impl SearchIndex {
         Ok(self)
     }
 
-    /// The ordering language, frozen when this document index is prepared.
-    pub fn collation_locale(&self) -> Locale {
-        self.locale
-    }
-
     /// Exact names precede prefixes, then substrings, with Unicode name ordering.
     /// Collation ties keep source order. Names and matching never use UI translations.
     pub fn find(&self, query: &str, limit: usize) -> Vec<&SearchEntry> {
@@ -303,6 +181,28 @@ impl SearchIndex {
     pub fn find_cancellable(
         &self,
         query: &str,
+        limit: usize,
+        cancel: &CancellationToken,
+    ) -> Option<Vec<&SearchEntry>> {
+        self.find_matching(query, None, limit, cancel)
+    }
+
+    /// Like `find_cancellable`, restricted to one category before ranking and the
+    /// limit, so one busy category cannot crowd the other out of its own results.
+    pub fn find_in_category(
+        &self,
+        query: &str,
+        category: SearchCategory,
+        limit: usize,
+        cancel: &CancellationToken,
+    ) -> Option<Vec<&SearchEntry>> {
+        self.find_matching(query, Some(category), limit, cancel)
+    }
+
+    fn find_matching(
+        &self,
+        query: &str,
+        category: Option<SearchCategory>,
         limit: usize,
         cancel: &CancellationToken,
     ) -> Option<Vec<&SearchEntry>> {
@@ -332,7 +232,9 @@ impl SearchIndex {
             if cancel.is_cancelled() {
                 return None;
             }
-            if !entry.folded.contains(&query) {
+            if category.is_some_and(|category| entry.target.category() != category)
+                || !entry.folded.contains(&query)
+            {
                 continue;
             }
             let position = matches.partition_point(|other| !compare(other, entry).is_gt());

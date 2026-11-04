@@ -1,11 +1,12 @@
 //! Domain selection predicates shared by picking, search and GPU overlays.
 
 use crate::interaction::component_reference::ComponentAnchor;
-use crate::model::{BoardScene, NetId, ObjectId, Pin, Segment, Via, Zone};
+use crate::interaction::membership::{Member, listed_pins};
+use crate::model::{BoardScene, LayerId, NetId, ObjectId};
 use crate::{geometry::PathError, task::CancellationToken};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct SelectionSummary {
     pub segments: usize,
     pub pins: usize,
@@ -14,13 +15,50 @@ pub struct SelectionSummary {
     pub drawings: usize,
     /// Sum of selected 2D centerlines; excludes drill depth and electrical delay.
     pub centerline_length_mm: f64,
+    /// Copper layers carrying member traces, zones, pads and via end layers.
+    pub layers: BTreeSet<LayerId>,
+    /// Footprint placements owning member pins.
+    pub components: BTreeSet<ObjectId>,
 }
 
 #[derive(Debug)]
 pub struct SelectionMembers {
     /// Source order within segment, pin, via, zone categories; bounded to 256 rows.
     pub objects: Vec<SelectedObject>,
+    /// Layers occupied by each listed object, in the same order as `objects`.
+    pub layers: Vec<MemberLayers>,
     pub total: usize,
+}
+
+/// Layers one member occupies: a single layer, or the outer layers of a span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberLayers {
+    None,
+    Single(LayerId),
+    Span(LayerId, LayerId),
+}
+
+impl MemberLayers {
+    fn between(first: Option<LayerId>, last: Option<LayerId>) -> Self {
+        match (first, last) {
+            (Some(first), Some(last)) if first != last => Self::Span(first, last),
+            (Some(layer), _) | (None, Some(layer)) => Self::Single(layer),
+            (None, None) => Self::None,
+        }
+    }
+
+    fn of(member: Member<'_>) -> Self {
+        match member {
+            Member::Segment(segment) => Self::Single(segment.layer),
+            Member::Zone(zone) => Self::Single(zone.layer),
+            Member::Drawing(drawing) => Self::Single(drawing.layer),
+            Member::Via(via) => Self::between(via.start_layer, via.end_layer),
+            Member::Pin(pin) => Self::between(
+                pin.pads.first().map(|pad| pad.layer),
+                pin.pads.last().map(|pad| pad.layer),
+            ),
+        }
+    }
 }
 
 #[derive(
@@ -33,6 +71,8 @@ pub enum SelectedObject {
     Via(ObjectId),
     Zone(ObjectId),
     Drawing(ObjectId),
+    /// Visible placement area; its semantic selection is the owning component.
+    Placement(ObjectId),
 }
 
 impl SelectedObject {
@@ -52,20 +92,19 @@ impl SelectedObject {
             cancel: &CancellationToken,
         ) -> Result<&'a T, PathError> {
             for value in values {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
+                cancel.check()?;
                 if key(value) == id {
                     return Ok(value);
                 }
             }
-            if cancel.is_cancelled() {
-                Err(PathError::Cancelled)
-            } else {
-                Err(PathError::Invalid(id))
-            }
+            cancel.check()?;
+            Err(PathError::Invalid(id))
         }
         let (net, track, pin) = match self {
+            Self::Placement(id) => {
+                find(&scene.components, id, |component| component.id, cancel)?;
+                return Ok(Some(SelectionTarget::Component(id)));
+            }
             Self::Drawing(id) => {
                 find(&scene.drawings, id, |value| value.id, cancel)?;
                 (NetId(0), None, None)
@@ -106,9 +145,7 @@ impl SelectedObject {
                         find(&scene.components, pin.owner_id, |value| value.id, cancel)?;
                     let mut member = false;
                     for &id in &component.pins {
-                        if cancel.is_cancelled() {
-                            return Err(PathError::Cancelled);
-                        }
+                        cancel.check()?;
                         if id == pin.id {
                             member = true;
                             break;
@@ -123,11 +160,8 @@ impl SelectedObject {
                 }
             }
         };
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(result)
-        }
+        cancel.check()?;
+        Ok(result)
     }
 }
 
@@ -160,25 +194,21 @@ pub fn resolve_candidates(
     limit: usize,
     cancel: &CancellationToken,
 ) -> Result<Vec<SelectionCandidate>, PathError> {
-    if cancel.is_cancelled() {
-        return Err(PathError::Cancelled);
-    }
+    cancel.check()?;
     let limit = limit.min(64);
     let mut candidates: Vec<SelectionCandidate> = Vec::new();
     if limit == 0 {
         return Ok(candidates);
     }
     for hit in hits {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         if !hit.distance_mm.is_finite() || hit.distance_mm < 0.0 {
             let id = match hit.object {
                 SelectedObject::Segment(id)
                 | SelectedObject::Pin(id)
                 | SelectedObject::Via(id)
                 | SelectedObject::Zone(id) => id,
-                SelectedObject::Drawing(id) => id,
+                SelectedObject::Drawing(id) | SelectedObject::Placement(id) => id,
             };
             return Err(PathError::Invalid(id));
         }
@@ -197,11 +227,8 @@ pub fn resolve_candidates(
             });
         }
     }
-    if cancel.is_cancelled() {
-        Err(PathError::Cancelled)
-    } else {
-        Ok(candidates)
-    }
+    cancel.check()?;
+    Ok(candidates)
 }
 
 impl From<crate::search::SearchTarget> for SelectionTarget {
@@ -216,6 +243,38 @@ impl From<crate::search::SearchTarget> for SelectionTarget {
 
 /// Canvas mode expansion follows the Web viewer: unsupported track/component
 /// relationships and unconnected nets retain the picked object as the anchor.
+/// The selection target a canvas hit expands to in `mode`; also the grouping key that
+/// `BoardPickingIndex::query_visible_hits_grouped` uses before applying its hit limit.
+pub fn canvas_target(
+    scene: &BoardScene,
+    object: SelectedObject,
+    mode: crate::interaction::SelectionMode,
+    cancel: &CancellationToken,
+) -> Result<SelectionTarget, PathError> {
+    let target = if mode == crate::interaction::SelectionMode::Component {
+        ComponentAnchor::from_object(object, scene, cancel)?
+            .map(SelectionTarget::ComponentGroup)
+            .unwrap_or(match object {
+                SelectedObject::Placement(id) => SelectionTarget::Component(id),
+                _ => SelectionTarget::Object(object),
+            })
+    } else {
+        object
+            .resolve(scene, mode, cancel)?
+            .unwrap_or(SelectionTarget::Object(object))
+    };
+    if let SelectionTarget::Component(id) = target
+        && !matches!(object, SelectedObject::Placement(_))
+        && scene
+            .components
+            .iter()
+            .any(|component| component.id == id && component.reference.is_empty())
+    {
+        return Ok(SelectionTarget::Object(object));
+    }
+    Ok(target)
+}
+
 pub fn resolve_canvas_candidates(
     scene: &BoardScene,
     hits: &[crate::picking::ObjectHit],
@@ -225,29 +284,11 @@ pub fn resolve_canvas_candidates(
 ) -> Result<Vec<SelectionCandidate>, PathError> {
     let mut candidates = Vec::new();
     for hit in hits {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         if candidates.len() >= limit.min(64) {
             break;
         }
-        let mut target = if mode == crate::interaction::SelectionMode::Component {
-            ComponentAnchor::from_object(hit.object, scene, cancel)?
-                .map(SelectionTarget::ComponentGroup)
-                .unwrap_or(SelectionTarget::Object(hit.object))
-        } else {
-            hit.object
-                .resolve(scene, mode, cancel)?
-                .unwrap_or(SelectionTarget::Object(hit.object))
-        };
-        if let SelectionTarget::Component(id) = target
-            && scene
-                .components
-                .iter()
-                .any(|component| component.id == id && component.reference.is_empty())
-        {
-            target = SelectionTarget::Object(hit.object);
-        }
+        let target = canvas_target(scene, hit.object, mode, cancel)?;
         if !candidates
             .iter()
             .any(|candidate: &SelectionCandidate| candidate.target == target)
@@ -259,9 +300,7 @@ pub fn resolve_canvas_candidates(
             });
         }
     }
-    if cancel.is_cancelled() {
-        return Err(PathError::Cancelled);
-    }
+    cancel.check()?;
     Ok(candidates)
 }
 
@@ -273,19 +312,15 @@ impl SelectionTarget {
         scene: &BoardScene,
         cancel: &CancellationToken,
     ) -> Result<Self, PathError> {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         let anchor = match self {
             Self::ComponentGroup(anchor) => {
                 ComponentAnchor::from_object(anchor.object(), scene, cancel)?
             }
-            Self::Component(id) => {
+            Self::Component(id) | Self::Object(SelectedObject::Placement(id)) => {
                 let mut reference = None;
                 for component in &scene.components {
-                    if cancel.is_cancelled() {
-                        return Err(PathError::Cancelled);
-                    }
+                    cancel.check()?;
                     if component.id == id {
                         reference = Some(component.reference.as_str());
                         break;
@@ -298,10 +333,14 @@ impl SelectionTarget {
             }
             _ => None,
         };
-        Ok(anchor.map(Self::ComponentGroup).unwrap_or(self))
+        Ok(anchor.map(Self::ComponentGroup).unwrap_or(match self {
+            Self::Object(SelectedObject::Placement(id)) => Self::Component(id),
+            _ => self,
+        }))
     }
 
     /// Full pin selection for GPU overlays; paging never limits highlighted pins.
+    /// A placement's listed pins are returned as listed, without membership checks.
     pub fn pin_ids(
         self,
         scene: &BoardScene,
@@ -309,37 +348,22 @@ impl SelectionTarget {
     ) -> Result<BTreeSet<ObjectId>, PathError> {
         let mut pins = BTreeSet::new();
         match self {
-            Self::ComponentGroup(anchor) => anchor.visit_members(scene, cancel, |object| {
-                if let SelectedObject::Pin(id) = object {
-                    pins.insert(id);
-                }
-            })?,
-            Self::Component(id) => {
-                for component in &scene.components {
-                    if cancel.is_cancelled() {
-                        return Err(PathError::Cancelled);
-                    }
-                    if component.id == id {
-                        for &pin in &component.pins {
-                            if cancel.is_cancelled() {
-                                return Err(PathError::Cancelled);
-                            }
-                            pins.insert(pin);
-                        }
-                        break;
-                    }
-                }
+            Self::Component(id) | Self::Object(SelectedObject::Placement(id)) => {
+                pins.extend(listed_pins(scene, id))
             }
             Self::Object(SelectedObject::Pin(id)) => {
                 pins.insert(id);
             }
+            Self::ComponentGroup(_) => self.visit_members(scene, cancel, |member| {
+                if let Member::Pin(pin) = member {
+                    pins.insert(pin.id);
+                }
+                Ok(())
+            })?,
             _ => {}
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(pins)
-        }
+        cancel.check()?;
+        Ok(pins)
     }
 
     /// Full reference group for hover. Legacy placement links remain available.
@@ -349,23 +373,55 @@ impl SelectionTarget {
         cancel: &CancellationToken,
     ) -> Result<BTreeSet<SelectedObject>, PathError> {
         let mut objects = BTreeSet::new();
-        if let Self::ComponentGroup(anchor) = self {
-            anchor.visit_members(scene, cancel, |object| {
-                objects.insert(object);
-            })?;
-        } else if matches!(self, Self::Component(_)) {
-            objects.extend(
-                self.pin_ids(scene, cancel)?
-                    .into_iter()
-                    .map(SelectedObject::Pin),
-            );
-            objects.extend(self.related_bond_objects(scene, cancel)?);
+        match self {
+            Self::ComponentGroup(_) => self.visit_members(scene, cancel, |member| {
+                objects.insert(member.object());
+                Ok(())
+            })?,
+            Self::Component(_) | Self::Object(SelectedObject::Placement(_)) => {
+                objects.extend(
+                    self.pin_ids(scene, cancel)?
+                        .into_iter()
+                        .map(SelectedObject::Pin),
+                );
+                objects.extend(self.related_bond_objects(scene, cancel)?);
+            }
+            _ => {}
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(objects)
+        objects.extend(
+            self.placement_ids(scene, cancel)?
+                .into_iter()
+                .map(SelectedObject::Placement),
+        );
+        cancel.check()?;
+        Ok(objects)
+    }
+
+    /// Actual placement identities belonging to a component/reference selection.
+    pub fn placement_ids(
+        self,
+        scene: &BoardScene,
+        cancel: &CancellationToken,
+    ) -> Result<BTreeSet<ObjectId>, PathError> {
+        let reference = match self {
+            Self::ComponentGroup(anchor) => anchor.reference(scene, cancel)?,
+            _ => None,
+        };
+        let mut result = BTreeSet::new();
+        for component in &scene.components {
+            cancel.check()?;
+            let selected = match self {
+                Self::Component(id) | Self::Object(SelectedObject::Placement(id)) => {
+                    id == component.id
+                }
+                Self::ComponentGroup(_) => reference == Some(component.reference.as_str()),
+                _ => false,
+            };
+            if selected && component.body.is_some() {
+                result.insert(component.id);
+            }
         }
+        Ok(result)
     }
 
     /// Revalidate persisted typed identity before restoring selection work.
@@ -376,18 +432,14 @@ impl SelectionTarget {
             cancel: &CancellationToken,
         ) -> Result<bool, PathError> {
             for id in ids {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
+                cancel.check()?;
                 if id == expected {
                     return Ok(true);
                 }
             }
             Ok(false)
         }
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         let exists = match self {
             Self::Object(SelectedObject::Drawing(id)) => {
                 contains(scene.drawings.iter().map(|item| item.id), id, cancel)?
@@ -407,17 +459,14 @@ impl SelectionTarget {
             Self::Track(id) => {
                 contains(scene.segments.iter().map(|item| item.track_id), id, cancel)?
             }
-            Self::Component(id) => {
+            Self::Component(id) | Self::Object(SelectedObject::Placement(id)) => {
                 contains(scene.components.iter().map(|item| item.id), id, cancel)?
             }
             Self::ComponentGroup(anchor) => anchor.reference(scene, cancel)?.is_some(),
             Self::Net(id) => scene.nets.contains_key(&id),
         };
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(exists)
-        }
+        cancel.check()?;
+        Ok(exists)
     }
 
     /// Reference groups return their fingers; source placements use explicit
@@ -428,65 +477,44 @@ impl SelectionTarget {
         scene: &BoardScene,
         cancel: &CancellationToken,
     ) -> Result<Vec<SelectedObject>, PathError> {
-        if let Self::ComponentGroup(anchor) = self {
-            let mut fingers = Vec::new();
-            anchor.visit_members(scene, cancel, |object| {
-                if matches!(object, SelectedObject::Via(_)) {
-                    fingers.push(object);
-                }
-            })?;
-            return Ok(fingers);
-        }
-        self.members(scene, 0, cancel)?;
-        let Self::Component(id) = self else {
-            return Ok(Vec::new());
-        };
-        let mut pins = BTreeSet::new();
-        for component in &scene.components {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if component.id == id {
-                for &pin in &component.pins {
-                    if cancel.is_cancelled() {
-                        return Err(PathError::Cancelled);
-                    }
-                    pins.insert(pin);
-                }
-                break;
-            }
-        }
         let mut objects = Vec::new();
-        for segment in &scene.segments {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
+        match self {
+            Self::ComponentGroup(_) => self.visit_members(scene, cancel, |member| {
+                if let Member::Via(via) = member {
+                    objects.push(SelectedObject::Via(via.id));
+                }
+                Ok(())
+            })?,
+            Self::Component(id) => {
+                // Validate the placement's pin list before following its links.
+                self.visit_members(scene, cancel, |_| Ok(()))?;
+                let pins: BTreeSet<_> = listed_pins(scene, id).iter().copied().collect();
+                for segment in &scene.segments {
+                    cancel.check()?;
+                    if segment
+                        .bond_wire
+                        .as_ref()
+                        .is_some_and(|wire| pins.contains(&wire.source_pin))
+                    {
+                        objects.push(SelectedObject::Segment(segment.id));
+                    }
+                }
+                for via in &scene.vias {
+                    cancel.check()?;
+                    if via
+                        .finger
+                        .as_ref()
+                        .and_then(|finger| finger.source_pin)
+                        .is_some_and(|pin| pins.contains(&pin))
+                    {
+                        objects.push(SelectedObject::Via(via.id));
+                    }
+                }
             }
-            if segment
-                .bond_wire
-                .as_ref()
-                .is_some_and(|wire| pins.contains(&wire.source_pin))
-            {
-                objects.push(SelectedObject::Segment(segment.id));
-            }
+            _ => self.visit_members(scene, cancel, |_| Ok(()))?,
         }
-        for via in &scene.vias {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if via
-                .finger
-                .as_ref()
-                .and_then(|finger| finger.source_pin)
-                .is_some_and(|pin| pins.contains(&pin))
-            {
-                objects.push(SelectedObject::Via(via.id));
-            }
-        }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(objects)
-        }
+        cancel.check()?;
+        Ok(objects)
     }
 
     /// Source membership, not proof of electrical continuity or physical contact.
@@ -510,115 +538,21 @@ impl SelectionTarget {
         limit: usize,
         cancel: &CancellationToken,
     ) -> Result<SelectionMembers, PathError> {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
-        if let Self::ComponentGroup(anchor) = self {
-            let mut result = SelectionMembers {
-                objects: Vec::new(),
-                total: 0,
-            };
-            anchor.visit_members(scene, cancel, |object| {
-                let position = result.total;
-                result.total += 1;
-                if position >= offset && result.objects.len() < limit.min(256) {
-                    result.objects.push(object);
-                }
-            })?;
-            return Ok(result);
-        }
-        let mut component_pins = if let Self::Component(id) = self {
-            let mut pins = BTreeSet::new();
-            for component in &scene.components {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
-                if component.id != id {
-                    continue;
-                }
-                for &pin in &component.pins {
-                    if cancel.is_cancelled() {
-                        return Err(PathError::Cancelled);
-                    }
-                    if !pins.insert(pin) {
-                        return Err(PathError::Invalid(pin));
-                    }
-                }
-                break;
-            }
-            Some(pins)
-        } else {
-            None
-        };
+        let limit = limit.min(256);
         let mut result = SelectionMembers {
             objects: Vec::new(),
+            layers: Vec::new(),
             total: 0,
         };
-        let limit = limit.min(256);
-        let mut append = |object| {
-            let position = result.total;
+        self.visit_members(scene, cancel, |member| {
+            if result.total >= offset && result.objects.len() < limit {
+                result.objects.push(member.object());
+                result.layers.push(MemberLayers::of(member));
+            }
             result.total += 1;
-            if position >= offset && result.objects.len() < limit {
-                result.objects.push(object);
-            }
-        };
-        for segment in &scene.segments {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if self.matches_segment(segment) {
-                append(SelectedObject::Segment(segment.id));
-            }
-        }
-        for pin in &scene.pins {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            let selected = match &mut component_pins {
-                Some(pins) => pins.remove(&pin.id),
-                None => self.matches_pin(pin, scene),
-            };
-            if selected {
-                if let Self::Component(id) = self
-                    && pin.owner_id != id
-                {
-                    return Err(PathError::Invalid(pin.id));
-                }
-                append(SelectedObject::Pin(pin.id));
-            }
-        }
-        if let Some(id) = component_pins.as_ref().and_then(|pins| pins.first()) {
-            return Err(PathError::Invalid(*id));
-        }
-        for via in &scene.vias {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if self.matches_via(via) {
-                append(SelectedObject::Via(via.id));
-            }
-        }
-        for zone in &scene.zones {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if self.matches_zone(zone) {
-                append(SelectedObject::Zone(zone.id));
-            }
-        }
-        for drawing in &scene.drawings {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if self == Self::Object(SelectedObject::Drawing(drawing.id)) {
-                append(SelectedObject::Drawing(drawing.id));
-            }
-        }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(result)
-        }
+            Ok(())
+        })?;
+        Ok(result)
     }
 
     pub fn summarize(
@@ -626,150 +560,63 @@ impl SelectionTarget {
         scene: &BoardScene,
         cancel: &CancellationToken,
     ) -> Result<SelectionSummary, PathError> {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
-        if let Self::ComponentGroup(anchor) = self {
-            let mut summary = SelectionSummary::default();
-            anchor.visit_members(scene, cancel, |object| match object {
-                SelectedObject::Pin(_) => summary.pins += 1,
-                SelectedObject::Via(_) => summary.vias += 1,
-                _ => {}
-            })?;
-            return Ok(summary);
-        }
-        let mut component_pins = if let Self::Component(id) = self {
-            let mut pins = BTreeSet::new();
-            for component in &scene.components {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
-                if component.id != id {
-                    continue;
-                }
-                for &pin in &component.pins {
-                    if cancel.is_cancelled() {
-                        return Err(PathError::Cancelled);
-                    }
-                    if !pins.insert(pin) {
-                        return Err(PathError::Invalid(pin));
-                    }
-                }
-                break;
-            }
-            Some(pins)
-        } else {
-            None
-        };
         let mut summary = SelectionSummary::default();
+        // Kahan compensation keeps long networks' total length stable.
         let mut compensation = 0.0;
-        for segment in &scene.segments {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
+        self.visit_members(scene, cancel, |member| {
+            match member {
+                Member::Segment(segment) => {
+                    let length = segment.length_mm();
+                    if !length.is_finite() || length < 0.0 {
+                        return Err(PathError::Invalid(segment.id));
+                    }
+                    let adjusted = length - compensation;
+                    let next = summary.centerline_length_mm + adjusted;
+                    if !next.is_finite() {
+                        return Err(PathError::Invalid(segment.id));
+                    }
+                    compensation = (next - summary.centerline_length_mm) - adjusted;
+                    summary.centerline_length_mm = next;
+                    summary.segments += 1;
+                    summary.layers.insert(segment.layer);
+                }
+                Member::Pin(pin) => {
+                    summary.pins += 1;
+                    summary.components.insert(pin.owner_id);
+                    summary.layers.extend(pin.pads.iter().map(|pad| pad.layer));
+                }
+                Member::Via(via) => {
+                    summary.vias += 1;
+                    summary.layers.extend(via.start_layer);
+                    summary.layers.extend(via.end_layer);
+                }
+                Member::Zone(zone) => {
+                    summary.zones += 1;
+                    summary.layers.insert(zone.layer);
+                }
+                Member::Drawing(_) => summary.drawings += 1,
             }
-            if !self.matches_segment(segment) {
-                continue;
-            }
-            let length = segment.length_mm();
-            if !length.is_finite() || length < 0.0 {
-                return Err(PathError::Invalid(segment.id));
-            }
-            let adjusted = length - compensation;
-            let next = summary.centerline_length_mm + adjusted;
-            if !next.is_finite() {
-                return Err(PathError::Invalid(segment.id));
-            }
-            compensation = (next - summary.centerline_length_mm) - adjusted;
-            summary.centerline_length_mm = next;
-            summary.segments += 1;
-        }
-        for pin in &scene.pins {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            let selected = match &mut component_pins {
-                Some(pins) => pins.remove(&pin.id),
-                None => self.matches_pin(pin, scene),
-            };
-            summary.pins += usize::from(selected);
-        }
-        if let Some(id) = component_pins.as_ref().and_then(|pins| pins.first()) {
-            return Err(PathError::Invalid(*id));
-        }
-        for via in &scene.vias {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            summary.vias += usize::from(self.matches_via(via));
-        }
-        for zone in &scene.zones {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            summary.zones += usize::from(self.matches_zone(zone));
-        }
-        for drawing in &scene.drawings {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            summary.drawings +=
-                usize::from(self == Self::Object(SelectedObject::Drawing(drawing.id)));
-        }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(summary)
-        }
-    }
-
-    pub fn matches_segment(self, segment: &Segment) -> bool {
-        match self {
-            Self::Object(SelectedObject::Segment(id)) => id == segment.id,
-            Self::Track(id) => id == segment.track_id,
-            Self::Net(net) => net.0 != 0 && net == segment.net,
-            _ => false,
-        }
-    }
-
-    pub fn matches_pin(self, pin: &Pin, scene: &BoardScene) -> bool {
-        match self {
-            Self::Object(SelectedObject::Pin(id)) => id == pin.id,
-            Self::Net(net) => net.0 != 0 && net == pin.net,
-            Self::Component(id) => scene
+            Ok(())
+        })?;
+        for id in self.placement_ids(scene, cancel)? {
+            summary.components.insert(id);
+            if let Some(body) = scene
                 .components
                 .iter()
-                .find(|value| value.id == id)
-                .is_some_and(|component| component.pins.contains(&pin.id)),
-            Self::ComponentGroup(anchor) => anchor
-                .reference(scene, &CancellationToken::default())
-                .ok()
-                .flatten()
-                .is_some_and(|reference| pin.reference == reference),
-            _ => false,
+                .find(|component| component.id == id)
+                .and_then(|component| component.body.as_ref())
+            {
+                summary.layers.insert(body.layer);
+            }
         }
-    }
-
-    pub fn matches_via(self, via: &Via) -> bool {
-        match self {
-            Self::Object(SelectedObject::Via(id)) => id == via.id,
-            Self::Net(net) => net.0 != 0 && net == via.net,
-            _ => false,
-        }
-    }
-
-    pub fn matches_zone(self, zone: &Zone) -> bool {
-        match self {
-            Self::Object(SelectedObject::Zone(id)) => id == zone.id,
-            Self::Net(net) => net.0 != 0 && net == zone.net,
-            _ => false,
-        }
+        Ok(summary)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{LayerId, Point};
+    use crate::model::{LayerId, Point, Segment};
 
     #[test]
     fn persisted_selection_checks_category_identity_and_cancellation() {
@@ -833,34 +680,5 @@ mod tests {
             SelectionTarget::Net(NetId(9)).exists(&scene, &cancel),
             Err(PathError::Cancelled)
         ));
-    }
-
-    #[test]
-    fn object_category_and_track_identity_do_not_alias_net_or_segment_identity() {
-        let segment = Segment {
-            id: ObjectId(7),
-            track_id: ObjectId(8),
-            layer: LayerId(1),
-            net: NetId(9),
-            a: Point::default(),
-            b: Point::new(1.0, 0.0),
-            width: 0.1,
-            arc: None,
-            bond_wire: None,
-        };
-        assert!(
-            SelectionTarget::Object(SelectedObject::Segment(ObjectId(7))).matches_segment(&segment)
-        );
-        assert!(
-            !SelectionTarget::Object(SelectedObject::Via(ObjectId(7))).matches_segment(&segment)
-        );
-        assert!(SelectionTarget::Track(ObjectId(8)).matches_segment(&segment));
-        assert!(!SelectionTarget::Track(ObjectId(7)).matches_segment(&segment));
-        assert!(SelectionTarget::Net(NetId(9)).matches_segment(&segment));
-        let unconnected = Segment {
-            net: NetId(0),
-            ..segment
-        };
-        assert!(!SelectionTarget::Net(NetId(0)).matches_segment(&unconnected));
     }
 }

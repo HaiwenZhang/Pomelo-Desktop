@@ -38,10 +38,18 @@ pub struct CopperBatch {
     /// Clipped self-touching contours use independent parity fans.
     /// Static earcut meshes leave this absent.
     pub parity_rings: Option<Vec<ParityRing>>,
+    pub hole_ranges: Vec<FilterHole>,
+}
+
+#[derive(Debug)]
+pub struct FilterHole {
+    pub indices: Range<u32>,
+    pub bounds: Bounds,
 }
 
 #[derive(Debug)]
 pub struct ParityRing {
+    pub filter_bounds: Option<Bounds>,
     pub indices: Range<u32>,
     pub outer: bool,
 }
@@ -71,6 +79,7 @@ impl CopperBatch {
             bounds: Some(bounds),
             curved: true,
             parity_rings: Some(ranges),
+            hole_ranges: Vec::new(),
         })
     }
     pub fn outer_indices(&self) -> Range<u32> {
@@ -135,6 +144,12 @@ impl PreparedCopper {
                     rings.capacity().saturating_mul(size_of::<ParityRing>())
                 }))
             }))
+            .saturating_add(
+                self.batches
+                    .iter()
+                    .map(|batch| batch.hole_ranges.capacity() * size_of::<FilterHole>())
+                    .sum::<usize>(),
+            )
             .saturating_add(self.source_allocation_bytes())
     }
     pub fn upload_bytes(&self) -> usize {
@@ -166,6 +181,13 @@ impl PreparedCopper {
         let bytes = zones
             .len()
             .saturating_mul(size_of::<CopperBatch>())
+            .saturating_add(
+                zones
+                    .iter()
+                    .map(|z| z.mesh.ring_bounds.len().saturating_sub(1))
+                    .sum::<usize>()
+                    .saturating_mul(size_of::<FilterHole>()),
+            )
             .saturating_add(if materialize {
                 vertices
                     .saturating_mul(size_of::<CopperVertex>())
@@ -232,6 +254,8 @@ impl PreparedCopper {
                     result.vertices.push(CopperVertex { position });
                 }
             }
+            let mut hole_ranges: Vec<FilterHole> =
+                reserve(mesh.ring_bounds.len().saturating_sub(1))?;
             for (position, &index) in mesh.indices.iter().enumerate() {
                 if position.is_multiple_of(1024) {
                     check_cancelled(cancellation)?;
@@ -242,6 +266,25 @@ impl PreparedCopper {
                     || (position >= outer && index_usize < exterior_vertices)
                 {
                     return Err(invalid());
+                }
+                if position >= outer && position.is_multiple_of(3) {
+                    let ring = mesh
+                        .ring_offsets
+                        .partition_point(|offset| *offset <= index)
+                        .saturating_sub(1);
+                    let bounds = *mesh.ring_bounds.get(ring).ok_or_else(invalid)?;
+                    let start = index_start + position as u32;
+                    if let Some(last) = hole_ranges
+                        .last_mut()
+                        .filter(|last| last.bounds == bounds && last.indices.end == start)
+                    {
+                        last.indices.end += 3;
+                    } else {
+                        hole_ranges.push(FilterHole {
+                            indices: start..start + 3,
+                            bounds,
+                        });
+                    }
                 }
                 let index = vertex_start.checked_add(index).ok_or_else(invalid)?;
                 if materialize {
@@ -263,6 +306,7 @@ impl PreparedCopper {
                 bounds,
                 curved: mesh.curved,
                 parity_rings: None,
+                hole_ranges,
             });
             next_vertex += mesh.vertices.len() as u32;
             next_index += mesh.indices.len() as u32;

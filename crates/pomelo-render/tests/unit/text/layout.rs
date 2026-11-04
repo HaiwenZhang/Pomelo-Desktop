@@ -86,7 +86,7 @@ fn compact_text_keeps_endpoint_precision_identity_order_and_budget() {
                 (stroke.width as f32).to_bits()
             ]
         );
-        assert_eq!(packed.flags, [0; 4]);
+        assert_eq!(packed.flags, [0, 0, (texts[0].height as f32).to_bits(), 0]);
     }
     assert!(
         crate::text_instances::PreparedTextInstances::build(

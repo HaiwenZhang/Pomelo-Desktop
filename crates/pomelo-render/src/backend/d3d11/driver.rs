@@ -107,7 +107,18 @@ impl<'a> Device<'a> {
             draw_state: RefCell::new(None),
         }
     }
-    pub(super) fn from_paint(context: &gpui_windows::D3D11PaintContext<'a>) -> Self {
+    pub(super) fn from_paint(context: &gpui::D3D11PaintContext<'a>) -> Self {
+        // Board shaders emit full-target clip coordinates; GPUI initially sets an
+        // element-local viewport. Its isolated callback restores this state on return.
+        // SAFETY: the borrowed immediate context and target extent belong to this frame.
+        unsafe {
+            context.context.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                Width: context.target.size[0] as f32,
+                Height: context.target.size[1] as f32,
+                MaxDepth: 1.0,
+                ..Default::default()
+            }]));
+        }
         let mut result = Self::new(context.device, context.context, context.target.opacity);
         result.sample_count = context.target.sample_count;
         result
@@ -288,9 +299,9 @@ impl<'a> Device<'a> {
             mut rasterizer,
         ) = (None, None, None, None, None, None, None);
         let uniform_size = match shader {
-            Shader::Copper => 192,
-            Shader::Probe => 128,
-            _ => 144,
+            Shader::Copper => 256,
+            Shader::Probe => 192,
+            _ => 208,
         };
         // SAFETY: live compiler blobs and initialized descriptors; validated COM outputs stay on this device.
         unsafe {
@@ -532,7 +543,8 @@ impl<'a> Device<'a> {
             "GPU_SCISSOR_INVALID"
         );
         ensure!(
-            draw.uniforms.len() + 16 == pipeline.uniform_size,
+            draw.uniforms.len() + size_of::<super::super::common::driver::MaterialUniforms>()
+                == pipeline.uniform_size,
             "GPU_UNIFORM_SIZE"
         );
         let inherited = self.active.get();
@@ -593,9 +605,9 @@ impl<'a> Device<'a> {
                 draw.uniforms.len(),
             );
             std::ptr::copy_nonoverlapping(
-                bytemuck::cast_slice::<f32, u8>(&[self.opacity, 0.0, 0.0, 0.0]).as_ptr(),
+                bytemuck::bytes_of(&draw.material_uniforms(self.opacity)).as_ptr(),
                 mapped.pData.cast::<u8>().add(draw.uniforms.len()),
-                16,
+                size_of::<super::super::common::driver::MaterialUniforms>(),
             );
             self.context.Unmap(&pipeline.uniforms, 0);
             if bind {

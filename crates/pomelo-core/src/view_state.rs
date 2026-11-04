@@ -27,6 +27,9 @@ pub struct ViewState {
     pub selection: Option<SelectionTarget>,
     #[serde(default)]
     pub selection_anchor: Option<crate::picking_index::SelectionAnchor>,
+    /// Highlight groups and named views; absent in views saved before review tools.
+    #[serde(default, skip_serializing_if = "crate::review::ReviewState::is_empty")]
+    pub review: crate::review::ReviewState,
 }
 
 impl ViewState {
@@ -39,23 +42,8 @@ impl ViewState {
             || self.source.encoding.is_empty()
             || self.source.encoding.len() > 64
             || !self.camera.is_renderable()
-            || self.display.hidden_layers.len() > 4096
-            || self.display.layer_primitives.len() > 4096
-            || self.display.layer_order.len() > 4096
-            || self.display.priorities.len() > 4096
-            || self.display.appearance.layers.len() > 4096
-            || self
-                .display
-                .layer_order
-                .iter()
-                .copied()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != self.display.layer_order.len()
-            || !self.display.copper_opacity.is_finite()
-            || !(0.0..=1.0).contains(&self.display.copper_opacity)
-            || !self.display.global_opacity.is_finite()
-            || !(0.0..=1.0).contains(&self.display.global_opacity)
+            || !self.display.valid()
+            || !self.review.valid()
         {
             return Err(crate::model::Diagnostic::error(
                 "VIEW_STATE_INVALID",
@@ -97,6 +85,39 @@ mod tests {
                 crate::selection::SelectedObject::Pin(ObjectId(7)),
             )),
             selection_anchor: None,
+            review: Default::default(),
+        }
+    }
+    #[test]
+    fn legacy_views_default_to_all_visible_names_without_shadowing() {
+        let mut value = serde_json::to_value(state()).unwrap();
+        let display = value["display"].as_object_mut().unwrap();
+        display.remove("shadow");
+        display.remove("grid");
+        display.remove("object_filter");
+        display.remove("active_layer_labels_only");
+        let restored: ViewState = serde_json::from_value(value).unwrap();
+        assert!(!restored.display.shadow.enabled);
+        assert!(!restored.display.active_layer_labels_only);
+        assert!(restored.validate().is_ok());
+    }
+    #[test]
+    fn object_filter_roundtrips_categories_and_rejects_an_out_of_range_threshold() {
+        let mut value = state();
+        value.display.object_filter.minimum_pixels = 42;
+        value.display.object_filter.voids = false;
+        let restored: ViewState =
+            serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(restored.display.object_filter, value.display.object_filter);
+        value.display.object_filter.minimum_pixels = 101;
+        assert!(value.validate().is_err());
+    }
+    #[test]
+    fn invalid_shadow_brightness_cannot_restore_a_saved_view() {
+        for brightness in [f32::NAN, -0.1, 1.1] {
+            let mut value = state();
+            value.display.shadow.brightness = brightness;
+            assert!(value.validate().is_err());
         }
     }
     #[test]
@@ -126,6 +147,25 @@ mod tests {
         let decoded: ViewState = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.selection_anchor, None);
         assert!(decoded.validate().is_ok());
+    }
+    #[test]
+    fn legacy_view_without_trace_mode_defaults_to_stencil() {
+        let mut value = serde_json::to_value(state()).unwrap();
+        value["display"]
+            .as_object_mut()
+            .unwrap()
+            .remove("trace_render_mode");
+        let decoded: ViewState = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            decoded.display.trace_render_mode,
+            crate::display::TraceRenderMode::Stencil
+        );
+    }
+    #[test]
+    fn unknown_trace_mode_is_rejected_before_view_restoration() {
+        let mut value = serde_json::to_value(state()).unwrap();
+        value["display"]["trace_render_mode"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<ViewState>(value).is_err());
     }
     #[test]
     fn anchor_without_selection_returns_a_localized_configuration_error() {
@@ -160,6 +200,7 @@ mod tests {
         original.display.label_options.via_names = true;
         original.display.copper_opacity = 0.75;
         original.display.color_mode = crate::display::ColorMode::Net;
+        original.display.trace_render_mode = crate::display::TraceRenderMode::Sdf;
         original.display.layer_order = vec![LayerId(4), LayerId(2)];
         original
             .display
@@ -185,6 +226,10 @@ mod tests {
         );
         assert_eq!(restored.display.copper_opacity, 0.75);
         assert_eq!(restored.display.color_mode, original.display.color_mode);
+        assert_eq!(
+            restored.display.trace_render_mode,
+            original.display.trace_render_mode
+        );
         assert_eq!(restored.display.layer_order, original.display.layer_order);
         assert_eq!(
             restored.display.layer_primitives,

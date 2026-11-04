@@ -468,7 +468,9 @@ fn every_variable_layout_obeys_version_specific_empty_boundaries() {
                 _ => {}
             }
             let result = decode(&bytes, &span, &DecodeLimits::default());
-            if kind == 0x1a && ![152, 157, 165, 166, 172, 174, 251, 261].contains(&version) {
+            if kind == 0x1a
+                && ![152, 157, 165, 166, 172, 174, 180, 181, 251, 261].contains(&version)
+            {
                 assert!(matches!(
                     result,
                     Err(ImportError::UnsupportedRecordLayout { .. })

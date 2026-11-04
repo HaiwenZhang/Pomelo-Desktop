@@ -1,6 +1,11 @@
 //! Window-wide side panel layout, shared by every PCB document.
-use crate::services::preferences::PanelPreferences;
+use crate::services::preferences::{LEFT_PANEL_WIDTH, PanelPreferences, RIGHT_PANEL_WIDTH};
 use gpui_kit::{App, AppContext, Context, Entity, component::ResizableState};
+use std::ops::RangeInclusive;
+
+fn clamp(width: f32, range: &RangeInclusive<f32>) -> f32 {
+    width.clamp(*range.start(), *range.end())
+}
 
 // Keep the existing canvas command bar usable when both sidebars are wide.
 pub(crate) const MIN_CANVAS_WIDTH: f32 = 360.0;
@@ -36,12 +41,12 @@ pub(crate) fn fit_to_window(
     };
     let mut excess = (occupied - budget).max(0.0);
     if !panels.right_collapsed {
-        let reduction = excess.min(panels.right_width - 240.0);
+        let reduction = excess.min(panels.right_width - *RIGHT_PANEL_WIDTH.start());
         panels.right_width -= reduction;
         excess -= reduction;
     }
     if !panels.left_collapsed {
-        panels.left_width = (panels.left_width - excess).max(200.0);
+        panels.left_width = (panels.left_width - excess).max(*LEFT_PANEL_WIDTH.start());
     }
     panels
 }
@@ -58,13 +63,13 @@ impl PanelLayout {
         if !preferences.left_collapsed
             && let Some(size) = sizes.first()
         {
-            preferences.left_width = size.as_f32().clamp(200.0, 440.0);
+            preferences.left_width = clamp(size.as_f32(), &LEFT_PANEL_WIDTH);
         }
         let right_index = if preferences.left_collapsed { 1 } else { 2 };
         if !preferences.right_collapsed
             && let Some(size) = sizes.get(right_index)
         {
-            preferences.right_width = size.as_f32().clamp(240.0, 440.0);
+            preferences.right_width = clamp(size.as_f32(), &RIGHT_PANEL_WIDTH);
         }
         preferences
     }

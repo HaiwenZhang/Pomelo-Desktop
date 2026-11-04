@@ -33,6 +33,9 @@ impl Pipeline {
             context.device.draw(
                 &self.pipeline,
                 Draw {
+                    pattern_mask: [0xffff; 16],
+                    pixel_filter: [0.0; 2],
+                    brightness: 1.0,
                     uniforms: bytemuck::bytes_of(&uniform),
                     vertices: &self.dummy,
                     indices: None,

@@ -180,7 +180,10 @@ mod tests {
         assert_eq!(source.instances[0].a, [10.0, 20.0, 0.0, 0.0]);
         assert_eq!(source.instances[0].b, [11.0, 23.0, 0.0, 0.0]);
         assert_eq!(f32::from_bits(source.instances[0].ids[3]), 0.2);
-        assert_eq!(source.instances[0].flags, [99, 1, 0, 0]);
+        assert_eq!(
+            source.instances[0].flags,
+            [99, 1, (scene.texts[0].height as f32).to_bits(), 0]
+        );
         assert_eq!(source.pick_quads.len(), 2);
         assert!(
             source

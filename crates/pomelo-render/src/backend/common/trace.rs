@@ -39,6 +39,7 @@ pub(crate) struct UploadedTracks<S: InstanceSource = PreparedTracks> {
     lifetime_bytes: u64,
     spatial: Option<crate::scene::residency::ResidencyCache<IndexedBuffer>>,
     overlays: RefCell<[Option<(OverlayKey, Accepted)>; 2]>,
+    filter: RefCell<super::object_filter::SourceFilter>,
     #[cfg(test)]
     pub legacy_overlays: bool,
 }
@@ -63,6 +64,7 @@ impl<S: InstanceSource> UploadedTracks<S> {
             lifetime_bytes: 0,
             spatial: None,
             overlays: RefCell::new([None, None]),
+            filter: RefCell::new(super::object_filter::SourceFilter::default()),
             #[cfg(test)]
             legacy_overlays: false,
         })
@@ -466,7 +468,8 @@ impl Pipeline {
                                 && !matches!(scope, board::TraceScope::Pads(_, _))
                                 && frame.highlighted_related_objects.is_none()
                                 && frame.highlighted_object.is_none()
-                                && frame.hovered_object.is_none())
+                                && frame.hovered_object.is_none()
+                                && !frame.has_color_overrides())
                         {
                             cursor = end;
                         } else {
@@ -486,7 +489,8 @@ impl Pipeline {
                         }
                         uniforms.color = color.unwrap_or(base_color);
                         // Copper boundaries stay white for selection and hover alike.
-                        uniforms.view[3] = if color.is_some()
+                        uniforms.view[3] = if frame.pass != board::OverlayPass::Base
+                            && color.is_some()
                             && matches!(
                                 cache.source.selected_object(span_start),
                                 pomelo_core::selection::SelectedObject::Zone(_)
@@ -511,6 +515,11 @@ impl Pipeline {
                         context.device.draw(
                             &self.pipeline,
                             Draw {
+                                pattern_mask: frame
+                                    .pattern
+                                    .map_or([0xffff; 16], |pattern| pattern.rows()),
+                                pixel_filter: [0.0; 2],
+                                brightness: frame.brightness,
                                 uniforms: bytemuck::bytes_of(&uniforms),
                                 vertices: chunk.buffer,
                                 indices: None,
@@ -530,14 +539,27 @@ impl Pipeline {
                     }
                     Ok(())
                 };
+                let mut filtered = |range: std::ops::Range<usize>| {
+                    if frame.object_filter.minimum_pixels == 0 {
+                        draw_range(range)
+                    } else {
+                        cache.filter.borrow_mut().visible(
+                            &*cache.source,
+                            frame.object_filter,
+                            camera.pixels_per_mm / f64::from(frame.scale_factor),
+                            range,
+                            &mut draw_range,
+                        )
+                    }
+                };
                 if let Some((net, pointer)) = net_overlay
                     && pointer.is_none_or(|object| !chunk.nets.may_contain(object))
                 {
-                    chunk.nets.visible(net.0, start..end, draw_range)?;
+                    chunk.nets.visible(net.0, start..end, filtered)?;
                 } else if let Some(key) = overlay_key.as_ref() {
-                    cache.overlay(frame, key, start..end, draw_range)?;
+                    cache.overlay(frame, key, start..end, filtered)?;
                 } else {
-                    draw_range(start..end)?;
+                    filtered(start..end)?;
                 }
             }
         }

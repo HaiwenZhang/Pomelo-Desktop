@@ -2,6 +2,30 @@
 use super::*;
 
 impl BoardViewport {
+    /// Changing what may be picked invalidates every pending pick and hover result.
+    pub(super) fn set_pick_category(
+        &mut self,
+        category: pomelo_core::picking::PickCategory,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pick_filter.contains(category) == enabled {
+            return;
+        }
+        self.pick_filter.set(category, enabled);
+        self.hover_cancel.cancel();
+        self.hovered = None;
+        self.hover_notice = None;
+        self.last_pick = None;
+        self.candidate_position = None;
+        self.search_cancel.cancel();
+        self.search_pending = false;
+        self.locate_pending = false;
+        self.search_notice = None;
+        self.locate_details = None;
+        cx.notify();
+    }
+
     pub(super) fn set_selection_mode(
         &mut self,
         mode: pomelo_core::interaction::SelectionMode,
@@ -118,13 +142,18 @@ impl BoardViewport {
         self.search_notice = None;
         self.locate_details = None;
         let worker = cx.background_spawn(async move {
-            let hit_entries = index.query_visible_hits(
+            // Group by the mode's target before the 64-hit cap so one dense net or
+            // component cannot crowd out other cyclable candidates underneath it.
+            let hit_entries = index.query_visible_hits_grouped(
                 query,
                 camera.pixels_per_mm,
                 filter,
                 &worker_display,
                 64,
                 &worker_cancel,
+                |object| {
+                    pomelo_core::selection::canvas_target(&scene, object, mode, &worker_cancel)
+                },
             )?;
             let hits: Vec<_> = hit_entries.iter().map(|hit| hit.object_hit()).collect();
             let candidates = pomelo_core::selection::resolve_canvas_candidates(
@@ -146,16 +175,14 @@ impl BoardViewport {
                         .find(|hit| hit.anchor.object == candidate.object)
                 })
                 .map(|hit| hit.anchor);
-            let summary = target.summarize(&scene, &worker_cancel)?;
-            let pins = target.pin_ids(&scene, &worker_cancel)?;
             Ok::<_, pomelo_core::geometry::PathError>(Some((
-                target,
-                summary,
-                Arc::new(pins),
+                super::selection::PreparedSelection::prepare(
+                    target,
+                    anchor,
+                    &scene,
+                    &worker_cancel,
+                )?,
                 candidate_position(&candidates, target),
-                target.members(&scene, 256, &worker_cancel)?,
-                prepare_inspection(target, anchor, &scene, &worker_cancel)?,
-                anchor,
             )))
         });
         self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -177,34 +204,15 @@ impl BoardViewport {
                     return;
                 }
                 match result {
-                    Ok(Some((target, summary, pins, position, members, inspection, anchor))) => {
-                        this.members_offset = 0;
-                        this.members_page_revision = this.members_page_revision.wrapping_add(1);
-                        this.members_scroll.set_offset(point(px(0.), px(0.)));
-                        this.selected_members = Some(members);
+                    Ok(Some((selection, position))) => {
                         this.candidate_position = position;
                         this.last_pick = Some(pick_context);
-                        this.selected_target = Some(target);
-                        this.selected_anchor = anchor;
-                        this.selected_related_net = inspection.net;
-                        this.selected_related_component = inspection.component;
-                        this.selected_source_labels = inspection.labels;
-                        this.selected_bonds = inspection.bonds;
-                        this.selected_summary = Some(summary);
-                        this.selected_pins = pins;
+                        this.publish_selection(selection);
                     }
                     Ok(None) => {
                         this.candidate_position = None;
                         this.last_pick = None;
-                        this.selected_target = None;
-                        this.selected_anchor = None;
-                        this.selected_source_labels.clear();
-                        this.selected_related_net = None;
-                        this.selected_related_component = None;
-                        this.selected_summary = None;
-                        this.selected_members = None;
-                        this.selected_pins = Arc::new(BTreeSet::new());
-                        this.selected_bonds = Arc::new(BTreeSet::new());
+                        this.clear_selection_details();
                     }
                     Err(pomelo_core::geometry::PathError::Cancelled) => return,
                     Err(error) => {

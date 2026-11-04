@@ -42,7 +42,7 @@ impl BoardFormat {
             return Some(Self::Odb);
         }
         match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-            "brd" => Some(Self::Allegro),
+            "brd" | "mcm" => Some(Self::Allegro),
             "pcbdoc" => Some(Self::Altium),
             "tgz" | "tar" => Some(Self::Odb),
             "pcb" => Some(Self::Pads),

@@ -16,6 +16,14 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 ## 几何与交互
 
+Allegro 18.0/18.1 的合成回归覆盖 `0x00150000` / `0x00150200` 布局、重定位头部、正序链表、92 字节配对网络记录、记录间零填充及头部哨兵终止。`fixed_decoder` 和 `index` 另验证指针数组按源容量读取，覆盖 0、1、100、4096 项及预算、截断边界。完整导入检查网络归属、坐标、文字间距和取消；未知链表引用与截断记录仍须报错：
+
+```sh
+cargo test -p pomelo-import --locked --test allegro_181
+```
+
+本地批量样本可通过 `scripts/validate-brd-cases.py` 和 `validate_brd_case` 示例验证。以文件头选择布局，不能从目录名或编辑器版本推断；场景构建成功与无诊断通过分别统计。
+
 Allegro 26.1 的合成测试覆盖文件标识 `0x00170300`、头部字段、记录边界和解码。另有本地样例回归，检查完整导入的对象数量、网络引用、有限坐标和无诊断结果：
 
 ```sh

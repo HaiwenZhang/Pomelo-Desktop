@@ -28,9 +28,7 @@ impl Pad {
         owner: PadPlacement,
         cancel: &crate::task::CancellationToken,
     ) -> Result<Option<bool>, crate::copper::MeshError> {
-        if cancel.is_cancelled() {
-            return Err(crate::copper::MeshError::Cancelled);
-        }
+        cancel.check()?;
         let Some(custom) = &self.custom else {
             return Ok(None);
         };
@@ -218,6 +216,169 @@ impl Pad {
             ]
             .map(|point| self.to_world(point, owner)),
         )
+    }
+}
+
+/// Board-space copper outline of one pad, for clearance and vector export.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PadOutline {
+    Circle {
+        center: Point,
+        radius: f64,
+    },
+    /// A round-ended stroke from `a` to `b`.
+    Capsule {
+        a: Point,
+        b: Point,
+        radius: f64,
+    },
+    /// Closed rings filled with the even-odd rule (holes included).
+    Rings(Vec<Vec<Point>>),
+}
+
+const MAX_CURVE_SAMPLES: usize = 4096;
+
+/// Chords per curve so the sagitta stays within the tolerance.
+pub fn curve_samples(radius: f64, sweep: f64, tolerance_mm: f64) -> usize {
+    if radius <= tolerance_mm || sweep <= 0.0 || !tolerance_mm.is_finite() || tolerance_mm <= 0.0 {
+        return 1;
+    }
+    let step = 2.0 * (1.0 - tolerance_mm / radius).clamp(-1.0, 1.0).acos();
+    ((sweep / step.max(1e-6)).ceil() as usize).clamp(1, MAX_CURVE_SAMPLES)
+}
+
+fn circle_ring(radius: f64, tolerance_mm: f64, world: &impl Fn(Point) -> Point) -> Vec<Point> {
+    let count = curve_samples(radius, std::f64::consts::TAU, tolerance_mm).max(8);
+    (0..count)
+        .map(|index| {
+            let angle = std::f64::consts::TAU * index as f64 / count as f64;
+            world(Point::new(radius * angle.cos(), radius * angle.sin()))
+        })
+        .collect()
+}
+
+/// Rectangle outline in pad space, with rounded or chamfered corners.
+fn rectangle_ring(
+    half_width: f64,
+    half_height: f64,
+    corner: f64,
+    chamfer: bool,
+    tolerance_mm: f64,
+    world: &impl Fn(Point) -> Point,
+) -> Vec<Point> {
+    let corner = corner.clamp(0.0, half_width.min(half_height));
+    let mut local = Vec::new();
+    // Corners counter-clockwise from the top right; each turns through 90 degrees.
+    for (index, (sx, sy)) in [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let cx = sx * (half_width - corner);
+        let cy = sy * (half_height - corner);
+        let start = std::f64::consts::FRAC_PI_2 * index as f64;
+        if corner == 0.0 {
+            local.push(Point::new(sx * half_width, sy * half_height));
+        } else if chamfer {
+            for angle in [start, start + std::f64::consts::FRAC_PI_2] {
+                // Chamfer endpoints lie on the edges, `corner` away from the corner.
+                let (sin, cos) = angle.sin_cos();
+                local.push(Point::new(
+                    cx + corner * cos.round(),
+                    cy + corner * sin.round(),
+                ));
+            }
+        } else {
+            let count = curve_samples(corner, std::f64::consts::FRAC_PI_2, tolerance_mm);
+            for step in 0..=count {
+                let angle = start + std::f64::consts::FRAC_PI_2 * step as f64 / count as f64;
+                local.push(Point::new(
+                    cx + corner * angle.cos(),
+                    cy + corner * angle.sin(),
+                ));
+            }
+        }
+    }
+    local.into_iter().map(world).collect()
+}
+
+impl Pad {
+    /// The pad's copper outline in board space. Curves use chords within
+    /// `tolerance_mm`. `Ok(None)` is an unsupported family; `Err` is invalid geometry.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "callers attach their own object identity"
+    )]
+    pub fn outline(
+        &self,
+        owner: PadPlacement,
+        tolerance_mm: f64,
+    ) -> Result<Option<PadOutline>, ()> {
+        if ![
+            owner.at.x,
+            owner.at.y,
+            owner.angle,
+            self.offset.x,
+            self.offset.y,
+            self.width,
+            self.height,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+            || self.width < 0.0
+            || self.height < 0.0
+        {
+            return Err(());
+        }
+        let world = |local: Point| self.to_world(local, owner);
+        if let Some(custom) = &self.custom {
+            let rings: Vec<Vec<Point>> = custom
+                .contours
+                .iter()
+                .filter(|ring| ring.len() >= 2)
+                .map(|ring| ring.iter().map(|point| world(*point)).collect())
+                .collect();
+            return Ok((!rings.is_empty()).then_some(PadOutline::Rings(rings)));
+        }
+        let (half_width, half_height) = (self.width * 0.5, self.height * 0.5);
+        Ok(match self.kind.0 {
+            2 => Some(PadOutline::Circle {
+                center: world(Point::default()),
+                radius: half_width,
+            }),
+            11 | 12 => {
+                let radius = half_width.min(half_height);
+                let (dx, dy) = if self.width >= self.height {
+                    (half_width - radius, 0.0)
+                } else {
+                    (0.0, half_height - radius)
+                };
+                Some(PadOutline::Capsule {
+                    a: world(Point::new(-dx, -dy)),
+                    b: world(Point::new(dx, dy)),
+                    radius,
+                })
+            }
+            25 => {
+                let inner = self
+                    .inner_diameter
+                    .filter(|inner| inner.is_finite() && *inner >= 0.0 && *inner <= self.width)
+                    .ok_or(())?;
+                let mut rings = vec![circle_ring(half_width, tolerance_mm, &world)];
+                if inner > 0.0 {
+                    rings.push(circle_ring(inner * 0.5, tolerance_mm, &world));
+                }
+                Some(PadOutline::Rings(rings))
+            }
+            3 | 5 | 6 | 27 | 28 => Some(PadOutline::Rings(vec![rectangle_ring(
+                half_width,
+                half_height,
+                self.corner_radius(),
+                matches!(self.kind.0, 3 | 28),
+                tolerance_mm,
+                &world,
+            )])),
+            _ => None,
+        })
     }
 }
 

@@ -6,7 +6,8 @@ struct Frame {
     shape_b: vec4f,
     shape_color: vec4f,
     shape_kind: vec4u,
-    inherited: vec4f
+    inherited: vec4f,
+    material_pattern: array<vec4u,4>
 }
 
 @group(0) @binding(0)

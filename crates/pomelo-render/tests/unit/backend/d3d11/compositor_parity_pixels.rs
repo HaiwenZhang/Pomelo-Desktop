@@ -134,7 +134,14 @@ pub(super) fn fixture() -> BoardFrame {
         .appearance
         .set_color(ColorTarget::Via(top), Some(RgbColor([255, 255, 0])));
     BoardFrame {
+        placement_outlines: None,
+        placements: None,
         traces: TraceFrame {
+            net_colors: None,
+            pattern: None,
+            object_filter: Default::default(),
+            brightness: 1.0,
+            object_colors: None,
             tracks: Arc::new(
                 PreparedTracks::build(&tracks, TraceLimits::default(), &cancel).unwrap(),
             ),

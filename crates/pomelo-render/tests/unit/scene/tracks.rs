@@ -39,7 +39,13 @@ fn compact_zone_rings_stream_holes_with_no_segment_scratch_budget() {
         prepared
             .instances
             .iter()
-            .all(|instance| instance.ids == [42, 0, 3, 7] && instance.flags[3] == 136)
+            .enumerate()
+            .all(|(index, instance)| {
+                let ring = u32::from(index >= 3);
+                // Hole identity is retained for independent Void filtering.
+                let flags = 136 | if ring == 0 { 0 } else { 256 | (ring << 9) };
+                instance.ids == [42, 0, 3, 7] && instance.flags[3] == flags
+            })
     );
     // Exterior and hole each close to their own first vertex.
     assert_eq!(prepared.instances[2].b, split_point(Point::new(0.0, 0.0)));

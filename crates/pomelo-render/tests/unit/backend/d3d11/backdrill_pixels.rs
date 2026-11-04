@@ -61,6 +61,11 @@ fn hardware_backdrill_patterns_match_web_and_follow_cut_layers_without_reupload(
         .geometry,
     );
     let traces = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         tracks: Arc::new(PreparedTracks::build(&[], TraceLimits::default(), &cancel).unwrap()),
         bounds: Bounds {
             min: Point::new(via.at.x - 5.0, via.at.y - 5.0),
@@ -93,6 +98,8 @@ fn hardware_backdrill_patterns_match_web_and_follow_cut_layers_without_reupload(
     };
     // Layer color mode makes the reference pad blue; backdrill stays green in either mode.
     let mut frame = BoardFrame {
+        placement_outlines: None,
+        placements: None,
         curves: None,
         traces,
         display: Arc::new(BoardDisplay::default()),

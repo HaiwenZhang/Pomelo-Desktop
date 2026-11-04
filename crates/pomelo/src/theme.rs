@@ -104,9 +104,7 @@ fn apply_palette(cx: &mut App) {
         let primary_fg = rgb(if dark { 0x15200d } else { 0xffffff }).into();
         theme.colors.background = surface;
         theme.colors.foreground = foreground;
-        theme.colors.sidebar = surface;
         theme.colors.sidebar_foreground = foreground;
-        theme.colors.title_bar = surface;
         theme.colors.title_bar_border = border;
         theme.colors.border = border;
         theme.colors.input = border;
@@ -129,8 +127,20 @@ fn apply_palette(cx: &mut App) {
         theme.colors.button_primary_active = primary;
         theme.colors.tab_bar = surface;
         theme.colors.tab_active = surface;
-        theme.colors.tab_active_foreground = primary;
+        // Selection is neutral; the brand color stays reserved for commits and focus.
+        theme.colors.tab_active_foreground = foreground;
         theme.colors.tab_foreground = muted;
+        // The selected segment takes the work surface color, so the track contrasts with it.
+        theme.colors.tab_bar_segmented = rgb(if dark { 0x2c3732 } else { 0xe6eadf }).into();
+        // Side panels and window chrome sit one step below the work surface.
+        let chrome = rgb(if dark { 0x1a211f } else { 0xf4f6ef }).into();
+        theme.colors.sidebar = chrome;
+        theme.colors.title_bar = chrome;
+        theme.colors.status_bar = chrome;
+        theme.colors.status_bar_border = border;
+        theme.colors.list_active = theme.colors.accent;
+        theme.colors.list_active_border = theme.colors.accent;
+        theme.colors.list_hover = rgb(if dark { 0x232c28 } else { 0xeef1e8 }).into();
     });
     apply_ui_font(cx);
 }
@@ -196,6 +206,11 @@ pub fn canvas_axes() -> (gpui_kit::Hsla, gpui_kit::Hsla) {
         gpui_kit::rgb(0xfb6370).into(),
         gpui_kit::rgb(0x9ede68).into(),
     )
+}
+
+/// Measurement and review marks: a warm accent that stays legible on the dark canvas.
+pub fn canvas_measure() -> gpui_kit::Hsla {
+    gpui_kit::rgb(0xffd54f).into()
 }
 
 /// The canvas command surface stays dark with the board in either UI theme.

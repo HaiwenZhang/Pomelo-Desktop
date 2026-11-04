@@ -67,6 +67,7 @@ fn board() -> BoardScene {
         segments: vec![],
         components: vec![
             ComponentPlacement {
+                body: None,
                 id: ObjectId(90),
                 source_reference: None,
                 reference: "U1".into(),
@@ -76,6 +77,7 @@ fn board() -> BoardScene {
                 pins: vec![ObjectId(10)],
             },
             ComponentPlacement {
+                body: None,
                 id: ObjectId(91),
                 source_reference: None,
                 reference: "U1".into(),
@@ -201,11 +203,14 @@ fn finger_only_reference_selects_without_fabricated_owner_and_empty_reference_fa
 
 #[test]
 fn grouped_bounds_and_legacy_restore_include_members_without_placement_positions() {
-    let board = board();
+    let board = Arc::new(board());
     let cancel = CancellationToken::default();
     let target = SelectionTarget::ComponentGroup(ComponentAnchor::Pin(ObjectId(10)));
+    let index =
+        pomelo_core::picking_index::BoardPickingIndex::build(Arc::clone(&board), 0, &cancel)
+            .unwrap();
     assert_eq!(
-        target.bounds(&board, &cancel).unwrap(),
+        index.selection_bounds(target, &cancel).unwrap(),
         Some(Bounds {
             min: Point::new(0.5, -0.5),
             max: Point::new(9.5, 0.5)

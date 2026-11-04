@@ -304,6 +304,7 @@ pub(super) fn build(
                     let owner = ObjectId(*next);
                     *next += 1;
                     output.scene.components.push(ComponentPlacement {
+                        body: None,
                         id: owner,
                         source_reference: u32::try_from(component).ok().map(ObjectId),
                         reference: reference.clone(),

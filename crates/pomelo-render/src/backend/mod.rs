@@ -9,7 +9,8 @@ mod instances;
 mod pad_renderer;
 #[cfg(feature = "native-gpu")]
 pub use board::{
-    OverlayPass, TraceFrame, TraceRenderer, TraceSelection, TraceStatistics, TraceTelemetry,
+    ObjectColors, OverlayPass, TraceFrame, TraceRenderer, TraceSelection, TraceStatistics,
+    TraceTelemetry,
 };
 #[cfg(feature = "native-gpu")]
 pub use copper_renderer::{
@@ -17,6 +18,48 @@ pub use copper_renderer::{
 };
 #[cfg(feature = "native-gpu")]
 pub use pad_renderer::PadRenderer;
+
+/// Bridge the existing board renderer to GPUI's typed native paint callback.
+#[cfg(feature = "native-gpu")]
+macro_rules! native_painter {
+    ($backend:ident, $context:ident, $device:path, $name:literal) => {
+        struct PainterAdapter<R>(R);
+        impl<R: super::NativeGpuRenderer> gpui::GpuPainter for PainterAdapter<R> {
+            type Snapshot = R::Snapshot;
+            fn supports_backend(&self, backend: gpui::GpuBackend) -> bool {
+                backend == gpui::GpuBackend::$backend
+            }
+            fn paint(
+                &mut self,
+                context: &mut gpui::GpuPaintContext<'_>,
+                data: &Self::Snapshot,
+            ) -> anyhow::Result<()> {
+                let context = context.$context()?;
+                let target = context.target;
+                self.0.draw(
+                    &super::NativeGpuContext {
+                        device: $device(context),
+                        viewport: target.size.map(|v| v as f32),
+                        bounds: target.bounds,
+                        content_mask: gpui::ContentMask {
+                            bounds: target.clip,
+                        },
+                    },
+                    data,
+                )
+            }
+            fn reset(&mut self, _: gpui::GpuResetReason) {
+                self.0.reset();
+            }
+        }
+        pub fn painter<R: super::NativeGpuRenderer>(
+            renderer: R,
+        ) -> impl gpui::GpuPainter<Snapshot = R::Snapshot> {
+            PainterAdapter(renderer)
+        }
+        pub const NAME: &str = $name;
+    };
+}
 
 #[cfg(all(target_os = "windows", feature = "native-gpu"))]
 #[allow(unsafe_code)]

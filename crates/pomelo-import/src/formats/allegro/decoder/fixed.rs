@@ -1,6 +1,7 @@
 //! Type-specific fixed layouts ported from the frozen Web binary/layouts sources.
 //! Unknown fields retain their source names; no complete-board AST is retained.
 use super::super::{index::RecordKey, reader::Reader};
+use super::DecodeLimits;
 use crate::ImportError;
 use serde::Serialize;
 
@@ -1963,7 +1964,12 @@ pub struct PointerArray {
     #[serde(rename = "Ptrs")]
     pub ptrs: Vec<u32>,
 }
-fn read_pointer_array(reader: &mut Reader<'_>, version: u16) -> Result<PointerArray, ImportError> {
+fn read_pointer_array(
+    reader: &mut Reader<'_>,
+    version: u16,
+    limits: &DecodeLimits,
+) -> Result<PointerArray, ImportError> {
+    let offset = reader.offset() - 1;
     let mut record = PointerArray {
         t: reader.u8()?,
         t2: reader.u16()?,
@@ -1978,7 +1984,29 @@ fn read_pointer_array(reader: &mut Reader<'_>, version: u16) -> Result<PointerAr
     if version >= 174 {
         record.unknown3 = Some(reader.u32()?);
     }
-    record.ptrs = reader.u32s(100)?;
+    let capacity = record.capacity as usize;
+    if capacity > limits.max_entries {
+        return Err(ImportError::InvalidRecord {
+            offset,
+            field: "COLLECTION_COUNT",
+            value: u64::from(record.capacity),
+        });
+    }
+    let bytes = capacity.saturating_mul(std::mem::size_of::<u32>());
+    let allocation = bytes.saturating_add(std::mem::size_of::<PointerArray>());
+    if allocation > limits.max_allocation_bytes {
+        return Err(ImportError::DecodeLimit {
+            offset,
+            actual: allocation as u64,
+            limit: limits.max_allocation_bytes as u64,
+        });
+    }
+    reader.ensure(bytes)?;
+    let mut pointers = Vec::with_capacity(capacity);
+    for _ in 0..capacity {
+        pointers.push(reader.u32()?);
+    }
+    record.ptrs = pointers;
     Ok(record)
 }
 /// Source fields for 0x3e (OrderedKeyList); units remain in Allegro source coordinates.
@@ -2141,6 +2169,7 @@ pub(super) fn read(
     reader: &mut Reader<'_>,
     kind: u8,
     version: u16,
+    limits: &DecodeLimits,
 ) -> Result<FixedRecord, ImportError> {
     Ok(match kind {
         0x01 => FixedRecord::Arc(read_arc(reader, version)?),
@@ -2187,7 +2216,7 @@ pub(super) fn read(
         0x2c => FixedRecord::Table(read_table(reader, version)?),
         0x2f => FixedRecord::UnknownRecord0x2f(read_unknown_record0x2f(reader, version)?),
         0x35 => FixedRecord::FileReference(read_file_reference(reader, version)?),
-        0x37 => FixedRecord::PointerArray(read_pointer_array(reader, version)?),
+        0x37 => FixedRecord::PointerArray(read_pointer_array(reader, version, limits)?),
         0x3e => FixedRecord::OrderedKeyList(read_ordered_key_list(reader, version)?),
         _ => {
             return Err(ImportError::UnsupportedRecordLayout {

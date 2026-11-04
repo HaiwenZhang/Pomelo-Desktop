@@ -29,6 +29,7 @@ fn scene() -> BoardScene {
         components: [30, 31]
             .into_iter()
             .map(|id| ComponentPlacement {
+                body: None,
                 id: ObjectId(id),
                 source_reference: None,
                 reference: "U1".into(),
@@ -51,6 +52,96 @@ fn scene() -> BoardScene {
             max: Point::new(40.0, 1.0),
         },
     }
+}
+
+#[test]
+fn dense_drawing_pick_index_uses_its_actual_structural_memory_budget() {
+    use pomelo_core::{
+        display::BoardDisplay,
+        interaction::Camera,
+        model::BoardDrawing,
+        picking::{PickFilter, PickQuery},
+        picking_index::BoardPickingIndex,
+        selection::SelectedObject,
+    };
+    let mut source = scene();
+    source.segments.clear();
+    source.components.clear();
+    source.drawings = (0..1000)
+        .map(|i| BoardDrawing {
+            id: ObjectId(1000 + i),
+            owner_id: None,
+            layer: LayerId(1),
+            net: NetId(0),
+            graphic_ids: vec![],
+            segments: vec![Segment {
+                id: ObjectId(2000 + i),
+                track_id: ObjectId(2000 + i),
+                layer: LayerId(1),
+                net: NetId(0),
+                a: Point::new(f64::from(i), 0.0),
+                b: Point::new(f64::from(i) + 0.5, 0.0),
+                width: 0.1,
+                arc: None,
+                bond_wire: None,
+            }],
+            text_ids: vec![],
+        })
+        .collect();
+    let cancel = CancellationToken::default();
+    let source = std::sync::Arc::new(source);
+    let index = BoardPickingIndex::build_with_budget(
+        std::sync::Arc::clone(&source),
+        0,
+        256 * 1024,
+        &cancel,
+    )
+    .unwrap();
+    let query = PickQuery::from_viewport(
+        Camera {
+            center: Point::new(500.25, 0.0),
+            pixels_per_mm: 100.0,
+            flipped: false,
+        },
+        Point::new(50.0, 50.0),
+        Point::new(100.0, 100.0),
+        5.0,
+    )
+    .unwrap();
+    let hits = index
+        .query_visible_objects(
+            query,
+            100.0,
+            PickFilter::all(),
+            &BoardDisplay::default(),
+            64,
+            &cancel,
+        )
+        .unwrap();
+    assert_eq!(hits[0].object, SelectedObject::Drawing(ObjectId(1500)));
+    assert!(
+        BoardPickingIndex::build_with_budget(source, 0, 1024, &cancel).is_err(),
+        "the total byte budget remains enforced"
+    );
+}
+
+/// Locate a search target exactly as the viewport does, through the picking index.
+fn located(
+    scene: &std::sync::Arc<BoardScene>,
+    target: SearchTarget,
+    cancel: &CancellationToken,
+) -> Result<Option<Bounds>, pomelo_core::geometry::PathError> {
+    // Invalid geometry is rejected when the document's index is built, before any locate.
+    let index = pomelo_core::picking_index::BoardPickingIndex::build(
+        std::sync::Arc::clone(scene),
+        scene.segments.len(),
+        &CancellationToken::default(),
+    )
+    .map_err(|error| match error {
+        pomelo_core::picking_index::IndexError::Geometry(error) => error,
+        other => panic!("unexpected index error: {other}"),
+    })?;
+    index.selection_bounds(target.into(), cancel)
 }
 
 #[test]
@@ -283,9 +374,14 @@ fn rotated_text_quads_pick_last_source_owner_and_respect_text_visibility() {
     let edge_hits = index
         .query_visible_objects(gap_edge, 100.0, PickFilter::all(), &display, 64, &cancel)
         .unwrap();
+    // Both owners share this glyph edge (0.052 - 0.005 mm), so both pass the fine check;
+    // the broad phase must not drop the single-glyph owner 78 before that check.
     assert_eq!(
-        edge_hits[0].object,
-        SelectedObject::Drawing(ObjectId(77)),
+        edge_hits.iter().map(|hit| hit.object).collect::<Vec<_>>(),
+        [
+            SelectedObject::Drawing(ObjectId(78)),
+            SelectedObject::Drawing(ObjectId(77))
+        ],
         "whole-string bounds retain the half-pixel glyph edge in whitespace between separated glyphs"
     );
     let mut filter = PickFilter::all();
@@ -414,6 +510,11 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
                 Point::new(-1.0, 1.0),
             ],
             ring_offsets: vec![0, 4],
+            // As produced by `CopperMesh::build`, which records every ring's extent.
+            ring_bounds: vec![Bounds {
+                min: Point::new(-1.0, -1.0),
+                max: Point::new(2.0, 1.0),
+            }],
             ..Default::default()
         },
     });
@@ -463,7 +564,9 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
                 SelectedObject::Segment(_) => mask & 1 != 0,
                 SelectedObject::Via(_) => mask & 2 != 0,
                 SelectedObject::Pin(_) => mask & 4 != 0,
-                SelectedObject::Zone(_) | SelectedObject::Drawing(_) => true,
+                SelectedObject::Zone(_)
+                | SelectedObject::Drawing(_)
+                | SelectedObject::Placement(_) => true,
             })
             .map(|hit| hit.object)
             .collect();
@@ -509,27 +612,36 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
     assert_eq!(nets[0].object, SelectedObject::Via(ObjectId(0)));
     let objects = resolve_candidates(&board, &hits, SelectionMode::Object, 64, &cancel).unwrap();
     assert_eq!(objects.len(), 7);
-    let via_bounds = SelectionTarget::Object(SelectedObject::Via(ObjectId(0)))
-        .bounds(&board, &cancel)
+    let via_bounds = index
+        .selection_bounds(
+            SelectionTarget::Object(SelectedObject::Via(ObjectId(0))),
+            &cancel,
+        )
         .unwrap()
         .unwrap();
     assert_eq!(via_bounds.min, Point::new(0.0, -0.5));
     assert_eq!(via_bounds.max, Point::new(1.0, 0.5));
     assert_eq!(
-        SelectionTarget::Object(SelectedObject::Pin(ObjectId(0)))
-            .bounds(&board, &cancel)
+        index
+            .selection_bounds(
+                SelectionTarget::Object(SelectedObject::Pin(ObjectId(0))),
+                &cancel
+            )
             .unwrap(),
         Some(via_bounds)
     );
-    let zone_bounds = SelectionTarget::Object(SelectedObject::Zone(ObjectId(0)))
-        .bounds(&board, &cancel)
+    let zone_bounds = index
+        .selection_bounds(
+            SelectionTarget::Object(SelectedObject::Zone(ObjectId(0))),
+            &cancel,
+        )
         .unwrap()
         .unwrap();
     assert_eq!(zone_bounds.min, Point::new(-1.0, -1.0));
     assert_eq!(zone_bounds.max, Point::new(2.0, 1.0));
     assert!(
-        SelectionTarget::Track(ObjectId(10))
-            .bounds(&board, &cancel)
+        index
+            .selection_bounds(SelectionTarget::Track(ObjectId(10)), &cancel)
             .unwrap()
             .is_some()
     );
@@ -587,17 +699,6 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
     inconsistent.pins = board.pins.clone();
     bond_board.segments[0].a = Point::new(-40.0, 0.0);
     bond_board.vias[0].at = Point::new(60.0, 0.0);
-    let component_bounds = SelectionTarget::Component(ObjectId(30))
-        .bounds(&bond_board, &cancel)
-        .unwrap()
-        .unwrap();
-    assert_eq!(component_bounds.min.x, -40.05);
-    assert_eq!(component_bounds.max.x, 60.5);
-    bond_board.segments[0].width = f64::NAN;
-    assert!(matches!(
-        SelectionTarget::Component(ObjectId(30)).bounds(&bond_board, &cancel),
-        Err(pomelo_core::geometry::PathError::Invalid(ObjectId(0)))
-    ));
     inconsistent.components = board.components.clone();
     inconsistent.pins[0].owner_id = ObjectId(31);
     assert!(matches!(
@@ -719,7 +820,10 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
     );
     cancel.cancel();
     assert!(matches!(
-        SelectionTarget::Object(SelectedObject::Via(ObjectId(0))).bounds(&board, &cancel),
+        index.selection_bounds(
+            SelectionTarget::Object(SelectedObject::Via(ObjectId(0))),
+            &cancel
+        ),
         Err(pomelo_core::geometry::PathError::Cancelled)
     ));
     assert!(matches!(
@@ -1223,34 +1327,28 @@ fn cancelled_scene_build_returns_no_index_including_for_an_empty_scene() {
 }
 
 #[test]
-fn locating_uses_stroke_extent_and_exact_component_identity() {
+fn locating_uses_stroke_extent_and_never_invents_component_positions() {
     let mut scene = scene();
     for component in &mut scene.components {
         component.pins.clear();
     }
+    let scene = std::sync::Arc::new(scene);
     let cancel = CancellationToken::default();
-    let net = SearchTarget::Net(NetId(7))
-        .bounds(&scene, &cancel)
+    let net = located(&scene, SearchTarget::Net(NetId(7)), &cancel)
         .unwrap()
         .unwrap();
     assert_eq!(net.min, Point::new(-0.05, -0.05));
     assert_eq!(net.max, Point::new(1.05, 0.05));
-    for id in [30, 31] {
-        let bounds = SearchTarget::Component(ObjectId(id))
-            .bounds(&scene, &cancel)
-            .unwrap()
-            .unwrap();
-        assert_eq!(bounds.center(), Point::new(id as f64, 0.0));
+    // Placement origins are not geometry: a component without pads has nothing to frame.
+    for id in [30, 31, 999] {
+        assert!(
+            located(&scene, SearchTarget::Component(ObjectId(id)), &cancel)
+                .unwrap()
+                .is_none()
+        );
     }
     assert!(
-        SearchTarget::Component(ObjectId(999))
-            .bounds(&scene, &cancel)
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        SearchTarget::Net(NetId(99))
-            .bounds(&scene, &cancel)
+        located(&scene, SearchTarget::Net(NetId(99)), &cancel)
             .unwrap()
             .is_none()
     );
@@ -1258,9 +1356,14 @@ fn locating_uses_stroke_extent_and_exact_component_identity() {
 
 #[test]
 fn locating_rejects_missing_component_pin_instead_of_publishing_anchor_only() {
-    let scene = scene();
+    // Locate, member pages and summaries share one membership rule and one verdict.
+    let scene = std::sync::Arc::new(scene());
     assert!(matches!(
-        SearchTarget::Component(ObjectId(30)).bounds(&scene, &CancellationToken::default()),
+        located(
+            &scene,
+            SearchTarget::Component(ObjectId(30)),
+            &CancellationToken::default()
+        ),
         Err(pomelo_core::geometry::PathError::Invalid(ObjectId(130)))
     ));
 }
@@ -1305,15 +1408,15 @@ fn source_network_names_preserve_blank_values_and_missing_names_use_stable_ids()
             .name,
         ""
     );
+    let scene = std::sync::Arc::new(scene);
     assert!(
-        SearchTarget::Net(NetId(0))
-            .bounds(&scene, &cancel)
+        located(&scene, SearchTarget::Net(NetId(0)), &cancel)
             .unwrap()
             .is_none()
     );
     cancel.cancel();
     assert!(matches!(
-        SearchTarget::Net(NetId(0)).bounds(&scene, &cancel),
+        located(&scene, SearchTarget::Net(NetId(0)), &cancel),
         Err(pomelo_core::geometry::PathError::Cancelled)
     ));
 }
@@ -1481,10 +1584,14 @@ fn locating_component_includes_rotated_offset_pad_and_physical_drill() {
         assert_eq!(eligible[0].pin.id, ObjectId(130));
         scene.pins[0].pads = original_pads;
     }
-    let bounds = SearchTarget::Component(ObjectId(30))
-        .bounds(&scene, &CancellationToken::default())
-        .unwrap()
-        .unwrap();
+    let scene = std::sync::Arc::new(scene);
+    let bounds = located(
+        &scene,
+        SearchTarget::Component(ObjectId(30)),
+        &CancellationToken::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         pomelo_core::selection::SelectedObject::Pin(ObjectId(130))
             .resolve(
@@ -1497,21 +1604,25 @@ fn locating_component_includes_rotated_offset_pad_and_physical_drill() {
             ObjectId(30)
         ))
     );
+    let component = pomelo_core::selection::SelectionTarget::Component(ObjectId(30))
+        .summarize(&scene, &CancellationToken::default())
+        .unwrap();
+    assert_eq!(component.pins, 1);
     assert_eq!(
-        pomelo_core::selection::SelectionTarget::Component(ObjectId(30))
-            .summarize(&scene, &CancellationToken::default())
-            .unwrap()
-            .pins,
-        1
+        component.components,
+        std::collections::BTreeSet::from([ObjectId(30)])
     );
     assert!((bounds.min.x - 28.5).abs() < 1e-12);
     assert!((bounds.max.x - 36.0).abs() < 1e-12);
     assert!((bounds.min.y + 2.0).abs() < 1e-12);
     assert!((bounds.max.y - 2.0).abs() < 1e-12);
-    let net = SearchTarget::Net(NetId(7))
-        .bounds(&scene, &CancellationToken::default())
-        .unwrap()
-        .unwrap();
+    let net = located(
+        &scene,
+        SearchTarget::Net(NetId(7)),
+        &CancellationToken::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert!((net.max.x - bounds.max.x).abs() < 1e-12);
     assert!(net.min.x < bounds.min.x);
 }
@@ -1532,6 +1643,18 @@ fn selection_summary_uses_centerlines_and_keeps_net_and_track_scopes_distinct() 
         .unwrap();
     assert_eq!(net.segments, 2);
     assert!((net.centerline_length_mm - (std::f64::consts::PI + 1.0)).abs() < 1e-12);
+    assert_eq!(net.layers, std::collections::BTreeSet::from([LayerId(1)]));
+    assert!(net.components.is_empty());
+    let members = SelectionTarget::Net(NetId(7))
+        .members(&scene, 256, &cancel)
+        .unwrap();
+    assert_eq!(members.layers.len(), members.objects.len());
+    assert!(
+        members
+            .layers
+            .iter()
+            .all(|layers| { *layers == pomelo_core::selection::MemberLayers::Single(LayerId(1)) })
+    );
     let track = SelectionTarget::Track(ObjectId(10))
         .summarize(&scene, &cancel)
         .unwrap();
@@ -1560,14 +1683,259 @@ fn selection_summary_uses_centerlines_and_keeps_net_and_track_scopes_distinct() 
 fn locating_rejects_invalid_geometry_and_cancelled_partial_results() {
     let mut scene = scene();
     scene.segments[0].a.x = f64::NAN;
+    let scene = std::sync::Arc::new(scene);
     assert!(matches!(
-        SearchTarget::Net(NetId(7)).bounds(&scene, &CancellationToken::default()),
+        located(
+            &scene,
+            SearchTarget::Net(NetId(7)),
+            &CancellationToken::default()
+        ),
         Err(pomelo_core::geometry::PathError::Invalid(ObjectId(0)))
     ));
     let cancel = CancellationToken::default();
     cancel.cancel();
     assert!(matches!(
-        SearchTarget::Component(ObjectId(999)).bounds(&scene, &cancel),
+        located(
+            &std::sync::Arc::new(self::scene()),
+            SearchTarget::Component(ObjectId(999)),
+            &cancel
+        ),
         Err(pomelo_core::geometry::PathError::Cancelled)
     ));
+}
+
+fn drawing_only_net_scene() -> BoardScene {
+    use pomelo_core::model::BoardDrawing;
+    let mut board = scene();
+    board.segments.clear();
+    board.components.clear();
+    board.nets = BTreeMap::from([(NetId(1), "one".into())]);
+    let mut stroke = Segment {
+        id: ObjectId(500),
+        track_id: ObjectId(500),
+        layer: LayerId(1),
+        net: NetId(1),
+        a: Point::new(0.0, 0.0),
+        b: Point::new(2.0, 0.0),
+        width: 0.2,
+        arc: None,
+        bond_wire: None,
+    };
+    board.drawings.push(BoardDrawing {
+        id: ObjectId(400),
+        owner_id: None,
+        layer: LayerId(1),
+        net: NetId(1),
+        graphic_ids: vec![],
+        segments: vec![stroke.clone()],
+        text_ids: vec![],
+    });
+    stroke.net = NetId(0);
+    board.drawings.push(BoardDrawing {
+        id: ObjectId(401),
+        owner_id: None,
+        layer: LayerId(1),
+        net: NetId(0),
+        graphic_ids: vec![],
+        segments: vec![stroke],
+        text_ids: vec![],
+    });
+    board
+}
+
+#[test]
+fn net_selection_counts_and_lists_its_drawings_like_locating_does() {
+    use pomelo_core::selection::SelectionTarget;
+    use pomelo_core::{picking_index::BoardPickingIndex, selection::SelectedObject};
+    let board = std::sync::Arc::new(drawing_only_net_scene());
+    let cancel = CancellationToken::default();
+    let target = SelectionTarget::Net(NetId(1));
+    let index = BoardPickingIndex::build(std::sync::Arc::clone(&board), 0, &cancel).unwrap();
+    assert!(index.selection_bounds(target, &cancel).unwrap().is_some());
+    let members = target.members(&board, 16, &cancel).unwrap();
+    assert_eq!(members.total, 1);
+    assert_eq!(members.objects, [SelectedObject::Drawing(ObjectId(400))]);
+    assert_eq!(target.summarize(&board, &cancel).unwrap().drawings, 1);
+}
+
+#[test]
+fn unconnected_net_never_claims_drawings() {
+    use pomelo_core::selection::SelectionTarget;
+    let board = drawing_only_net_scene();
+    let cancel = CancellationToken::default();
+    let target = SelectionTarget::Net(NetId(0));
+    assert_eq!(target.summarize(&board, &cancel).unwrap().drawings, 0);
+}
+
+#[test]
+fn search_indexes_drawing_only_nets_and_bounds_them() {
+    let board = std::sync::Arc::new(drawing_only_net_scene());
+    let cancel = CancellationToken::default();
+    let search = SearchIndex::build(&board, &cancel).unwrap().unwrap();
+    let found = search.find("one", 20);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].count, 1);
+    let bounds = located(&board, SearchTarget::Net(NetId(1)), &cancel)
+        .unwrap()
+        .unwrap();
+    assert!(bounds.max.x >= 2.0);
+}
+
+#[test]
+fn dense_net_cannot_crowd_another_net_out_of_canvas_candidates() {
+    use pomelo_core::{
+        display::BoardDisplay,
+        interaction::SelectionMode,
+        picking::{PickFilter, PickQuery},
+        picking_index::BoardPickingIndex,
+        selection::{SelectionTarget, canvas_target, resolve_canvas_candidates},
+    };
+    let mut board = scene();
+    let template = board.segments[0].clone();
+    // Index 0 is submitted first, so it ranks below the 64 overlapping NetId(1) strokes.
+    board.segments = (0..65)
+        .map(|index| {
+            let mut segment = template.clone();
+            segment.id = ObjectId(index);
+            segment.net = NetId(if index == 0 { 2 } else { 1 });
+            segment
+        })
+        .collect();
+    let board = std::sync::Arc::new(board);
+    let cancel = CancellationToken::default();
+    let index = BoardPickingIndex::build(std::sync::Arc::clone(&board), 65, &cancel).unwrap();
+    let query = PickQuery::new(Point::new(0.5, 0.0), 0.05).unwrap();
+    let display = BoardDisplay::default();
+    let hits = index
+        .query_visible_hits_grouped(
+            query,
+            100.0,
+            PickFilter::all(),
+            &display,
+            64,
+            &cancel,
+            |object| canvas_target(&board, object, SelectionMode::Net, &cancel),
+        )
+        .unwrap();
+    let hits: Vec<_> = hits.iter().map(|hit| hit.object_hit()).collect();
+    let candidates =
+        resolve_canvas_candidates(&board, &hits, SelectionMode::Net, 64, &cancel).unwrap();
+    let targets: Vec<_> = candidates
+        .iter()
+        .map(|candidate| candidate.target)
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            SelectionTarget::Net(NetId(1)),
+            SelectionTarget::Net(NetId(2))
+        ]
+    );
+}
+
+#[test]
+fn zero_width_line_is_picked_within_its_one_pixel_screen_stroke() {
+    use pomelo_core::{
+        display::BoardDisplay,
+        picking::{PickFilter, PickQuery},
+        picking_index::BoardPickingIndex,
+    };
+    let mut board = scene();
+    board.segments.truncate(1);
+    board.segments[0].width = 0.0;
+    let cancel = CancellationToken::default();
+    let index = BoardPickingIndex::build(std::sync::Arc::new(board), 1, &cancel).unwrap();
+    // 0.0525 mm from the centreline minus half a pixel (0.005 mm) is within 0.05 mm.
+    let query = PickQuery::new(Point::new(0.5, 0.0525), 0.05).unwrap();
+    let hits = index
+        .query_visible_hits(
+            query,
+            100.0,
+            PickFilter::all(),
+            &BoardDisplay::default(),
+            8,
+            &cancel,
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+}
+
+#[test]
+fn indexed_zone_query_respects_hidden_copper_like_the_reference_scan() {
+    use pomelo_core::{
+        copper::CopperMesh,
+        display::BoardDisplay,
+        model::Zone,
+        picking::{PickFilter, PickQuery},
+        picking_index::BoardPickingIndex,
+    };
+    let mut board = scene();
+    board.segments.clear();
+    board.zones.push(Zone {
+        kind: pomelo_core::model::ZoneKind::Unknown,
+        id: ObjectId(1000),
+        layer: LayerId(1),
+        net: NetId(7),
+        paths: vec![],
+        mesh: CopperMesh {
+            vertices: vec![
+                Point::new(0.0, 0.0),
+                Point::new(10.0, 0.0),
+                Point::new(10.0, 10.0),
+                Point::new(0.0, 10.0),
+            ],
+            ring_offsets: vec![0, 4],
+            ..Default::default()
+        },
+    });
+    let board = std::sync::Arc::new(board);
+    let cancel = CancellationToken::default();
+    let index = BoardPickingIndex::build(std::sync::Arc::clone(&board), 0, &cancel).unwrap();
+    let query = PickQuery::new(Point::new(5.0, 5.0), 0.1).unwrap();
+    let mut display = BoardDisplay::default();
+    for show_copper in [true, false] {
+        display.show_copper = show_copper;
+        let reference = query
+            .zones_where(&board, PickFilter::all(), &display, 8, &cancel, |_| true)
+            .unwrap()
+            .len();
+        let indexed = index
+            .query_objects(query, PickFilter::all(), &display, 8, &cancel, false)
+            .unwrap()
+            .len();
+        assert_eq!(indexed, reference, "show_copper={show_copper}");
+    }
+}
+
+#[test]
+fn category_search_keeps_components_when_nets_fill_the_shared_limit() {
+    use pomelo_core::{
+        interaction::component_reference::ComponentAnchor,
+        search::{SearchCategory, SearchEntry},
+    };
+    let mut entries: Vec<_> = (0..20)
+        .map(|id| SearchEntry::new(SearchTarget::Net(NetId(id)), format!("R{id:02}"), 1))
+        .collect();
+    entries.push(SearchEntry::new(
+        SearchTarget::ComponentGroup(ComponentAnchor::Pin(ObjectId(1))),
+        "R99".into(),
+        1,
+    ));
+    let index = SearchIndex::new(entries).unwrap();
+    let cancel = CancellationToken::default();
+    let shared = index.find_cancellable("R", 20, &cancel).unwrap();
+    assert!(
+        shared
+            .iter()
+            .all(|entry| entry.target.category() == SearchCategory::Net)
+    );
+    let components = index
+        .find_in_category("R", SearchCategory::Component, 20, &cancel)
+        .unwrap();
+    assert_eq!(components.len(), 1);
+    assert_eq!(components[0].name, "R99");
+    let nets = index
+        .find_in_category("R", SearchCategory::Net, 20, &cancel)
+        .unwrap();
+    assert_eq!(nets.len(), 20);
 }

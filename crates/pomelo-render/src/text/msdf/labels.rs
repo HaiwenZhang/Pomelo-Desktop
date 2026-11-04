@@ -10,6 +10,7 @@ pub use pomelo_core::display::LabelOptions;
 
 #[derive(Clone, Copy)]
 enum Source {
+    Component(usize),
     Track(usize),
     Pin(usize),
     Via(usize),
@@ -29,13 +30,124 @@ struct Node {
     children: Option<[usize; 2]>,
 }
 pub struct LabelIndex {
+    component_layouts: Vec<Option<ComponentLabel>>,
     scene: Arc<BoardScene>,
     pub font: Arc<MsdfFont>,
     entries: Vec<Entry>,
     nodes: Vec<Node>,
 }
+#[derive(Clone, Copy)]
+struct ComponentLabel {
+    center: Point,
+    size: f64,
+    angle: f64,
+    layer: LayerId,
+    bounds: Bounds,
+}
+
+fn component_label(
+    component: &pomelo_core::model::ComponentPlacement,
+    font: &MsdfFont,
+) -> Option<ComponentLabel> {
+    if component.reference.trim().is_empty() {
+        return None;
+    }
+    let body = component.body.as_ref()?;
+    let (sin, cos) = component.angle.sin_cos();
+    let local = |p: Point| {
+        let x = p.x - component.at.x;
+        let y = p.y - component.at.y;
+        Point::new(x * cos + y * sin, -x * sin + y * cos)
+    };
+    let mut local_bounds: Option<Bounds> = None;
+    let mut world_bounds: Option<Bounds> = None;
+    for path in body.regions.iter().flat_map(|r| r.paths.first()) {
+        for edge in path {
+            if let Some(b) = edge.centreline_bounds() {
+                if let Some(old) = &mut world_bounds {
+                    old.include(b.min);
+                    old.include(b.max);
+                } else {
+                    world_bounds = Some(b);
+                }
+            }
+            let mut e = edge.clone();
+            e.a = local(e.a);
+            e.b = local(e.b);
+            if let Some(a) = &mut e.arc {
+                a.center = local(a.center);
+                a.start -= component.angle;
+            }
+            if let Some(b) = e.centreline_bounds() {
+                if let Some(old) = &mut local_bounds {
+                    old.include(b.min);
+                    old.include(b.max);
+                } else {
+                    local_bounds = Some(b);
+                }
+            }
+        }
+    }
+    let b = local_bounds?;
+    let width = b.max.x - b.min.x;
+    let height = b.max.y - b.min.y;
+    let (size, angle) = placement_label_fit(
+        width,
+        height,
+        component.angle,
+        font.advance(&component.reference),
+    );
+    let p = b.center();
+    let center = Point::new(
+        component.at.x + p.x * cos - p.y * sin,
+        component.at.y + p.x * sin + p.y * cos,
+    );
+    (size > 0.0 && size.is_finite()).then_some(ComponentLabel {
+        center,
+        size,
+        angle,
+        layer: body.layer,
+        bounds: world_bounds?,
+    })
+}
+
+fn placement_label_fit(width: f64, height: f64, angle: f64, advance: f64) -> (f64, f64) {
+    let a = ((width * 0.8 / advance.max(0.1)).min(height * 0.65), angle);
+    let b = (
+        (height * 0.8 / advance.max(0.1)).min(width * 0.65),
+        angle + std::f64::consts::FRAC_PI_2,
+    );
+    // Near-square bodies should not turn a name just for a marginally larger
+    // fit. Allegro keeps J3302 horizontal while the narrower J3301 is vertical.
+    // Prefer the axis closer to horizontal when it retains at least 90% of the
+    // available text size; this decision is in board space, independent of zoom.
+    let (horizontal, other) = if a.1.cos().abs() >= b.1.cos().abs() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    if horizontal.0 >= other.0 * 0.9 {
+        horizontal
+    } else {
+        other
+    }
+}
 fn intersects(a: Bounds, b: Bounds) -> bool {
     a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.y <= b.max.y && a.max.y >= b.min.y
+}
+fn readable(angle: f64) -> f64 {
+    let vertical = std::f64::consts::FRAC_PI_2;
+    // Imported integer rotations can land one ulp beyond 90 degrees. Keep the
+    // vertical reading direction stable instead of turning the word by 180°.
+    if (angle.abs() - vertical).abs() <= 1e-12 {
+        angle.signum() * vertical
+    } else if angle > vertical {
+        angle - std::f64::consts::PI
+    } else if angle < -vertical {
+        angle + std::f64::consts::PI
+    } else {
+        angle
+    }
 }
 fn expanded(b: Bounds, d: f64) -> Bounds {
     Bounds {
@@ -79,12 +191,28 @@ fn long_axis_pin_name_angle(pad: &pomelo_core::model::Pad, pin_angle: f64) -> f6
 }
 
 impl LabelIndex {
+    pub fn empty(&self) -> PreparedGlyphs {
+        PreparedGlyphs {
+            font: Arc::clone(&self.font),
+            instances: Vec::new(),
+            batches: Vec::new(),
+            objects: Vec::new(),
+            pick_quads: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     pub fn build(
         scene: Arc<BoardScene>,
         font: Arc<MsdfFont>,
         cancel: &CancellationToken,
     ) -> Result<Self, Diagnostic> {
         let mut result = Self {
+            component_layouts: scene
+                .components
+                .iter()
+                .map(|c| component_label(c, &font))
+                .collect(),
             scene,
             font,
             entries: Vec::new(),
@@ -172,6 +300,11 @@ impl LabelIndex {
         for (i, z) in result.scene.zones.iter().enumerate() {
             if let Some(b) = zone_bounds(z) {
                 append(Source::Zone(i), b, 0.0)?;
+            }
+        }
+        for (i, label) in result.component_layouts.iter().enumerate() {
+            if let Some(label) = label {
+                append(Source::Component(i), label.bounds, 8.0 / label.size)?;
             }
         }
         fn build(
@@ -302,6 +435,21 @@ impl LabelIndex {
                           vertical: f64,
                           independent: bool|
          -> Result<(), Diagnostic> {
+            if !(category == Category::Drill && independent)
+                && !display.object_filter.visible(
+                    pomelo_core::display::filter::FilterKind::EmbeddedName,
+                    size,
+                    scale,
+                )
+            {
+                return Ok(());
+            }
+            // Keep complete names at the layout budget; never publish a truncated
+            // word or blank the entire view because lower-priority labels overflow.
+            let count = name.chars().filter(|&ch| ch != ' ').count();
+            if result.instances.len().saturating_add(count) > 65_536 {
+                return Ok(());
+            }
             let (sin, cos) = angle.sin_cos();
             let mut min_y = f64::INFINITY;
             let mut max_y = f64::NEG_INFINITY;
@@ -324,12 +472,6 @@ impl LabelIndex {
                 }
                 let g = self.font.glyph(ch);
                 if ch != ' ' {
-                    if result.instances.len() >= 65_536 {
-                        return Err(Diagnostic::error(
-                            "RENDER_LABEL_GLYPH_LIMIT",
-                            MessageKey::RenderFontLimit,
-                        ));
-                    }
                     let x = pen + g.plane[0] * size;
                     let y = (g.plane[1] - cy) * size * vertical;
                     result.instances.push(GlyphInstance::packet(
@@ -358,18 +500,84 @@ impl LabelIndex {
             }
             Ok(())
         };
-        let readable = |angle: f64| {
-            if angle > std::f64::consts::FRAC_PI_2 {
-                angle - std::f64::consts::PI
-            } else if angle < -std::f64::consts::FRAC_PI_2 {
-                angle + std::f64::consts::PI
-            } else {
-                angle
-            }
-        };
         // The query prunes invisible and sub-pixel labels before traversing source objects.
-        for entry in self.query(expanded(view, 2.0 / scale), scale) {
+        let mut entries = self.query(expanded(view, 2.0 / scale), scale);
+        // If the complete-name budget is reached, the visually frontmost layer
+        // wins. Sequence is a stable tie-breaker while panning within that layer.
+        entries.sort_unstable_by_key(|entry| {
+            let rank = match entry.source {
+                Source::Component(_) => [i64::MAX; 5],
+                Source::Track(i) => {
+                    display.display_rank(self.scene.segments[i].layer, Category::Trace)
+                }
+                Source::Zone(i) => display.display_rank(self.scene.zones[i].layer, Category::Zone),
+                Source::Pin(i) => self.scene.pins[i]
+                    .pads
+                    .iter()
+                    .filter(|pad| display.layer_visible(pad.layer))
+                    .map(|pad| display.display_rank(pad.layer, Category::Pin))
+                    .max()
+                    .unwrap_or([0; 5]),
+                Source::Via(i) => self.scene.vias[i]
+                    .pads
+                    .iter()
+                    .filter(|pad| display.layer_visible(pad.layer))
+                    .map(|pad| display.display_rank(pad.layer, Category::Drill))
+                    .max()
+                    .unwrap_or([0; 5]),
+            };
+            (std::cmp::Reverse(rank), entry.sequence)
+        });
+        for entry in entries {
+            if let Some(active) = display
+                .active_layer
+                .filter(|_| display.active_layer_labels_only)
+            {
+                let matches = match entry.source {
+                    Source::Component(_) => true,
+                    Source::Track(i) => self.scene.segments[i].layer == active,
+                    Source::Pin(i) => self.scene.pins[i]
+                        .pads
+                        .iter()
+                        .any(|pad| pad.layer == active),
+                    Source::Via(i) => self.scene.vias[i]
+                        .pads
+                        .iter()
+                        .any(|pad| pad.layer == active),
+                    Source::Zone(i) => self.scene.zones[i].layer == active,
+                };
+                if !matches {
+                    continue;
+                }
+            }
+
             match entry.source {
+                Source::Component(i) => {
+                    let Some(label) = self.component_layouts[i] else {
+                        continue;
+                    };
+                    if display
+                        .quickview
+                        .is_none_or(|view| view.layer != label.layer)
+                        || label.size * scale < 8.0
+                    {
+                        continue;
+                    }
+                    let angle = readable(label.angle.sin().atan2(label.angle.cos() * sign));
+                    append(
+                        &self.scene.components[i].reference,
+                        label.center,
+                        label.size,
+                        angle,
+                        [1.0, 1.0, 1.0, 0.95],
+                        Category::Placement,
+                        label.layer,
+                        self.scene.components[i].id,
+                        0,
+                        1.0,
+                        false,
+                    )?;
+                }
                 Source::Track(i) if options.track_names => {
                     let s = &self.scene.segments[i];
                     if !display.primitive_visible(s.layer, LayerPrimitive::Traces) {
@@ -425,7 +633,12 @@ impl LabelIndex {
                         } else {
                             LayerPrimitive::Pads
                         };
-                        if !display.primitive_visible(pad.layer, kind) {
+                        if !display.primitive_visible(pad.layer, kind)
+                            || (display.active_layer_labels_only
+                                && display
+                                    .active_layer
+                                    .is_some_and(|active| active != pad.layer))
+                        {
                             continue;
                         }
                         let size = if display.horizontal_pin_names {

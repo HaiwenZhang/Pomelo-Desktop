@@ -19,8 +19,10 @@ impl BoardViewport {
     ) -> CanvasPresentation {
         let locale = i18n::current(cx);
         let theme = cx.theme();
-        let stats = self.telemetry.snapshot();
-        let copper_stats = self.copper_telemetry.snapshot();
+        let stats = self.telemetry.traces.snapshot();
+        let copper_stats = self.telemetry.copper.snapshot();
+        let placement_stats = self.telemetry.placements.snapshot();
+        let placement_outline_stats = self.telemetry.placement_outlines.snapshot();
         let curve_frame = self.curve_fill.frame();
         let curve_revision = curve_frame.as_ref().map_or(0, |cache| cache.revision());
         let curve_bytes = curve_frame.as_ref().map_or(0, |cache| {
@@ -31,15 +33,15 @@ impl BoardViewport {
                 .map(|entry| entry.source.upload_bytes() as u64)
                 .sum::<u64>()
         });
-        let pad_stats = self.pad_telemetry.snapshot();
-        let custom_pad_stats = self.custom_pad_telemetry.snapshot();
-        let custom_outline_stats = self.custom_outline_telemetry.snapshot();
-        let zone_outline_stats = self.zone_outline_telemetry.snapshot();
-        let drill_stats = self.drill_telemetry.snapshot();
-        let drawing_stats = self.drawing_telemetry.snapshot();
-        let text_stats = self.text_telemetry.snapshot();
-        let source_stroke_stats = self.source_stroke_telemetry.snapshot();
-        let label_stats = self.label_telemetry.snapshot();
+        let pad_stats = self.telemetry.pads.snapshot();
+        let custom_pad_stats = self.telemetry.custom_pads.snapshot();
+        let custom_outline_stats = self.telemetry.custom_outlines.snapshot();
+        let zone_outline_stats = self.telemetry.zone_outlines.snapshot();
+        let drill_stats = self.telemetry.drills.snapshot();
+        let drawing_stats = self.telemetry.drawings.snapshot();
+        let text_stats = self.telemetry.texts.snapshot();
+        let source_stroke_stats = self.telemetry.source_strokes.snapshot();
+        let label_stats = self.telemetry.labels.snapshot();
         let custom_bytes = self
             .pads
             .custom_mesh
@@ -71,152 +73,48 @@ impl BoardViewport {
             && self.source_strokes.as_ref().is_none_or(|source| {
                 source.instances.is_empty() || source_stroke_stats.visible_ready
             });
-        let ready = geometry_ready
-            && !self.curve_fill.pending
+        let gpu_ready = geometry_ready
+            && (self.display.quickview.is_none()
+                || placement_stats.uploaded_bytes == self.placements.upload_bytes() as u64)
+            && (self.display.quickview.is_none()
+                || self.placement_outlines.instances.is_empty()
+                || placement_outline_stats.visible_ready)
             && !self.curve_fill.failed
             && copper_stats.curve_uploaded_bytes == curve_bytes
             && copper_stats.curve_revision == curve_revision
             && self
-                .label_cache
-                .as_ref()
-                .is_none_or(|cache| cache.source.instances.is_empty() || label_stats.visible_ready);
+                .labels
+                .frame()
+                .is_none_or(|source| source.instances.is_empty() || label_stats.visible_ready);
+        let ready =
+            gpu_ready && !self.curve_fill.pending && !self.labels.pending && !self.labels.failed;
         if failure.is_none()
             && !self.curve_fill.failed
-            && (!ready || status.as_ref().is_some_and(|status| status.encoded == 0))
+            && (!gpu_ready || status.as_ref().is_some_and(|status| status.encoded == 0))
         {
             window.request_animation_frame();
         }
         if let Some(path) = std::env::var_os("POMELO_BOARD_GPU_TRACE") {
-            let specs = window.gpu_specs();
-            let pick_filter = serde_json::json!({
-                "segment": self.pick_filter.contains(pomelo_core::picking::PickCategory::Segment),
-                "pin": self.pick_filter.contains(pomelo_core::picking::PickCategory::Pin),
-                "via": self.pick_filter.contains(pomelo_core::picking::PickCategory::Via),
-                "zone": self.pick_filter.contains(pomelo_core::picking::PickCategory::Zone),
-                "drawing": self.pick_filter.contains(pomelo_core::picking::PickCategory::Drawing),
-            });
-            let members_report = self.selected_members.as_ref().map(|members| {
-                serde_json::json!({
-                    "offset": self.members_offset,
-                    "page_size": 256,
-                    "total": members.total,
-                    "objects": members.objects.iter().map(|object| {
-                        use pomelo_core::selection::SelectedObject;
-                        let (category, id) = match *object {
-                            SelectedObject::Segment(id) => ("segment", id),
-                            SelectedObject::Pin(id) => ("pin", id),
-                            SelectedObject::Via(id) => ("via", id),
-                            SelectedObject::Zone(id) => ("zone", id),
-                            SelectedObject::Drawing(id) => ("drawing", id),
-                        };
-                        serde_json::json!({"category":category,"source_id":id.0})
-                    }).collect::<Vec<_>>(),
-                })
-            });
-            let mut report = serde_json::json!({
-                "backend": pomelo_render::backend::native::NAME, "shader_owner": "pomelo-render", "scope": "traces_outline_copper_pads_drills_drawings_msdf_text_labels",
-                "cpu_pixel_readback": false, "expected_instances": self.tracks.instances.len(),
-                "ready": ready, "status": {
-                    "encoded": status.as_ref().map(|status| status.encoded),
-                    "last_error": failure,
+            self.write_gpu_trace(
+                std::path::Path::new(&path),
+                gpu_trace::FrameState {
+                    ready,
+                    status: status.as_ref(),
+                    failure: failure.as_deref(),
+                    curve_bytes,
+                    curve_revision,
+                    layer_order: &layer_order,
+                    panels,
                 },
-                "statistics": stats,
-                "copper_statistics": copper_stats,
-                "curve_statistics": self.curve_fill.statistics(),
-                "curve_pending": self.curve_fill.pending,
-                "curve_failed": self.curve_fill.failed,
-                "expected_curve_bytes": curve_bytes,
-                "expected_curve_revision": curve_revision,
-                "pad_statistics": pad_stats,
-                "custom_pad_statistics": custom_pad_stats,
-                "custom_outline_statistics": custom_outline_stats,
-                "zone_outline_statistics": zone_outline_stats,
-                "expected_zone_outline_instances": self.zone_outlines.instances.len(),
-                "drill_statistics": drill_stats,
-                "drawing_statistics": drawing_stats,
-                "expected_drawing_instances": self.drawings.instances.len(),
-                "text_statistics": text_stats,
-                "source_stroke_statistics": source_stroke_stats,
-                "label_statistics": label_stats,
-            });
-            let details = serde_json::json!({
-                "expected_source_stroke_instances": self.source_strokes.as_ref().map_or(0, |source| source.instances.len()),
-                "source_stroke_objects": self.source_strokes.as_ref().map_or(&[][..], |source| source.objects.as_slice()),
-                "expected_text_instances": self.texts.as_ref().map_or(0, |source| source.instances.len()),
-                "expected_drills": self.drills.analytic.len(),
-                "adapter": specs.as_ref().map(|specs| &specs.device_name),
-                "software_emulated": specs.as_ref().map(|specs| specs.is_software_emulated),
-                "board_bounds": self.scene.bounds,
-                "source_trace_count": self.scene.segments.len(),
-                "color_mode": self.display.color_mode,
-                "source_outline_count": self.scene.outline.len(),
-                "copper_prepared": {
-                    "zones": self.copper.batches.len(),
-                    "vertices": self.copper.vertex_count(),
-                    "indices": self.copper.index_count(),
-                    "gpu_drawn": copper_stats.draw_calls > 0,
-                },
-                "pads_prepared": {
-                    "analytic": self.pads.analytic.len(),
-                    "custom": self.pads.custom.len(),
-                    "gpu_drawn": pad_stats.draw_calls > 0,
-                    "custom_gpu_drawn": custom_pad_stats.draw_calls > 0,
-                    "custom_vertices": self.pads.custom_mesh.as_ref().map(|mesh| mesh.vertices.len()),
-                    "custom_indices": self.pads.custom_mesh.as_ref().map(|mesh| mesh.indices.len()),
-                },
-                "selected_target": self.selected_target.map(|target| format!("{target:?}")),
-                "selected_anchor": self.selected_anchor,
-                "panel_layout": panels,
-                "canvas_size": self.navigation.size(),
-                "device_scale_factor": window.scale_factor(),
-                "selection_mode": format!("{:?}", self.selection_mode),
-                "hovered_object": self.hovered.as_ref().filter(|(_, context)| context.matches_view(
-                    self.navigation.camera(), self.navigation.size(), &self.display, self.selection_mode,
-                )).map(|(object, _)| format!("{object:?}")),
-                "pick_filter": pick_filter,
-                "selection_query": {
-                    "search_pending": self.search_pending,
-                    "selection_pending": self.locate_pending,
-                    "candidate_position": self.last_pick.as_ref().filter(|context| context.matches_view(
-                        self.navigation.camera(), self.navigation.size(), &self.display, self.selection_mode,
-                    )).and(self.candidate_position),
-                },
-                "members": members_report,
-                "search_entries": self.search.entries().len(),
-                "pick_index_segments": self.picking.segment_count(),
-                "display": {
-                    "hidden_layers": self.display.hidden_layers.iter().map(|layer| layer.0).collect::<Vec<_>>(),
-                    "show_drills": self.display.show_drills,
-                    "show_backdrills": self.display.show_backdrills,
-                    "show_copper": self.display.show_copper,
-                    "static_shapes_fill_solid": self.display.static_shapes_fill_solid,
-                    "filled": self.display.filled,
-                    "horizontal_pin_names": self.display.horizontal_pin_names,
-                    "label_options": self.display.label_options,
-                    "appearance": self.display.appearance,
-                    "show_texts": self.display.show_texts,
-                    "show_drawings": self.display.show_drawings,
-                    "layer_order": &*layer_order,
-                    "copper_opacity": self.display.copper_opacity,
-                    "global_opacity": self.display.global_opacity,
-                },
-                "camera": {
-                    "center": self.navigation.camera().center,
-                    "logical_pixels_per_mm": self.navigation.camera().pixels_per_mm,
-                    "flipped": self.navigation.camera().flipped,
-                    "logical_viewport_size": self.navigation.size(),
-                },
-            });
-            if let (serde_json::Value::Object(report), serde_json::Value::Object(details)) =
-                (&mut report, details)
-            {
-                report.extend(details);
-            }
-            if let Err(error) = std::fs::write(path, report.to_string()) {
-                eprintln!("{}: {error}", text(locale, Key::FileIoFailed));
-            }
+                window,
+                locale,
+            );
         }
         let mut frame = TraceFrame {
+            net_colors: None,
+            pattern: None,
+            object_filter: Default::default(),
+            brightness: 1.0,
             pass: pomelo_render::backend::native::OverlayPass::Base,
             filled: self.display.filled,
             hover_selection: self.hover_selection.clone().filter(|_| {
@@ -245,13 +143,13 @@ impl BoardViewport {
                     let color: Rgba = theme.ring.into();
                     (*object, [color.r, color.g, color.b, color.a])
                 }),
-            highlighted_related_objects: (!self.selected_bonds.is_empty()).then(|| {
-                let color: Rgba = theme.primary.into();
-                (
-                    Arc::clone(&self.selected_bonds),
-                    [color.r, color.g, color.b, color.a],
-                )
-            }),
+            highlighted_related_objects: Some(self.related_highlight())
+                .filter(|objects| !objects.is_empty())
+                .map(|objects| {
+                    let color: Rgba = theme.primary.into();
+                    (objects, [color.r, color.g, color.b, color.a])
+                }),
+            object_colors: self.review.object_colors.clone(),
             highlighted_trace: self.selected_target.and_then(|target| {
                 use pomelo_core::selection::{SelectedObject, SelectionTarget};
                 let selection = match target {
@@ -310,17 +208,7 @@ impl BoardViewport {
         };
         let weak = cx.entity().downgrade();
         let layout_view = weak.clone();
-        let telemetry = Arc::clone(&self.telemetry);
-        let copper_telemetry = Arc::clone(&self.copper_telemetry);
-        let pad_telemetry = Arc::clone(&self.pad_telemetry);
-        let custom_pad_telemetry = Arc::clone(&self.custom_pad_telemetry);
-        let custom_outline_telemetry = Arc::clone(&self.custom_outline_telemetry);
-        let drill_telemetry = Arc::clone(&self.drill_telemetry);
-        let drawing_telemetry = Arc::clone(&self.drawing_telemetry);
-        let text_telemetry = Arc::clone(&self.text_telemetry);
-        let source_stroke_telemetry = Arc::clone(&self.source_stroke_telemetry);
-        let zone_outline_telemetry = Arc::clone(&self.zone_outline_telemetry);
-        let label_telemetry = Arc::clone(&self.label_telemetry);
+        let telemetry = self.telemetry.clone();
         let texts = self.texts.clone();
         let source_strokes = self.source_strokes.clone();
         let drawings = Arc::clone(&self.drawings);
@@ -329,12 +217,14 @@ impl BoardViewport {
         let drill_color = [0.46, 0.49, 0.51, 1.0];
         let pads = Arc::clone(&self.pads);
         let copper = Arc::clone(&self.copper);
+        let placements = Arc::clone(&self.placements);
+        let placement_outlines = Arc::clone(&self.placement_outlines);
         let zone_outlines = Arc::clone(&self.zone_outlines);
         let copper_opacity = self.display.copper_opacity;
         let viewport = canvas(
             move |bounds, _window, cx| {
                 let prepaint_started = pomelo_render::frame_timing::begin();
-                let mut label_layout_us = 0u64;
+                let mut label_pending = false;
                 let mut resized = false;
                 let mut labels = None;
                 let mut curves = None;
@@ -364,54 +254,10 @@ impl BoardViewport {
                             cx,
                         );
                         curves = this.curve_fill.frame();
-                        if let Some(index) = &this.label_index {
-                            let key = [
-                                camera.center.x.to_bits(),
-                                camera.center.y.to_bits(),
-                                camera.pixels_per_mm.to_bits(),
-                                u64::from(camera.flipped),
-                                width.to_bits(),
-                                height.to_bits(),
-                            ];
-                            if this.label_cache.as_ref().is_none_or(|cache| {
-                                cache.key != key || !Arc::ptr_eq(&cache.display, &this.display)
-                            }) {
-                                let layout_started = prepaint_started.map(|_|std::time::Instant::now());
-                                match index.layout(
-                                    camera,
-                                    width,
-                                    height,
-                                    &this.display,
-                                    this.display.label_options,
-                                    &pomelo_core::task::CancellationToken::default(),
-                                ) {
-                                    Ok(source) => {
-                                        this.label_cache = Some(LabelCache {
-                                            key,
-                                            display: Arc::clone(&this.display),
-                                            source: Arc::new(source),
-                                        })
-                                    }
-                                    Err(diagnostic) => {
-                                        this.label_cache = None;
-                                        if !this
-                                            .render_diagnostics
-                                            .iter()
-                                            .any(|item| item.code == diagnostic.code)
-                                        {
-                                            this.render_diagnostics.push(diagnostic);
-                                        }
-                                    }
-                                }
-                                if let Some(started) = layout_started {
-                                    label_layout_us = started.elapsed().as_micros() as u64;
-                                }
-                            }
-                            labels = this
-                                .label_cache
-                                .as_ref()
-                                .map(|cache| Arc::clone(&cache.source));
-                        }
+                        this.request_labels(camera, width, height, cx);
+                        labels = this.labels.frame();
+                        label_pending = this.labels.pending;
+                        this.update_camera_motion(camera, cx);
                         camera
                     })
                     .ok();
@@ -420,10 +266,12 @@ impl BoardViewport {
                 }
                 pomelo_render::frame_timing::record("prepaint_board", prepaint_started, || serde_json::json!({
                     "camera":frame.camera,"segments":frame.tracks.instances.len(),"zones":copper.batches.len(),
-                    "label_layout_us":label_layout_us,
+                    "label_layout_us":0,"label_pending":label_pending,
                     "labels":labels.as_ref().map_or(0, |source|source.instances.len()),
                 }));
                 Arc::new(BoardFrame {
+                    placements: Some(placements),
+                    placement_outlines:Some(placement_outlines),
                     curves,
                     zone_outlines: Some(zone_outlines),
                     drawings: Some(drawings),
@@ -446,7 +294,7 @@ impl BoardViewport {
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture {
                         let _ = move_view.update(cx, |this, cx| {
-                            if this.pointer_gesture.is_some() {
+                            if this.pointer_gesture.is_some() || this.review.drag.is_some() {
                                 this.move_pan(event, window, cx);
                                 cx.stop_propagation();
                             }
@@ -457,7 +305,8 @@ impl BoardViewport {
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture {
                         let _ = release_view.update(cx, |this, cx| {
-                            if this.pointer_gesture.as_ref().is_some_and(|gesture| gesture.button == event.button) {
+                            let review_drag = event.button == MouseButton::Left && this.review.drag.is_some();
+                            if review_drag || this.pointer_gesture.as_ref().is_some_and(|gesture| gesture.button == event.button) {
                                 if bounds.contains(&event.position) {
                                     this.stop_pan(event, window, cx);
                                 } else {
@@ -487,57 +336,12 @@ impl BoardViewport {
                 if let Some(renderer) = renderer {
                     let weak = weak.clone();
                     let before = renderer.status();
-                    let before_uploaded = telemetry.snapshot().uploaded_instances;
-                    let before_trace_ready = telemetry.snapshot().visible_ready;
-                    let before_residency_ready = [
-                        custom_outline_telemetry.snapshot().visible_ready,
-                        drawing_telemetry.snapshot().visible_ready,
-                        text_telemetry.snapshot().visible_ready,
-                        source_stroke_telemetry.snapshot().visible_ready,
-                        label_telemetry.snapshot().visible_ready,
-                        zone_outline_telemetry.snapshot().visible_ready,
-                    ];
-                    let before_copper = copper_telemetry.snapshot().uploaded_bytes;
-                    let before_pads = pad_telemetry.snapshot().uploaded_instances;
-                    let before_custom = custom_pad_telemetry.snapshot().uploaded_bytes;
-                    let before_custom_outlines =
-                        custom_outline_telemetry.snapshot().uploaded_instances;
-                    let before_drills = drill_telemetry.snapshot().uploaded_instances;
-                    let before_drawings = drawing_telemetry.snapshot().uploaded_instances;
-                    let before_texts = text_telemetry.snapshot().uploaded_instances;
-                    let before_source_strokes =
-                        source_stroke_telemetry.snapshot().uploaded_instances;
-                    let before_labels = label_telemetry.snapshot().uploaded_instances;
-                    let before_zone_outlines = zone_outline_telemetry.snapshot().uploaded_instances;
+                    let before_progress = telemetry.progress();
                     window.on_next_frame(move |_, cx| {
                         let after = renderer.status();
-                        let uploaded = telemetry.snapshot().uploaded_instances;
                         if before.last_error != after.last_error
                             || before.resets != after.resets
-                            || before_uploaded != uploaded
-                            || before_trace_ready != telemetry.snapshot().visible_ready
-                            || before_residency_ready
-                                != [
-                                    custom_outline_telemetry.snapshot().visible_ready,
-                                    drawing_telemetry.snapshot().visible_ready,
-                                    text_telemetry.snapshot().visible_ready,
-                                    source_stroke_telemetry.snapshot().visible_ready,
-                                    label_telemetry.snapshot().visible_ready,
-                                    zone_outline_telemetry.snapshot().visible_ready,
-                                ]
-                            || before_copper != copper_telemetry.snapshot().uploaded_bytes
-                            || before_pads != pad_telemetry.snapshot().uploaded_instances
-                            || before_custom != custom_pad_telemetry.snapshot().uploaded_bytes
-                            || before_custom_outlines
-                                != custom_outline_telemetry.snapshot().uploaded_instances
-                            || before_drills != drill_telemetry.snapshot().uploaded_instances
-                            || before_drawings != drawing_telemetry.snapshot().uploaded_instances
-                            || before_texts != text_telemetry.snapshot().uploaded_instances
-                            || before_source_strokes
-                                != source_stroke_telemetry.snapshot().uploaded_instances
-                            || before_labels != label_telemetry.snapshot().uploaded_instances
-                            || before_zone_outlines
-                                != zone_outline_telemetry.snapshot().uploaded_instances
+                            || before_progress != telemetry.progress()
                             || (before.encoded == 0 && after.encoded > 0)
                         {
                             let _ = weak.update(cx, |_, cx| cx.notify());
@@ -559,10 +363,13 @@ impl BoardViewport {
                 + custom_pad_stats.uploaded_bytes
                 + drill_stats.uploaded_instances * 128,
             total_bytes: self.tracks.instances.len() * 128
-                + self.copper.upload_bytes()
-                + curve_bytes as usize
+                + self
+                    .copper
+                    .upload_bytes()
+                    .max(copper_stats.uploaded_bytes as usize)
+                + (curve_bytes as usize).max(copper_stats.curve_required_bytes as usize)
                 + self.pads.analytic.len() * 128
-                + custom_bytes
+                + custom_bytes.max(custom_pad_stats.uploaded_bytes as usize)
                 + self.drills.analytic.len() * 128,
         }
     }

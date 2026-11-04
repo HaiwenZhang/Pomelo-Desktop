@@ -1,4 +1,6 @@
 //! Per-document display settings, independent of GPU resources and source layer order.
+pub mod filter;
+pub mod grid;
 use crate::model::LayerId;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,6 +10,57 @@ pub enum ColorMode {
     #[default]
     Layer,
     Net,
+}
+
+/// Composition of base traces; selection and hover keep their overlay rendering.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TraceRenderMode {
+    /// Union coverage before applying opacity once per layer.
+    #[default]
+    Stencil,
+    /// Blend smooth signed-distance coverage per segment.
+    Sdf,
+}
+
+/// Allegro-style display shadowing; independent of material transparency.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShadowMode {
+    pub enabled: bool,
+    pub dim_active: bool,
+    pub brightness: f32,
+}
+impl Default for ShadowMode {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dim_active: false,
+            brightness: 0.6,
+        }
+    }
+}
+
+/// A transient Last snapshot. Restoring it swaps the two visibility states.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerVisibility {
+    hidden: BTreeSet<LayerId>,
+    primitives: BTreeMap<LayerId, LayerPrimitives>,
+    quickview: Option<PlacementQuickview>,
+}
+impl LayerVisibility {
+    pub fn capture(display: &BoardDisplay) -> Self {
+        Self {
+            hidden: display.hidden_layers.clone(),
+            primitives: display.layer_primitives.clone(),
+            quickview: display.quickview,
+        }
+    }
+    pub fn swap(&mut self, display: &mut BoardDisplay) {
+        std::mem::swap(&mut self.hidden, &mut display.hidden_layers);
+        std::mem::swap(&mut self.primitives, &mut display.layer_primitives);
+        std::mem::swap(&mut self.quickview, &mut display.quickview);
+    }
 }
 
 /// Independent embedded names and via span labels; source board text is separate.
@@ -100,9 +153,18 @@ pub enum DisplayCategory {
     Pin,
     Via,
     Drill,
+    Placement,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+/// Temporary placement view, independent of the underlying copper visibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlacementQuickview {
+    pub layer: LayerId,
+    pub pins: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LayerPriority {
     pub layer: LayerId,
     pub category: DisplayCategory,
@@ -135,9 +197,17 @@ impl LayerPrimitives {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoardDisplay {
+    #[serde(default)]
+    pub quickview: Option<PlacementQuickview>,
+    #[serde(default)]
+    pub object_filter: filter::ObjectFilter,
+    #[serde(default)]
+    pub grid: grid::GridOptions,
+    #[serde(default)]
+    pub shadow: ShadowMode,
     #[serde(default)]
     pub appearance: crate::appearance::BoardAppearance,
     #[serde(default)]
@@ -148,6 +218,8 @@ pub struct BoardDisplay {
     pub filled: bool,
     #[serde(default)]
     pub color_mode: ColorMode,
+    #[serde(default)]
+    pub trace_render_mode: TraceRenderMode,
     #[serde(default)]
     pub length_unit: crate::units::LengthUnit,
     pub hidden_layers: BTreeSet<LayerId>,
@@ -166,6 +238,9 @@ pub struct BoardDisplay {
     /// Keep embedded pin net names horizontal, independently of footprint rotation.
     #[serde(default)]
     pub horizontal_pin_names: bool,
+    /// Generated names may be limited to the active layer; source text is separate.
+    #[serde(default)]
+    pub active_layer_labels_only: bool,
     #[serde(default)]
     pub label_options: LabelOptions,
     #[serde(default = "default_visible")]
@@ -191,11 +266,16 @@ fn default_visible() -> bool {
 impl Default for BoardDisplay {
     fn default() -> Self {
         Self {
+            quickview: None,
+            object_filter: filter::ObjectFilter::default(),
+            grid: grid::GridOptions::default(),
+            shadow: ShadowMode::default(),
             appearance: crate::appearance::BoardAppearance::default(),
             priorities: Vec::new(),
             active_layer: None,
             filled: true,
             color_mode: ColorMode::default(),
+            trace_render_mode: TraceRenderMode::default(),
             length_unit: crate::units::LengthUnit::default(),
             hidden_layers: BTreeSet::new(),
             layer_primitives: BTreeMap::new(),
@@ -205,6 +285,7 @@ impl Default for BoardDisplay {
             static_shapes_fill_solid: false,
             show_texts: false,
             horizontal_pin_names: false,
+            active_layer_labels_only: false,
             label_options: LabelOptions::default(),
             show_drawings: true,
             copper_opacity: default_copper_opacity(),
@@ -214,14 +295,83 @@ impl Default for BoardDisplay {
     }
 }
 impl BoardDisplay {
+    /// Bounds shared by the live view and saved display snapshots.
+    pub fn valid(&self) -> bool {
+        self.quickview.is_none_or(|view| view.layer.is_copper())
+            && self.hidden_layers.len() <= 4096
+            && self.layer_primitives.len() <= 4096
+            && self.layer_order.len() <= 4096
+            && self.priorities.len() <= 4096
+            && self.appearance.layers.len() <= 4096
+            && self.appearance.nets.len() <= 4096
+            && self
+                .layer_order
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.layer_order.len()
+            && self.copper_opacity.is_finite()
+            && (0.0..=1.0).contains(&self.copper_opacity)
+            && self.global_opacity.is_finite()
+            && (0.0..=1.0).contains(&self.global_opacity)
+            && self.object_filter.valid()
+            && self.grid.valid()
+            && self.shadow.brightness.is_finite()
+            && (0.0..=1.0).contains(&self.shadow.brightness)
+    }
+    /// Shadowing changes RGB brightness, never coverage, picking or source colors.
+    pub fn layer_brightness(&self, layer: LayerId) -> f32 {
+        if self.shadow.enabled
+            && self.active_layer.is_some()
+            && (self.shadow.dim_active || self.active_layer != Some(layer))
+        {
+            self.shadow.brightness.clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+    /// Compare only inputs that determine physical/backdrill visibility.
+    pub fn same_drill_visibility(&self, other: &Self) -> bool {
+        self.show_drills == other.show_drills
+            && self.show_backdrills == other.show_backdrills
+            && self.hidden_layers == other.hidden_layers
+            && self
+                .layer_primitives
+                .keys()
+                .chain(other.layer_primitives.keys())
+                .all(|&layer| self.primitives(layer).vias == other.primitives(layer).vias)
+    }
+
+    /// Geometry and embedded material inputs used by MSDF label layout.
+    /// Colors, opacity and trace composition are uniforms; rank affects the dense-label budget.
+    pub fn same_label_layout(&self, other: &Self) -> bool {
+        self.quickview == other.quickview
+            && self.object_filter == other.object_filter
+            && self.active_layer_labels_only == other.active_layer_labels_only
+            && self.active_layer == other.active_layer
+            && self.layer_order == other.layer_order
+            && self.priorities == other.priorities
+            && self.label_options == other.label_options
+            && self.horizontal_pin_names == other.horizontal_pin_names
+            && self.show_copper == other.show_copper
+            && self.copper_opacity == other.copper_opacity
+            && self.hidden_layers == other.hidden_layers
+            && self
+                .layer_primitives
+                .keys()
+                .chain(other.layer_primitives.keys())
+                .all(|&layer| self.primitives(layer) == other.primitives(layer))
+    }
+
     /// Back-to-front rank. An active copper layer wins over manual promotion;
     /// otherwise drills, vias and pins sit above etch across the entire stack.
     pub fn display_rank(&self, layer: LayerId, category: DisplayCategory) -> [i64; 5] {
         use DisplayCategory::*;
-        let etch = matches!(category, Zone | ZoneOutline | Trace)
-            || (category == Text && layer.0 < 0x10000);
+        let etch = matches!(category, Zone | ZoneOutline | Trace | Placement)
+            || (category == Text && layer.is_copper());
         let group_category = match category {
-            Zone | ZoneOutline => Trace,
+            Zone | ZoneOutline | Placement => Trace,
             Text if etch => Trace,
             Drawing => Text,
             _ => category,
@@ -242,7 +392,7 @@ impl BoardDisplay {
             Outline => 0,
             Drawing => 1,
             Text if !etch => 1,
-            Zone | ZoneOutline | Trace | BondWire | Text => 2,
+            Zone | ZoneOutline | Trace | BondWire | Text | Placement => 2,
             Pin => 3,
             Via => 4,
             Drill => 5,
@@ -252,6 +402,7 @@ impl BoardDisplay {
             ZoneOutline => 1,
             Trace | BondWire | Drawing => 2,
             Text => 3,
+            Placement => 4,
             _ => 0,
         };
         [
@@ -263,13 +414,28 @@ impl BoardDisplay {
         ]
     }
     pub fn primitives(&self, layer: LayerId) -> LayerPrimitives {
-        self.layer_primitives
+        let mut state = self
+            .layer_primitives
             .get(&layer)
             .copied()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(view) = self.quickview.filter(|view| view.layer == layer) {
+            state.pads = view.pins;
+        }
+        state
     }
     pub fn set_primitive(&mut self, layer: LayerId, kind: LayerPrimitive, visible: bool) {
-        let mut state = self.primitives(layer);
+        if let Some(view) = self.quickview.as_mut().filter(|view| view.layer == layer)
+            && kind == LayerPrimitive::Pads
+        {
+            view.pins = visible;
+            return;
+        }
+        let mut state = self
+            .layer_primitives
+            .get(&layer)
+            .copied()
+            .unwrap_or_default();
         match kind {
             LayerPrimitive::Traces => state.traces = visible,
             LayerPrimitive::Vias => state.vias = visible,
@@ -282,7 +448,20 @@ impl BoardDisplay {
         }
     }
     pub fn primitive_visible(&self, layer: LayerId, kind: LayerPrimitive) -> bool {
+        if kind == LayerPrimitive::Pads
+            && let Some(view) = self.quickview.filter(|view| view.layer == layer)
+        {
+            return view.pins;
+        }
         self.layer_visible(layer) && self.primitives(layer).visible(kind)
+    }
+    pub fn category_visible(&self, layer: LayerId, category: DisplayCategory) -> bool {
+        if category == DisplayCategory::Placement {
+            return self.quickview.is_some_and(|view| view.layer == layer);
+        }
+        self.layer_visible(layer)
+            || (category == DisplayCategory::Pin
+                && self.primitive_visible(layer, LayerPrimitive::Pads))
     }
     pub fn object_visible(&self, layer: LayerId, object: crate::selection::SelectedObject) -> bool {
         use crate::selection::SelectedObject;
@@ -292,6 +471,9 @@ impl BoardDisplay {
             SelectedObject::Via(_) => self.primitive_visible(layer, LayerPrimitive::Vias),
             SelectedObject::Zone(_) => self.show_copper && self.layer_visible(layer),
             SelectedObject::Drawing(_) => self.show_drawings && self.layer_visible(layer),
+            SelectedObject::Placement(_) => {
+                self.category_visible(layer, DisplayCategory::Placement)
+            }
         }
     }
     pub fn move_layer_to_edge(&mut self, layer: LayerId, top: bool, source: &[LayerId]) -> bool {
@@ -357,6 +539,109 @@ impl BoardDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn placement_quickviews_temporarily_show_pins_without_changing_copper_masks() {
+        let layer = LayerId(0);
+        let mut display = BoardDisplay::default();
+        display.hidden_layers.insert(layer);
+        let original = display.clone();
+        display.quickview = Some(PlacementQuickview { layer, pins: true });
+        assert!(display.primitive_visible(layer, LayerPrimitive::Pads));
+        assert!(display.category_visible(layer, DisplayCategory::Placement));
+        for category in [
+            DisplayCategory::Zone,
+            DisplayCategory::Trace,
+            DisplayCategory::Via,
+            DisplayCategory::Text,
+        ] {
+            assert!(!display.category_visible(layer, category));
+        }
+        assert!(!display.same_label_layout(&original));
+        assert!(display.same_drill_visibility(&original));
+        display.set_primitive(layer, LayerPrimitive::Pads, false);
+        assert!(!display.primitive_visible(layer, LayerPrimitive::Pads));
+        assert!(display.category_visible(layer, DisplayCategory::Placement));
+        assert_eq!(display.layer_primitives, original.layer_primitives);
+        let mut last = LayerVisibility::capture(&display);
+        display.quickview = None;
+        assert_eq!(display, original);
+        last.swap(&mut display);
+        assert!(display.quickview.is_some());
+        display.quickview = None;
+        assert_eq!(display, original);
+    }
+    #[test]
+    fn unrelated_display_changes_keep_layout_and_drill_visibility_caches() {
+        let original = BoardDisplay::default();
+        let mut changed = original.clone();
+        changed.trace_render_mode = TraceRenderMode::Sdf;
+        changed.color_mode = ColorMode::Net;
+        changed.global_opacity = 0.3;
+        changed.filled = false;
+        changed.show_texts = true;
+        changed.show_drawings = false;
+        changed.appearance.set_color(
+            crate::appearance::ColorTarget::Background,
+            Some(crate::appearance::RgbColor([12, 34, 56])),
+        );
+        assert!(original.same_label_layout(&changed));
+        assert!(original.same_drill_visibility(&changed));
+        changed
+            .layer_primitives
+            .insert(LayerId(1), LayerPrimitives::default());
+        assert!(original.same_label_layout(&changed));
+        assert!(original.same_drill_visibility(&changed));
+    }
+    #[test]
+    fn layer_ranking_invalidates_label_budget_but_not_drill_geometry() {
+        let original = BoardDisplay::default();
+        for changed in [
+            BoardDisplay {
+                active_layer: Some(LayerId(2)),
+                ..original.clone()
+            },
+            BoardDisplay {
+                layer_order: vec![LayerId(2), LayerId(1)],
+                ..original.clone()
+            },
+            BoardDisplay {
+                priorities: vec![LayerPriority {
+                    layer: LayerId(2),
+                    category: DisplayCategory::Trace,
+                }],
+                ..original.clone()
+            },
+        ] {
+            assert!(!original.same_label_layout(&changed));
+            assert!(original.same_drill_visibility(&changed));
+        }
+    }
+    #[test]
+    fn semantic_cache_keys_invalidate_only_their_geometry_inputs() {
+        let original = BoardDisplay::default();
+        let mut changed = original.clone();
+        changed.show_drills = false;
+        assert!(original.same_label_layout(&changed));
+        assert!(!original.same_drill_visibility(&changed));
+        changed = original.clone();
+        changed.horizontal_pin_names = true;
+        assert!(!original.same_label_layout(&changed));
+        assert!(original.same_drill_visibility(&changed));
+        changed = original.clone();
+        changed.copper_opacity = 0.5;
+        assert!(!original.same_label_layout(&changed));
+        assert!(original.same_drill_visibility(&changed));
+        changed = original.clone();
+        changed.set_primitive(LayerId(1), LayerPrimitive::Pads, false);
+        assert!(!original.same_label_layout(&changed));
+        assert!(original.same_drill_visibility(&changed));
+        changed.set_primitive(LayerId(1), LayerPrimitive::Vias, false);
+        assert!(!original.same_drill_visibility(&changed));
+        changed = original.clone();
+        changed.hidden_layers.insert(LayerId(1));
+        assert!(!original.same_label_layout(&changed));
+        assert!(!original.same_drill_visibility(&changed));
+    }
     #[test]
     fn label_categories_restore_independently_and_keep_legacy_defaults() {
         let mut display: BoardDisplay =
@@ -551,5 +836,47 @@ mod tests {
         assert!(display.drill_visible(None));
         display.show_drills = false;
         assert!(!display.drill_visible(None));
+    }
+}
+
+#[cfg(test)]
+mod display_reference_tests {
+    use super::*;
+    #[test]
+    fn shadow_preserves_active_layer_and_independent_alpha_inputs() {
+        let mut display = BoardDisplay {
+            active_layer: Some(LayerId(0)),
+            ..Default::default()
+        };
+        display.shadow.enabled = true;
+        assert_eq!(display.layer_brightness(LayerId(0)), 1.0);
+        assert_eq!(display.layer_brightness(LayerId(2)), 0.6);
+        display.shadow.dim_active = true;
+        assert_eq!(display.layer_brightness(LayerId(0)), 0.6);
+        assert_eq!(
+            (display.global_opacity, display.copper_opacity),
+            (1.0, 0.25)
+        );
+        display.active_layer = None;
+        assert_eq!(display.layer_brightness(LayerId(2)), 1.0);
+    }
+    #[test]
+    fn last_visibility_swaps_category_masks_without_changing_colors_or_active_layer() {
+        let mut display = BoardDisplay {
+            active_layer: Some(LayerId(0)),
+            ..Default::default()
+        };
+        display.hidden_layers.insert(LayerId(2));
+        display.set_primitive(LayerId(0), LayerPrimitive::Pads, false);
+        let mut last = LayerVisibility::capture(&display);
+        display.hidden_layers.clear();
+        display.layer_primitives.clear();
+        last.swap(&mut display);
+        assert!(!display.layer_visible(LayerId(2)));
+        assert!(!display.primitive_visible(LayerId(0), LayerPrimitive::Pads));
+        assert_eq!(display.active_layer, Some(LayerId(0)));
+        last.swap(&mut display);
+        assert!(display.layer_visible(LayerId(2)));
+        assert!(display.primitive_visible(LayerId(0), LayerPrimitive::Pads));
     }
 }

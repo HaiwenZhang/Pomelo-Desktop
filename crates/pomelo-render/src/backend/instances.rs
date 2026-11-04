@@ -11,6 +11,19 @@ pub trait InstanceSource: Send + Sync + 'static {
     fn bounds(&self, _index: usize) -> Option<pomelo_core::model::Bounds> {
         None
     }
+    fn filter_kind(&self, _: usize) -> Option<pomelo_core::display::filter::FilterKind> {
+        None
+    }
+    fn filter_parent(&self, _: usize) -> Option<(pomelo_core::display::filter::FilterKind, u64)> {
+        None
+    }
+    fn filter_extent(&self, _: usize) -> Option<f64> {
+        None
+    }
+    fn filter_key(&self, index: usize) -> u64 {
+        let ids = self.selection_ids(index);
+        (u64::from(ids[0]) << 32) | u64::from(ids[2])
+    }
     fn font(&self) -> Option<&crate::text::msdf::MsdfFont> {
         None
     }
@@ -29,6 +42,40 @@ pub trait InstanceSource: Send + Sync + 'static {
 impl InstanceSource for PreparedTracks {
     const COMPACT_TEXT: bool = false;
     type Instance = TraceInstance;
+    fn filter_kind(&self, index: usize) -> Option<pomelo_core::display::filter::FilterKind> {
+        use pomelo_core::display::filter::FilterKind;
+        let flags = self.instances[index].flags[3];
+        if flags & 256 != 0 {
+            Some(FilterKind::Void)
+        } else if flags & 8 != 0 {
+            Some(FilterKind::Copper)
+        } else if flags & 16 != 0 {
+            Some(FilterKind::Pin)
+        } else if flags & 32 != 0 {
+            Some(FilterKind::Via)
+        } else {
+            None
+        }
+    }
+    fn filter_key(&self, index: usize) -> u64 {
+        let i = &self.instances[index];
+        (u64::from(i.ids[0]) << 32)
+            | u64::from(if i.flags[3] & 256 != 0 {
+                i.flags[3] >> 9
+            } else {
+                i.ids[2]
+            })
+    }
+    fn filter_parent(
+        &self,
+        index: usize,
+    ) -> Option<(pomelo_core::display::filter::FilterKind, u64)> {
+        let i = &self.instances[index];
+        (i.flags[3] & 256 != 0).then_some((
+            pomelo_core::display::filter::FilterKind::Copper,
+            (u64::from(i.ids[0]) << 32) | u64::from(i.ids[2]),
+        ))
+    }
     fn instances(&self) -> &[TraceInstance] {
         &self.instances
     }
@@ -48,6 +95,9 @@ impl InstanceSource for PreparedTracks {
     fn selected_object(&self, index: usize) -> pomelo_core::selection::SelectedObject {
         let instance = &self.instances[index];
         let id = pomelo_core::model::ObjectId(instance.ids[0]);
+        if self.placements {
+            return pomelo_core::selection::SelectedObject::Placement(id);
+        }
         if instance.flags[3] & 64 != 0 {
             pomelo_core::selection::SelectedObject::Drawing(id)
         } else if instance.flags[3] & 8 != 0 {
@@ -63,6 +113,13 @@ impl InstanceSource for PreparedTracks {
 }
 impl InstanceSource for crate::text_instances::PreparedTextInstances {
     const COMPACT_TEXT: bool = true;
+    fn filter_kind(&self, _: usize) -> Option<pomelo_core::display::filter::FilterKind> {
+        Some(pomelo_core::display::filter::FilterKind::Text)
+    }
+    fn filter_extent(&self, index: usize) -> Option<f64> {
+        let n = f32::from_bits(self.instances[index].flags[2]);
+        (n > 0.0).then_some(f64::from(n))
+    }
     type Instance = crate::text_instances::TextInstance;
     fn instances(&self) -> &[Self::Instance] {
         &self.instances
@@ -107,6 +164,14 @@ impl InstanceSource for crate::text_instances::PreparedTextInstances {
 impl InstanceSource for crate::text::msdf::PreparedGlyphs {
     const COMPACT_TEXT: bool = false;
     const MSDF: bool = true;
+    fn filter_kind(&self, index: usize) -> Option<pomelo_core::display::filter::FilterKind> {
+        (self.instances[index].ids[1] == pomelo_core::display::DisplayCategory::Text as u32)
+            .then_some(pomelo_core::display::filter::FilterKind::Text)
+    }
+    fn filter_extent(&self, index: usize) -> Option<f64> {
+        let n = self.instances[index].low[3];
+        (n > 0.0).then_some(f64::from(n))
+    }
     type Instance = crate::text::msdf::GlyphInstance;
     fn instances(&self) -> &[Self::Instance] {
         &self.instances

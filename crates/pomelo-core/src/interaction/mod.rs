@@ -1,15 +1,14 @@
 //! Board camera uses viewport-local logical pixels. DPI belongs to the host.
 pub mod component_reference;
+pub mod membership;
 pub mod picking;
 pub mod picking_index;
 pub mod selection;
-pub(crate) mod selection_bounds;
 pub(crate) mod spatial;
-pub(crate) mod zone_index;
 
 use crate::model::{Bounds, Point};
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Camera {
     pub center: Point,
@@ -195,6 +194,9 @@ impl Camera {
     }
 }
 
+/// Area zoom stops where the locate rule does, at 400 logical pixels per millimetre.
+const MAX_AREA_ZOOM: f64 = 400.0;
+
 /// Per-document camera state, independent of GPUI and display DPI.
 #[derive(Debug, Default)]
 pub struct ViewportNavigation {
@@ -280,6 +282,30 @@ impl ViewportNavigation {
                 * 0.72,
             flipped: self.camera.flipped,
         };
+        if !next.is_renderable() {
+            return false;
+        }
+        self.camera = next;
+        self.initialized = true;
+        true
+    }
+
+    /// Zoom so a user-drawn board rectangle fills the canvas; keeps the fit baseline
+    /// and orientation. Degenerate rectangles are rejected.
+    pub fn zoom_to(&mut self, area: Bounds) -> bool {
+        if !area.is_valid()
+            || area.max.x - area.min.x <= 0.0
+            || area.max.y - area.min.y <= 0.0
+            || self.size.x <= 0.0
+            || self.size.y <= 0.0
+        {
+            return false;
+        }
+        let mut next = self.camera;
+        if !next.fit(area, self.size.x, self.size.y, 0.0) {
+            return false;
+        }
+        next.pixels_per_mm = next.pixels_per_mm.min(MAX_AREA_ZOOM);
         if !next.is_renderable() {
             return false;
         }

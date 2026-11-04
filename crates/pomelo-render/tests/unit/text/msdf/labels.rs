@@ -332,3 +332,519 @@ fn automatic_equal_axis_pads_keep_source_pin_orientation() {
         assert!((f64::from(glyph.rotation[1]) - angle.sin()).abs() < 1e-6);
     }
 }
+
+#[test]
+fn multilayer_names_overlap_by_default_and_active_scope_is_explicit() {
+    let LabelIndex { scene, font, .. } = index(0.0);
+    let mut scene = Arc::try_unwrap(scene).ok().unwrap();
+    let mut second = scene.pins[0].pads[0].clone();
+    second.layer = LayerId(1);
+    scene.pins[0].pads.push(second);
+    let index = LabelIndex::build(Arc::new(scene), font, &CancellationToken::default()).unwrap();
+    let mut display = BoardDisplay {
+        active_layer: Some(LayerId(1)),
+        ..Default::default()
+    };
+    let layout = |display: &BoardDisplay| {
+        index
+            .layout(
+                Camera {
+                    center: Point::new(2.0, 3.0),
+                    pixels_per_mm: 100.0,
+                    flipped: false,
+                },
+                500.0,
+                500.0,
+                display,
+                display.label_options,
+                &CancellationToken::default(),
+            )
+            .unwrap()
+    };
+    let all = layout(&display);
+    assert_eq!(
+        all.instances.len(),
+        6,
+        "coincident labels from two visible layers are retained"
+    );
+    display.active_layer_labels_only = true;
+    let active = layout(&display);
+    assert_eq!(active.instances.len(), 3);
+    assert!(active.instances.iter().all(|g| g.ids[2] == 1));
+    display.hidden_layers.insert(LayerId(1));
+    assert!(
+        layout(&display).instances.is_empty(),
+        "active scope must never reveal a hidden layer"
+    );
+}
+
+#[test]
+fn dense_visible_names_keep_complete_words_at_the_glyph_budget() {
+    let LabelIndex { scene, font, .. } = index(0.0);
+    let mut scene = Arc::try_unwrap(scene).ok().unwrap();
+    let pin = scene.pins[0].clone();
+    scene.pins = (0..22_000)
+        .map(|i| {
+            let mut pin = pin.clone();
+            pin.id = ObjectId(i + 1);
+            pin
+        })
+        .collect();
+    let index = LabelIndex::build(Arc::new(scene), font, &CancellationToken::default()).unwrap();
+    let display = BoardDisplay::default();
+    let labels = index
+        .layout(
+            Camera {
+                center: Point::new(2.0, 3.0),
+                pixels_per_mm: 100.0,
+                flipped: false,
+            },
+            500.0,
+            500.0,
+            &display,
+            display.label_options,
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    assert_eq!(labels.instances.len(), 65_535);
+    assert!(
+        labels
+            .instances
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|word| word.iter().all(|g| g.ids == word[0].ids))
+    );
+}
+
+#[test]
+fn copper_names_use_three_view_relative_placements_and_a_ten_pixel_cutoff() {
+    use pomelo_core::{
+        copper::{CopperMesh, MeshLimits},
+        model::{Zone, ZoneKind},
+    };
+    let LabelIndex { scene, font, .. } = index(0.0);
+    let mut scene = Arc::try_unwrap(scene).ok().unwrap();
+    scene.pins.clear();
+    let ring = vec![
+        Point::new(-10.0, -10.0),
+        Point::new(10.0, -10.0),
+        Point::new(10.0, 10.0),
+        Point::new(-10.0, 10.0),
+    ];
+    scene.zones = vec![Zone {
+        id: ObjectId(70),
+        layer: LayerId(0),
+        net: NetId(1),
+        kind: ZoneKind::Dynamic,
+        paths: vec![],
+        mesh: CopperMesh::build(
+            &[ring],
+            &[],
+            &MeshLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap(),
+    }];
+    let index = LabelIndex::build(Arc::new(scene), font, &CancellationToken::default()).unwrap();
+    let display = BoardDisplay::default();
+    for (scale, count) in [(1.0, 0), (100.0, 9), (1000.0, 9)] {
+        let labels = index
+            .layout(
+                Camera {
+                    center: Point::default(),
+                    pixels_per_mm: scale,
+                    flipped: false,
+                },
+                1000.0,
+                1000.0,
+                &display,
+                display.label_options,
+                &CancellationToken::default(),
+            )
+            .unwrap();
+        assert_eq!(labels.instances.len(), count, "scale={scale}");
+        assert!(
+            labels
+                .instances
+                .iter()
+                .all(|g| g.ids[1] == Category::Zone as u32)
+        );
+    }
+}
+
+#[test]
+fn active_scope_filters_track_copper_and_via_names_not_just_pin_pads() {
+    use pomelo_core::{
+        copper::{CopperMesh, MeshLimits},
+        model::{Segment, Via, Zone, ZoneKind},
+    };
+    let LabelIndex { scene, font, .. } = index(0.0);
+    let mut scene = Arc::try_unwrap(scene).ok().unwrap();
+    scene.pins.clear();
+    scene.segments = vec![Segment {
+        id: ObjectId(20),
+        track_id: ObjectId(20),
+        layer: LayerId(1),
+        net: NetId(1),
+        a: Point::new(-4.0, 0.0),
+        b: Point::new(4.0, 0.0),
+        width: 1.0,
+        arc: None,
+        bond_wire: None,
+    }];
+    scene.vias = vec![Via {
+        id: ObjectId(30),
+        net: NetId(1),
+        at: Point::default(),
+        drill: 0.2,
+        drill_shape: DrillShape {
+            width: 0.2,
+            height: 0.2,
+            plated: true,
+        },
+        padstack: ObjectId(31),
+        padstack_name: String::new(),
+        start_layer: Some(LayerId(1)),
+        end_layer: Some(LayerId(2)),
+        pads: Arc::from([Pad::circle(LayerId(1), 1.0)]),
+        backdrill: None,
+        stackup_region: None,
+        angle: 0.0,
+        mirrored: false,
+        finger: None,
+    }];
+    let ring = vec![
+        Point::new(-5.0, -5.0),
+        Point::new(5.0, -5.0),
+        Point::new(5.0, 5.0),
+        Point::new(-5.0, 5.0),
+    ];
+    scene.zones = vec![Zone {
+        id: ObjectId(40),
+        layer: LayerId(1),
+        net: NetId(1),
+        kind: ZoneKind::Dynamic,
+        paths: vec![],
+        mesh: CopperMesh::build(
+            &[ring],
+            &[],
+            &MeshLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap(),
+    }];
+    let index = LabelIndex::build(Arc::new(scene), font, &CancellationToken::default()).unwrap();
+    let mut display = BoardDisplay {
+        active_layer: Some(LayerId(0)),
+        ..Default::default()
+    };
+    display.label_options.via_names = true;
+    let layout = |display: &BoardDisplay| {
+        index
+            .layout(
+                Camera {
+                    center: Point::default(),
+                    pixels_per_mm: 100.0,
+                    flipped: false,
+                },
+                1000.0,
+                1000.0,
+                display,
+                display.label_options,
+                &CancellationToken::default(),
+            )
+            .unwrap()
+    };
+    let all = layout(&display);
+    for category in [Category::Trace, Category::Zone, Category::Drill] {
+        assert!(all.instances.iter().any(|g| g.ids[1] == category as u32));
+    }
+    display.active_layer_labels_only = true;
+    assert!(layout(&display).instances.is_empty());
+    display.active_layer = Some(LayerId(1));
+    assert_eq!(layout(&display).instances.len(), all.instances.len());
+}
+
+#[test]
+fn foreground_names_win_when_dense_lower_layers_exhaust_the_word_budget() {
+    use pomelo_core::model::Segment;
+    let LabelIndex { scene, font, .. } = index(0.0);
+    let mut scene = Arc::try_unwrap(scene).ok().unwrap();
+    let mut pin = scene.pins[0].clone();
+    pin.pads[0].layer = LayerId(1);
+    scene.pins = (0..22_000)
+        .map(|i| {
+            let mut p = pin.clone();
+            p.id = ObjectId(i + 1);
+            p
+        })
+        .collect();
+    scene.segments = vec![Segment {
+        id: ObjectId(99_999),
+        track_id: ObjectId(99_999),
+        layer: LayerId(0),
+        net: NetId(1),
+        a: Point::new(-4.0, 0.0),
+        b: Point::new(4.0, 0.0),
+        width: 1.0,
+        arc: None,
+        bond_wire: None,
+    }];
+    let index = LabelIndex::build(Arc::new(scene), font, &CancellationToken::default()).unwrap();
+    let display = BoardDisplay {
+        active_layer: Some(LayerId(0)),
+        ..Default::default()
+    };
+    let labels = index
+        .layout(
+            Camera {
+                center: Point::default(),
+                pixels_per_mm: 100.0,
+                flipped: false,
+            },
+            1000.0,
+            1000.0,
+            &display,
+            display.label_options,
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    assert!(labels.instances.iter().any(|g| g.ids[0] == 99_999));
+    assert!(labels.instances.len() <= 65_536);
+    assert!(
+        labels
+            .instances
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|word| word.iter().all(|g| g.ids == word[0].ids))
+    );
+}
+
+#[test]
+fn embedded_name_filter_does_not_hide_independent_drill_span_labels() {
+    use pomelo_core::model::{Layer, LayerFunction, Via};
+    let LabelIndex { scene, font, .. } = index(0.0);
+    let mut scene = Arc::try_unwrap(scene).ok().unwrap();
+    scene.pins.clear();
+    scene.layers = (0..2)
+        .map(|id| Layer {
+            id: LayerId(id),
+            name: format!("L{id}"),
+            function: LayerFunction::Conductor,
+            color: String::new(),
+            source_flags: None,
+        })
+        .collect();
+    scene.vias = vec![Via {
+        id: ObjectId(21),
+        net: NetId(1),
+        at: Point::default(),
+        drill: 0.2,
+        drill_shape: DrillShape {
+            width: 0.2,
+            height: 0.2,
+            plated: true,
+        },
+        padstack: ObjectId(22),
+        padstack_name: String::new(),
+        start_layer: Some(LayerId(0)),
+        end_layer: Some(LayerId(1)),
+        pads: Arc::from([Pad::circle(LayerId(0), 1.0), Pad::circle(LayerId(1), 1.0)]),
+        backdrill: None,
+        stackup_region: None,
+        angle: 0.0,
+        mirrored: false,
+        finger: None,
+    }];
+    let index = LabelIndex::build(Arc::new(scene), font, &CancellationToken::default()).unwrap();
+    let mut display = BoardDisplay::default();
+    display.label_options.via_names = true;
+    let layout = |display: &BoardDisplay| {
+        index
+            .layout(
+                Camera {
+                    center: Point::default(),
+                    pixels_per_mm: 50.0,
+                    flipped: false,
+                },
+                1000.0,
+                1000.0,
+                display,
+                display.label_options,
+                &CancellationToken::default(),
+            )
+            .unwrap()
+    };
+    assert_eq!(layout(&display).instances.len(), 6);
+    display.object_filter.minimum_pixels = 20;
+    let spans = layout(&display);
+    assert_eq!(spans.instances.len(), 3);
+    assert!(
+        spans
+            .instances
+            .iter()
+            .all(|g| (g.rotation[3] as u32) & 1 == 1)
+    );
+    display.label_options.thru_labels = false;
+    assert!(layout(&display).instances.is_empty());
+}
+
+#[test]
+fn placement_references_follow_body_zoom_side_and_flip_without_decluttering() {
+    use pomelo_core::{
+        display::PlacementQuickview,
+        model::{ComponentBody, ComponentPlacement, ComponentRegion, Segment},
+    };
+    let LabelIndex { scene, font, .. } = index(0.0);
+    let mut scene = Arc::try_unwrap(scene).ok().unwrap();
+    scene.pins.clear();
+    let at = Point::new(20.0, -30.0);
+    let angle = 0.6_f64;
+    let world = |(x, y): (f64, f64)| {
+        Point::new(
+            at.x + x * angle.cos() - y * angle.sin(),
+            at.y + x * angle.sin() + y * angle.cos(),
+        )
+    };
+    let points = [(-3.0, -1.0), (3.0, -1.0), (3.0, 1.0), (-3.0, 1.0)];
+    let component = |id, layer| ComponentPlacement {
+        id: ObjectId(id),
+        source_reference: None,
+        reference: "GND".into(),
+        at,
+        angle,
+        mirrored: layer == LayerId(1),
+        pins: vec![],
+        body: Some(ComponentBody {
+            layer,
+            regions: vec![ComponentRegion {
+                source: ObjectId(id + 100),
+                source_layer: LayerId::allegro_drawing(0xfb09),
+                paths: vec![
+                    points
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &p)| Segment {
+                            id: ObjectId(id + 100),
+                            track_id: ObjectId(id + 100),
+                            layer,
+                            net: NetId(0),
+                            a: world(p),
+                            b: world(points[(i + 1) % points.len()]),
+                            width: 0.0,
+                            arc: None,
+                            bond_wire: None,
+                        })
+                        .collect(),
+                ],
+            }],
+        }),
+    };
+    scene.components = vec![
+        component(80, LayerId(0)),
+        component(81, LayerId(0)),
+        component(82, LayerId(1)),
+    ];
+    let mut missing = component(83, LayerId(0));
+    missing.body = None;
+    scene.components.push(missing);
+    let index = LabelIndex::build(Arc::new(scene), font, &CancellationToken::default()).unwrap();
+    let mut display = BoardDisplay {
+        show_texts: false,
+        active_layer: Some(LayerId(1)),
+        active_layer_labels_only: true,
+        quickview: Some(PlacementQuickview {
+            layer: LayerId(0),
+            pins: false,
+        }),
+        ..Default::default()
+    };
+    display.hidden_layers.extend([LayerId(0), LayerId(1)]);
+    let layout = |display: &BoardDisplay, scale, flipped| {
+        index
+            .layout(
+                Camera {
+                    center: at,
+                    pixels_per_mm: scale,
+                    flipped,
+                },
+                20_000.0,
+                20_000.0,
+                display,
+                display.label_options,
+                &CancellationToken::default(),
+            )
+            .unwrap()
+    };
+    assert!(layout(&display, 2.0, false).instances.is_empty());
+    for flipped in [false, true] {
+        for scale in [20.0, 100.0, 1000.0] {
+            let labels = layout(&display, scale, flipped);
+            assert_eq!(
+                labels.instances.len(),
+                6,
+                "both overlapping top references survive"
+            );
+            for (i, g) in labels.instances.iter().enumerate() {
+                assert_eq!(
+                    g.ids,
+                    [80 + (i / 3) as u32, Category::Placement as u32, 0, 0]
+                );
+                assert!((f64::from(g.xywh[3]) - 1.3).abs() < 1e-5);
+                assert_eq!(g.rotation[2], if flipped { -1.0 } else { 1.0 });
+                assert!(
+                    g.rotation[0] >= 0.0,
+                    "reference remains readable after flip"
+                );
+            }
+            // World-space size stays fixed, so the on-screen text has no small pixel cap.
+            if scale == 1000.0 {
+                assert!(f64::from(labels.instances[0].xywh[3]) * scale > 1000.0);
+            }
+        }
+    }
+    display.quickview = Some(PlacementQuickview {
+        layer: LayerId(1),
+        pins: false,
+    });
+    let bottom = layout(&display, 100.0, true);
+    assert_eq!(bottom.instances.len(), 3);
+    assert!(
+        bottom
+            .instances
+            .iter()
+            .all(|g| g.ids[0] == 82 && g.ids[2] == 1)
+    );
+    display.quickview = None;
+    assert!(layout(&display, 100.0, false).instances.is_empty());
+}
+
+#[test]
+fn near_square_placement_prefers_horizontal_but_narrow_body_keeps_vertical() {
+    let angle = std::f64::consts::FRAC_PI_2;
+    let (_, square) = placement_label_fit(17.0, 16.25, angle, 3.0);
+    assert!(
+        square.sin().abs() < 1e-10,
+        "J3302's almost square body keeps a horizontal name"
+    );
+    let (_, narrow) = placement_label_fit(10.4, 8.02, angle, 3.0);
+    assert!(
+        narrow.cos().abs() < 1e-10,
+        "J3301's narrower body retains its vertical name"
+    );
+    let (_, rotated) = placement_label_fit(6.0, 2.0, 0.6, 3.0);
+    assert!((rotated - 0.6).abs() < 1e-10);
+}
+
+#[test]
+fn imported_vertical_angles_do_not_reverse_the_reading_direction_at_one_ulp() {
+    let source = 90_000_f64 * std::f64::consts::TAU / 360_000.0;
+    for angle in [source, std::f64::consts::FRAC_PI_2, source - 1e-15] {
+        assert_eq!(readable(angle), std::f64::consts::FRAC_PI_2);
+        assert_eq!(readable(-angle), -std::f64::consts::FRAC_PI_2);
+    }
+    assert_eq!(readable(std::f64::consts::PI), 0.0);
+    assert!((readable(2.0) - (2.0 - std::f64::consts::PI)).abs() < 1e-12);
+}

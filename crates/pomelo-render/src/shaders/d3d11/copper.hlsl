@@ -5,6 +5,7 @@ cbuffer Frame : register(b0) {
     float4 camera; float4 view; float4 color; float4 rectangle;
     uint4 pattern_mask[4];
     float4 inherited;
+    uint4 material_pattern[4];
 };
 float2 ds_add(float2 a, float2 b) {
     precise float sum = a.x + b.x;
@@ -79,4 +80,9 @@ float4 fragment_color(float4 position) {
     return fill;
 }
 
-float4 copper_fragment(float4 position : SV_Position) : SV_Target { float4 result = fragment_color(position); return float4(result.rgb, result.a * inherited.x); }
+float material_ink(float2 p) {
+    uint2 cell=uint2(max(floor((p-canvas.xy)/viewport.z),0.0))&15u;
+    uint row=material_pattern[cell.y>>2u][cell.y&3u];return float((row>>cell.x)&1u);
+}
+float4 copper_fragment(float4 position : SV_Position) : SV_Target { float4 result = fragment_color(position); return float4(result.rgb * inherited.y, result.a * inherited.x * material_ink(position.xy)); }
+

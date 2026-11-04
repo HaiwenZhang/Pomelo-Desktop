@@ -1,5 +1,6 @@
 //! Footprint and pin placement, including source-grid rounding before millimetre conversion.
 
+mod body;
 mod routing;
 mod via;
 
@@ -214,6 +215,7 @@ impl<'a> PlacementDecoder<'a> {
         self.budget.check(charge, origin)?;
         let mut output = PlacedFootprint {
             component: ComponentPlacement {
+                body: None,
                 id: ObjectId(key.0),
                 source_reference,
                 reference: reference.to_owned(),
@@ -285,6 +287,7 @@ impl<'a> PlacementDecoder<'a> {
                 Ok(())
             },
         )?;
+        output.component.body = self.component_body(&fp, context)?;
         context.check_cancelled()?;
         Ok(output)
     }

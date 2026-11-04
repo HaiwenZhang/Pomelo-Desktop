@@ -64,9 +64,7 @@ impl BoardViewport {
             .timer(std::time::Duration::from_millis(16));
         let worker = cx.background_spawn(async move {
             delay.await;
-            if worker_cancel.is_cancelled() {
-                return Err(pomelo_core::geometry::PathError::Cancelled);
-            }
+            worker_cancel.check()?;
             let hits = index.query_visible_objects(
                 query,
                 camera.pixels_per_mm,

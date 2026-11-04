@@ -33,7 +33,7 @@ pub(crate) struct Device<'a> {
     active: Cell<bool>,
 }
 impl<'a> Device<'a> {
-    pub fn new(context: &gpui_apple::MetalPaintContext<'a>) -> Self {
+    pub fn new(context: &gpui::MetalPaintContext<'a>) -> Self {
         Self {
             raw: context.device,
             command_buffer: context.command_buffer,
@@ -314,7 +314,7 @@ impl<'a> Device<'a> {
             height: (bottom - top) as u64,
         });
         let mut uniforms = draw.uniforms.to_vec();
-        uniforms.extend_from_slice(bytemuck::cast_slice(&[self.opacity, 0.0, 0.0, 0.0]));
+        uniforms.extend_from_slice(bytemuck::bytes_of(&draw.material_uniforms(self.opacity)));
         encoder.set_vertex_bytes(0, uniforms.len() as u64, uniforms.as_ptr().cast());
         encoder.set_fragment_bytes(0, uniforms.len() as u64, uniforms.as_ptr().cast());
         encoder.set_vertex_buffer(1, Some(&draw.vertices.raw), 0);

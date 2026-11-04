@@ -186,6 +186,7 @@ mod tests {
             .prepare_reserved(
                 |_| {
                     Ok(crate::tracks::PreparedTracks {
+                        placements: false,
                         instances: vec![crate::tracks::TraceInstance::zeroed()],
                         batches: vec![],
                         memory_reservation: None,

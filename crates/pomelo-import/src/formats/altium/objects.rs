@@ -485,6 +485,7 @@ pub(super) fn pads(
                     at
                 };
                 output.scene.components.push(ComponentPlacement {
+                    body: None,
                     id: ObjectId(0x7a000000 + component as u32),
                     source_reference: Some(ObjectId(component as u32)),
                     reference: reference.clone(),

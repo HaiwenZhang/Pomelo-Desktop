@@ -42,20 +42,28 @@ fn real_board_search_counts_and_all_target_bounds() {
         .chain(board.scene.pins.iter().map(|v| v.net))
         .chain(board.scene.vias.iter().map(|v| v.net))
         .chain(board.scene.zones.iter().map(|v| v.net))
+        .chain(board.scene.drawings.iter().map(|v| v.net))
     {
         if net.0 != 0 {
             *counts.entry(net).or_insert(0_usize) += 1;
         }
     }
+    // Locate exactly as the viewport does, through the document's picking index.
+    let scene = std::sync::Arc::new(board.scene);
+    let picking = pomelo_core::picking_index::BoardPickingIndex::build(
+        std::sync::Arc::clone(&scene),
+        scene.segments.len(),
+        &cancel,
+    )
+    .unwrap();
     let mut targets = Vec::new();
     for entry in index.entries() {
         if let SearchTarget::Net(net) = entry.target {
             assert_eq!(entry.count, counts[&net]);
         }
         let started = Instant::now();
-        let bounds = entry
-            .target
-            .bounds(&board.scene, &cancel)
+        let bounds = picking
+            .selection_bounds(entry.target.into(), &cancel)
             .unwrap()
             .expect("source target geometry");
         let locate_ms = started.elapsed().as_secs_f64() * 1000.0;

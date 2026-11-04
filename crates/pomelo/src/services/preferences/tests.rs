@@ -162,6 +162,7 @@ fn view_entry(path: PathBuf) -> ViewEntry {
                 pomelo_core::model::NetId(7),
             )),
             selection_anchor: None,
+            review: Default::default(),
         },
     }
 }
@@ -779,4 +780,58 @@ fn invalid_preference_returns_a_translatable_diagnostic_without_overwriting_sour
             .all(|locale| error.message.render(locale).is_ok())
     );
     assert_eq!(fs::read(&store.0.path).unwrap(), original);
+}
+
+#[test]
+fn view_updates_beyond_the_recent_limit_keep_the_first_entries_in_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = ViewStore(JsonFileStore {
+        path: directory.path().join("views.json"),
+    });
+    let older = view_entry(directory.path().join("older.brd"));
+    store.save_updates(vec![older.clone()]).unwrap();
+    let entries: Vec<_> = (0..RECENT_LIMIT + 5)
+        .map(|index| view_entry(directory.path().join(format!("board-{index}.brd"))))
+        .collect();
+    store.save_updates(entries.clone()).unwrap();
+    let saved = store.load().unwrap();
+    assert_eq!(saved.len(), RECENT_LIMIT);
+    assert_eq!(
+        saved.iter().map(|entry| &entry.path).collect::<Vec<_>>(),
+        entries[..RECENT_LIMIT]
+            .iter()
+            .map(|entry| &entry.path)
+            .collect::<Vec<_>>()
+    );
+    assert!(saved.iter().all(|entry| entry.path != older.path));
+}
+
+#[test]
+fn view_update_batch_keeps_its_order_ahead_of_previous_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = ViewStore(JsonFileStore {
+        path: directory.path().join("views.json"),
+    });
+    let [a, b, c] = ["a.brd", "b.brd", "c.brd"].map(|name| view_entry(directory.path().join(name)));
+    store.save_updates(vec![c.clone()]).unwrap();
+    store
+        .save_updates(vec![a.clone(), b.clone(), c.clone()])
+        .unwrap();
+    let paths: Vec<_> = store
+        .load()
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
+    assert_eq!(paths, [a.path, b.path, c.path]);
+}
+
+#[test]
+fn view_update_batch_still_rejects_duplicate_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = ViewStore(JsonFileStore {
+        path: directory.path().join("views.json"),
+    });
+    let entry = view_entry(directory.path().join("a.brd"));
+    assert!(store.save_updates(vec![entry.clone(), entry]).is_err());
 }

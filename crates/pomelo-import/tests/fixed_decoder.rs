@@ -3,7 +3,7 @@ use pomelo_import::{
     ImportContext, ImportError, TextEncoding,
     formats::allegro::{
         decoder::{
-            RecordDecoder,
+            DecodeLimits, RecordDecoder,
             fixed::{FixedRecord, InlineOrReference},
         },
         header::BrdHeader,
@@ -45,6 +45,9 @@ fn fixture(version: u16, kind: u8, size: usize) -> (Vec<u8>, RecordSpan) {
     let key = if kind == 0x35 { 0 } else { u32::MAX };
     if kind != 0x35 {
         put(&mut bytes, OFFSET + 4, key);
+    }
+    if kind == 0x37 {
+        put(&mut bytes, OFFSET + 16, 100);
     }
     (
         bytes,
@@ -360,4 +363,70 @@ fn every_fixed_layout_consumes_exact_declared_boundary_in_all_supported_versions
             );
         }
     }
+}
+
+#[test]
+fn pointer_arrays_preserve_declared_capacity_instead_of_a_fixed_hundred_words() {
+    for version in [152, 166, 174, 180, 181, 251, 261] {
+        for capacity in [0, 1, 100, 4096] {
+            let header_size = if version >= 174 { 32 } else { 28 };
+            let (mut bytes, span) = fixture(version, 0x37, header_size + capacity * 4);
+            put(&mut bytes, OFFSET + 16, capacity as u32);
+            put(&mut bytes, OFFSET + 20, capacity.min(1) as u32);
+            if capacity > 0 {
+                put(
+                    &mut bytes,
+                    OFFSET + header_size + (capacity - 1) * 4,
+                    u32::MAX,
+                );
+            }
+            let FixedRecord::PointerArray(array) = decode(&bytes, &span).unwrap() else {
+                panic!("expected pointer array");
+            };
+            assert_eq!(array.ptrs.len(), capacity, "version={version}");
+            assert_eq!(
+                array.ptrs.last().copied(),
+                (capacity > 0).then_some(u32::MAX)
+            );
+        }
+    }
+}
+
+#[test]
+fn pointer_array_decode_limits_apply_before_payload_allocation() {
+    let (mut bytes, span) = fixture(181, 0x37, 32 + 4096 * 4);
+    put(&mut bytes, OFFSET + 16, 4096);
+    let header = BrdHeader::read(&bytes, TextEncoding::Utf8).unwrap();
+    let token = CancellationToken::default();
+    let context = ImportContext {
+        cancellation: &token,
+        progress: &|_| {},
+    };
+    let decoder = RecordDecoder::new(&bytes, &header, TextEncoding::Utf8);
+    assert!(matches!(
+        decoder.decode(
+            &span,
+            &DecodeLimits {
+                max_entries: 4095,
+                ..Default::default()
+            },
+            &context,
+        ),
+        Err(ImportError::InvalidRecord {
+            field: "COLLECTION_COUNT",
+            value: 4096,
+            ..
+        })
+    ));
+    assert!(matches!(
+        decoder.decode(
+            &span,
+            &DecodeLimits {
+                max_allocation_bytes: 16,
+                ..Default::default()
+            },
+            &context,
+        ),
+        Err(ImportError::DecodeLimit { .. })
+    ));
 }

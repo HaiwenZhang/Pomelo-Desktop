@@ -413,7 +413,7 @@ impl PreparedGlyphs {
                                 corner(0.0, v[3]),
                             ],
                         });
-                    result.instances.push(GlyphInstance::packet(
+                    let mut glyph = GlyphInstance::packet(
                         v,
                         [
                             text.id.0,
@@ -421,7 +421,9 @@ impl PreparedGlyphs {
                             text.layer.0,
                             0,
                         ],
-                    )?);
+                    )?;
+                    glyph.low[3] = text.height as f32;
+                    result.instances.push(glyph);
                 }
             }
             result.objects.push(text.id);

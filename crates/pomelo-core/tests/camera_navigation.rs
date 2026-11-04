@@ -109,3 +109,36 @@ fn invalid_fit_or_focus_does_not_replace_a_valid_view() {
     assert_eq!(view.camera().pixels_per_mm, previous.pixels_per_mm);
     assert_eq!(view.zoom_percent(), 100.0);
 }
+
+#[test]
+fn area_zoom_fills_the_canvas_keeps_orientation_and_rejects_degenerate_areas() {
+    let board = Bounds {
+        min: Point::default(),
+        max: Point::new(100.0, 80.0),
+    };
+    let mut view = ViewportNavigation::default();
+    assert!(view.resize(board, 800.0, 600.0));
+    view.flip();
+    let area = Bounds {
+        min: Point::new(10.0, 10.0),
+        max: Point::new(30.0, 20.0),
+    };
+    assert!(view.zoom_to(area));
+    let camera = view.camera();
+    assert!(camera.flipped);
+    assert_eq!(camera.center, Point::new(20.0, 15.0));
+    // 20 mm wide into 800 px and 10 mm tall into 600 px: width limits at 40 px/mm.
+    assert_eq!(camera.pixels_per_mm, 40.0);
+    let line = Bounds {
+        min: Point::new(1.0, 1.0),
+        max: Point::new(5.0, 1.0),
+    };
+    assert!(!view.zoom_to(line));
+    assert_eq!(view.camera(), camera);
+    let tiny = Bounds {
+        min: Point::new(1.0, 1.0),
+        max: Point::new(1.0001, 1.0001),
+    };
+    assert!(view.zoom_to(tiny));
+    assert_eq!(view.camera().pixels_per_mm, 400.0);
+}

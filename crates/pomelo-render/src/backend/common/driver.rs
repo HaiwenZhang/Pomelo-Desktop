@@ -40,6 +40,9 @@ impl StencilMode {
 }
 pub(crate) struct Draw<'a, B = Buffer, A = Atlas> {
     pub uniforms: &'a [u8],
+    pub brightness: f32,
+    pub pixel_filter: [f32; 2],
+    pub pattern_mask: [u32; 16],
     pub vertices: &'a B,
     pub indices: Option<&'a B>,
     pub start: u32,
@@ -56,5 +59,29 @@ pub(crate) struct StencilScope<'a> {
 impl Drop for StencilScope<'_> {
     fn drop(&mut self) {
         self.active.set(self.previous);
+    }
+}
+
+/// One shared tail layout for all native drivers; keep pixel filters and patterns
+/// out of per-backend packing code so the platform paths cannot silently diverge.
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub(crate) struct MaterialUniforms {
+    pub inherited: [f32; 4],
+    pub pattern_mask: [u32; 16],
+}
+const _: () = assert!(size_of::<MaterialUniforms>() == 80);
+const _: () = assert!(std::mem::offset_of!(MaterialUniforms, pattern_mask) == 16);
+impl<B, A> Draw<'_, B, A> {
+    pub fn material_uniforms(&self, opacity: f32) -> MaterialUniforms {
+        MaterialUniforms {
+            inherited: [
+                opacity,
+                self.brightness,
+                self.pixel_filter[0],
+                self.pixel_filter[1],
+            ],
+            pattern_mask: self.pattern_mask,
+        }
     }
 }

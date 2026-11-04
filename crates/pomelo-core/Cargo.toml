@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+bytemuck.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 rust-i18n.workspace = true

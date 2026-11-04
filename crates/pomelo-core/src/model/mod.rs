@@ -29,15 +29,59 @@ id!(LayerId);
 id!(NetId);
 id!(ObjectId);
 
+/// Layer IDs are partitioned into numeric ranges. IDs are persisted in view
+/// state, so readers must keep using these ranges rather than renumbering:
+///
+/// | Range | Layers |
+/// |---|---|
+/// | `0..0x10000` | copper, in stack order |
+/// | `0x10000..0x20000` | Allegro class/subclass drawing layers (`0x10000 + (class << 8 \| subclass)`) |
+/// | `0x20000..0x30000` | bond/die layers and Altium/KiCad graphic layers, per reader |
+/// | `0x30000..` | ODB++ graphic layers |
 impl LayerId {
     /// Temporary path edges have no physical layer until their owner assigns one.
     pub const UNASSIGNED: Self = Self(u32::MAX);
-    pub const BOND_TOP: Self = Self(0x20000);
-    pub const BOND_WIRE_TOP: Self = Self(0x20001);
-    pub const DIMENSION: Self = Self(0x1f901);
+    pub const BOND_TOP: Self = Self::special(0);
+    pub const BOND_WIRE_TOP: Self = Self::special(1);
+    pub const DIMENSION: Self = Self::allegro_drawing(0xf901);
+    const ALLEGRO_DRAWING_BASE: u32 = 0x10000;
+    const SPECIAL_BASE: u32 = 0x20000;
+    const ODB_GRAPHIC_BASE: u32 = 0x30000;
+
+    /// Allegro drawing layer for a `class << 8 | subclass` pair.
+    pub const fn allegro_drawing(class_subclass: u16) -> Self {
+        Self(Self::ALLEGRO_DRAWING_BASE + class_subclass as u32)
+    }
+    /// Format-defined non-copper layer `index` (bond/die, Altium and KiCad graphics).
+    pub const fn special(index: u32) -> Self {
+        Self(Self::SPECIAL_BASE + index)
+    }
+    /// ODB++ graphic layer `index`, in matrix order.
+    pub const fn odb_graphic(index: u32) -> Self {
+        Self(Self::ODB_GRAPHIC_BASE + index)
+    }
+    /// Conductor layers; everything else is annotation or special geometry.
+    pub const fn is_copper(self) -> bool {
+        self.0 < Self::ALLEGRO_DRAWING_BASE
+    }
+    /// Bond/die and reader-specific graphic layers, and every range after them.
+    pub const fn is_special(self) -> bool {
+        self.0 >= Self::SPECIAL_BASE
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    bytemuck::Pod,
+    bytemuck::Zeroable,
+)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -51,28 +95,41 @@ impl Point {
     pub fn distance(self, other: Self) -> f64 {
         crate::geometry::web_hypot(self.x - other.x, self.y - other.y)
     }
+
+    pub fn is_finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite()
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Serialize, Deserialize, bytemuck::Pod, bytemuck::Zeroable,
+)]
 pub struct Bounds {
     pub min: Point,
     pub max: Point,
 }
 
 impl Bounds {
+    /// Returns `None` for an empty input or when any point is non-finite.
     pub fn from_points(points: impl IntoIterator<Item = Point>) -> Option<Self> {
         let mut points = points.into_iter();
-        let first = points.next()?;
+        let first = points.next().filter(|point| point.is_finite())?;
         let mut bounds = Self {
             min: first,
             max: first,
         };
         for point in points {
+            // f64::min/max discard NaN operands, so validate each point before merging.
+            if !point.is_finite() {
+                return None;
+            }
             bounds.include(point);
         }
         bounds.is_valid().then_some(bounds)
     }
 
+    /// Callers must pass finite points; NaN coordinates are silently ignored by `f64::min/max`.
     pub fn include(&mut self, point: Point) {
         self.min.x = self.min.x.min(point.x);
         self.min.y = self.min.y.min(point.y);
@@ -264,6 +321,23 @@ pub struct ComponentPlacement {
     pub angle: f64,
     pub mirrored: bool,
     pub pins: Vec<ObjectId>,
+    /// Source placement coverage, in world coordinates, independent of silk/assembly text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<ComponentBody>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentBody {
+    pub layer: LayerId,
+    pub regions: Vec<ComponentRegion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentRegion {
+    pub source: ObjectId,
+    pub source_layer: LayerId,
+    /// Each source region has an exterior followed by its holes; regions form a union.
+    pub paths: Vec<Vec<Segment>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,6 +515,24 @@ impl Diagnostic {
     }
     pub fn with_details(mut self, details: impl Into<String>) -> Self {
         self.technical_details = Some(details.into().into_boxed_str());
+        self
+    }
+    /// Adds a typed argument to the localized message.
+    pub fn with_arg(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<crate::i18n::MessageArg>,
+    ) -> Self {
+        self.message = self.message.arg(name, value);
+        self
+    }
+    /// Source byte offset of the reported record.
+    pub fn with_offset(mut self, offset: u64) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+    pub fn with_object(mut self, object: ObjectId) -> Self {
+        self.object = Some(object);
         self
     }
 }

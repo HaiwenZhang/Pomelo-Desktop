@@ -15,6 +15,7 @@ struct Frame {
     metal::float4 shape_color;
     metal::uint4 shape_kind;
     metal::float4 inherited;
+    metal::uint4 material_pattern[4];
 };
 struct Out {
     metal::float4 position;
@@ -90,7 +91,7 @@ metal::float4 fragment_color(
     }
     metal::float4 _e148 = u.shape_color;
     float _e153 = u.shape_color.w;
-    return metal::float4(_e148.xyz, _e153 * coverage);
+    return metal::float4(_e148.xyz * u.inherited.y, _e153 * coverage);
 }
 uint naga_mod(uint lhs, uint rhs) {
     return lhs % metal::select(rhs, 1u, rhs == 0u);
@@ -151,5 +152,5 @@ fragment fragment_mainOutput fragment_main(
     const Out i = { position_1, varyings_1.color };
     metal::float4 _e1 = fragment_color(i, u);
     float _e7 = u.inherited.x;
-    return fragment_mainOutput { metal::float4(_e1.xyz, _e1.w * _e7) };
+    return fragment_mainOutput { metal::float4(_e1.xyz * u.inherited.y, _e1.w * _e7) };
 }

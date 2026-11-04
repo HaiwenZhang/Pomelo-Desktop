@@ -26,6 +26,8 @@ fn vertex_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u3
     let p = pads[u.batch.x + iid];
     var o: Out;
     o.position = vec4f(2.0, 2.0, 0.0, 1.0);
+    let minimum = select(u.inherited.w,u.inherited.z,p.source.x == 0u);
+    if min(p.shape.x,p.shape.y) * u.view.x / u.viewport.z < minimum { return o; }
     let category = u.batch.z & 12u;
     if (u.batch.w == 2u && p.ids.z != u.batch.y) || (category == 4u && p.source.x != 0u) || (category == 8u && p.source.x == 0u) || ((u.batch.z & 16u) != 0u && (p.source.w & 4u) != 0u) {
         return o;

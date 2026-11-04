@@ -19,7 +19,7 @@ pub struct TextInstance {
     pub b: [f32; 4],
     /// Source object, layer, global source stroke ordinal, width bits.
     pub ids: [u32; 4],
-    /// Drawing owner and bound flag; remaining slots are reserved.
+    /// Drawing owner, bound flag, source em height bits for display filtering, reserved.
     pub flags: [u32; 4],
 }
 const _: () = assert!(std::mem::size_of::<TextInstance>() == 64);
@@ -168,7 +168,7 @@ impl PreparedTextInstances {
                             instances.len() as u32,
                             width.to_bits(),
                         ],
-                        flags: [0; 4],
+                        flags: [0, 0, (text.height as f32).to_bits(), 0],
                     });
                 }
                 objects.push(text.id);

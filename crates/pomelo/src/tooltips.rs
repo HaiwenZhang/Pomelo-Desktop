@@ -17,3 +17,4 @@ pub trait ButtonTooltipExt: InteractiveElement + Sized {
 
 impl ButtonTooltipExt for gpui_kit::component::button::Button {}
 impl ButtonTooltipExt for gpui_kit::base::Tab {}
+impl ButtonTooltipExt for gpui_kit::component::tab::Tab {}

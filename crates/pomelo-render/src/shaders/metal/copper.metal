@@ -23,6 +23,7 @@ struct Frame {
     metal::float4 rectangle;
     type_2 pattern_mask;
     metal::float4 inherited;
+    metal::uint4 material_pattern[4];
 };
 struct type_4 {
     uint inner[203];
@@ -205,7 +206,7 @@ metal::float4 fragment_color(
         }
         metal::float4 _e65 = u.color;
         float _e70 = u.color.w;
-        return metal::float4(_e65.xyz, _e70 * _e50);
+        return metal::float4(_e65.xyz * u.inherited.y, _e70 * _e50);
     }
     float _e76 = u.view.w;
     if (_e76 > 0.5) {
@@ -220,7 +221,7 @@ metal::float4 fragment_color(
         float _e96 = u.color.w;
         metal::float4 _e100 = u.canvas;
         float _e103 = stipple(position_3.xy - _e100.xy, u);
-        return metal::float4(_e91.xyz, _e96 * _e103);
+        return metal::float4(_e91.xyz * u.inherited.y, _e96 * _e103);
     }
     float _e109 = u.view.w;
     if (_e109 > 0.5) {
@@ -293,11 +294,15 @@ struct fragment_mainInput {
 struct fragment_mainOutput {
     metal::float4 member_2 [[color(0)]];
 };
+float material_ink(metal::float2 p,constant Frame& u) {
+    metal::uint2 cell=metal::uint2(metal::max(metal::floor((p-u.canvas.xy)/u.viewport.z),metal::float2(0.0)))&metal::uint2(15u);
+    uint row=u.material_pattern[cell.y>>2u][cell.y&3u];return float((row>>cell.x)&1u);
+}
 fragment fragment_mainOutput fragment_main(
   metal::float4 position [[position]]
 , constant Frame& u [[buffer(0)]]
 ) {
     metal::float4 _e1 = fragment_color(position, u);
     float _e7 = u.inherited.x;
-    return fragment_mainOutput { metal::float4(_e1.xyz, _e1.w * _e7) };
+    return fragment_mainOutput { metal::float4(_e1.xyz * u.inherited.y, _e1.w * _e7 * material_ink(position.xy,u)) };
 }

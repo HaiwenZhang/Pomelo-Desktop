@@ -1,6 +1,7 @@
 //! Shared native GPU context and pipeline scheduling.
 pub(super) mod copper;
 mod net_runs;
+mod object_filter;
 pub(super) mod pad;
 mod pad_index;
 mod pad_overlay;

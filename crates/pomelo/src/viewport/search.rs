@@ -13,8 +13,8 @@ impl BoardViewport {
         self.search_cancel.cancel();
         self.search_cancel = pomelo_core::task::CancellationToken::default();
         self.search_query = query.clone();
-        if !query.trim().is_empty() && self.left_panel == 0 {
-            self.left_panel = 1;
+        if !query.trim().is_empty() && self.left_panel == LeftPanelTab::Layers {
+            self.left_panel = LeftPanelTab::Nets;
         }
         self.search_results.clear();
         self.search_notice = None;
@@ -24,10 +24,15 @@ impl BoardViewport {
         let cancel = self.search_cancel.clone();
         let worker_cancel = cancel.clone();
         let search = Arc::clone(&self.search);
+        // Each tab shows one category, so each category gets its own 20-result limit.
         let worker = cx.background_spawn(async move {
-            search
-                .find_cancellable(&query, 20, &worker_cancel)
-                .map(|entries| entries.into_iter().cloned().collect::<Vec<_>>())
+            use pomelo_core::search::SearchCategory;
+            let mut results = Vec::new();
+            for category in [SearchCategory::Net, SearchCategory::Component] {
+                let entries = search.find_in_category(&query, category, 20, &worker_cancel)?;
+                results.extend(entries.into_iter().cloned());
+            }
+            Some(results)
         });
         self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
             let results = worker.await;
@@ -126,18 +131,20 @@ impl BoardViewport {
             } else {
                 None
             };
-            let summary = target.summarize(&scene, &worker_cancel)?;
-            let members = target.members(&scene, 256, &worker_cancel)?;
             let anchor = picking.selection_anchor_with_preferred(
                 target,
                 &worker_display,
                 preferred,
                 &worker_cancel,
             )?;
-            let inspection = prepare_inspection(target, anchor, &scene, &worker_cancel)?;
-            let pins = Arc::new(target.pin_ids(&scene, &worker_cancel)?);
             Ok::<_, pomelo_core::geometry::PathError>((
-                bounds, summary, members, inspection, pins, target, anchor,
+                bounds,
+                super::selection::PreparedSelection::prepare(
+                    target,
+                    anchor,
+                    &scene,
+                    &worker_cancel,
+                )?,
             ))
         });
         self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -153,16 +160,12 @@ impl BoardViewport {
                     return;
                 }
                 match result {
-                    Ok((Some(bounds), summary, members, inspection, pins, target, anchor))
-                        if !move_camera || this.navigation.locate(bounds) =>
+                    Ok((Some(bounds), selection))
+                        if !move_camera || this.locate_with_history(bounds) =>
                     {
                         this.invalidate_hover();
-                        this.members_offset = 0;
-                        this.members_page_revision = this.members_page_revision.wrapping_add(1);
-                        this.members_scroll.set_offset(point(px(0.), px(0.)));
-                        this.selected_members = Some(members);
-                        this.selected_target = Some(target);
-                        this.selected_anchor = anchor;
+                        let target = selection.target();
+                        this.publish_selection(selection);
                         if mode.is_none() && move_camera {
                             use pomelo_core::{
                                 interaction::SelectionMode, selection::SelectionTarget,
@@ -175,15 +178,9 @@ impl BoardViewport {
                                 SelectionTarget::Object(_) => SelectionMode::Object,
                             };
                         }
-                        this.selected_related_net = inspection.net;
-                        this.selected_related_component = inspection.component;
-                        this.selected_source_labels = inspection.labels;
-                        this.selected_bonds = inspection.bonds;
-                        this.selected_summary = Some(summary);
-                        this.selected_pins = pins;
                         window.focus(&this.focus, cx);
                     }
-                    Ok((None, _, _, _, _, _, _)) => {
+                    Ok((None, _)) => {
                         this.search_notice = Some(Message::new(Key::SearchLocateEmpty))
                     }
                     Err(pomelo_core::geometry::PathError::Cancelled) => return,
@@ -196,7 +193,7 @@ impl BoardViewport {
                         });
                         this.locate_details = Some(error);
                     }
-                    Ok((Some(_), _, _, _, _, _, _)) => {
+                    Ok((Some(_), _)) => {
                         this.search_notice = Some(Message::new(Key::SearchLocateFailed))
                     }
                 }
@@ -298,6 +295,7 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_canvas_action(&CancelCanvasAction, window, cx);
         self.search_cancel.cancel();
         self.search_pending = false;
         self.locate_pending = false;
@@ -311,6 +309,7 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.review.clear_set();
         self.last_pick = None;
         self.candidate_position = None;
         self.search_cancel.cancel();
@@ -318,15 +317,7 @@ impl BoardViewport {
         self.locate_pending = false;
         self.search_notice = None;
         self.locate_details = None;
-        self.selected_target = None;
-        self.selected_anchor = None;
-        self.selected_source_labels.clear();
-        self.selected_related_net = None;
-        self.selected_related_component = None;
-        self.selected_summary = None;
-        self.selected_members = None;
-        self.selected_pins = Arc::new(BTreeSet::new());
-        self.selected_bonds = Arc::new(BTreeSet::new());
+        self.clear_selection_details();
         window.focus(&self.focus, cx);
         cx.notify();
     }

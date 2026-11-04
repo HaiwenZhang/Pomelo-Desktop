@@ -71,10 +71,23 @@ fn frame_opacity_follows_the_cpu_uniform_payload() {
         let naga::TypeInner::Struct { ref members, span } = module.types[frame.ty].inner else {
             panic!("{shader:?}: frame must be a struct");
         };
-        let inherited = members.last().expect("opacity member");
+        let inherited = members
+            .iter()
+            .find(|m| m.name.as_deref() == Some("inherited"))
+            .expect("opacity member");
+        let pattern = members.last().expect("pattern member");
+        assert_eq!(
+            (pattern.name.as_deref(), pattern.offset),
+            (Some("material_pattern"), payload_bytes + 16)
+        );
         assert_eq!(
             (inherited.name.as_deref(), inherited.offset, span),
-            (Some("inherited"), payload_bytes, payload_bytes + 16),
+            (
+                Some("inherited"),
+                payload_bytes,
+                payload_bytes
+                    + size_of::<crate::backend::common::driver::MaterialUniforms>() as u32
+            ),
             "{shader:?}: driver appends opacity after the CPU payload"
         );
     }

@@ -2,7 +2,7 @@
 
 项目使用 Rust、GPUI 和 GPUI Kit。依赖及 feature 配置以根目录的 `Cargo.toml` 为准，精确解析结果以 `Cargo.lock` 为准；构建时使用 `--locked`。
 
-GPUI 从 workspace 声明的 Git 来源获取。`support/gpui-compat` 通过 Cargo 的包名适配机制，让组件库共享同一套 GPUI 类型。更新依赖时同步锁文件并验证目标平台的构建与渲染。
+GPUI 使用 `HaiwenZhang/gpui-fast` 的 `native-gpu` 分支，界面组件使用 GPUI Kit 0.8。`gpui-pre` 包名适配由同一 fork 的 `compat/` crates 提供，让组件库与平台后端共享同一套 GPUI 类型。更新依赖时同步锁文件并验证目标平台的构建与渲染。
 
 ```sh
 cargo run -p pomelo --locked

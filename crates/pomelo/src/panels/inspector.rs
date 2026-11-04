@@ -22,12 +22,12 @@ pub(crate) fn property_row(
         .text_sm()
         .child(
             div()
-                .w(relative(0.46))
+                .w(relative(0.42))
                 .flex_shrink_0()
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
         )
-        .child(div().flex_1().min_w_0().child(value))
+        .child(div().flex_1().min_w_0().text_right().child(value))
         .into_any_element()
 }
 
@@ -87,7 +87,7 @@ pub(crate) fn display_source_field(
 }
 
 pub(crate) struct PreparedInspection {
-    pub bonds: std::sync::Arc<BTreeSet<pomelo_core::selection::SelectedObject>>,
+    pub related_objects: std::sync::Arc<BTreeSet<pomelo_core::selection::SelectedObject>>,
     pub labels: Vec<Message>,
     pub net: Option<pomelo_core::model::NetId>,
     pub component: Option<pomelo_core::model::ObjectId>,
@@ -99,11 +99,12 @@ pub(crate) fn prepare_inspection(
     scene: &BoardScene,
     cancel: &pomelo_core::task::CancellationToken,
 ) -> Result<PreparedInspection, pomelo_core::geometry::PathError> {
-    if cancel.is_cancelled() {
-        return Err(pomelo_core::geometry::PathError::Cancelled);
-    }
+    cancel.check()?;
     let mut labels = selection_source_labels(target, scene, cancel);
-    if let Some(anchor) = anchor {
+    // A single-object click anchors on the target itself; its labels are already here.
+    if let Some(anchor) = anchor
+        .filter(|anchor| target != pomelo_core::selection::SelectionTarget::Object(anchor.object))
+    {
         for field in selection_source_labels(
             pomelo_core::selection::SelectionTarget::Object(anchor.object),
             scene,
@@ -115,7 +116,7 @@ pub(crate) fn prepare_inspection(
         }
     }
     let prepared = PreparedInspection {
-        bonds: std::sync::Arc::new(
+        related_objects: std::sync::Arc::new(
             if matches!(
                 target,
                 pomelo_core::selection::SelectionTarget::Component(_)
@@ -124,6 +125,12 @@ pub(crate) fn prepare_inspection(
                 target
                     .related_bond_objects(scene, cancel)?
                     .into_iter()
+                    .chain(
+                        target
+                            .placement_ids(scene, cancel)?
+                            .into_iter()
+                            .map(pomelo_core::selection::SelectedObject::Placement),
+                    )
                     .collect()
             } else {
                 BTreeSet::new()
@@ -133,11 +140,8 @@ pub(crate) fn prepare_inspection(
         net: related_net(target, scene, cancel),
         component: related_component(target, scene, cancel)?,
     };
-    if cancel.is_cancelled() {
-        Err(pomelo_core::geometry::PathError::Cancelled)
-    } else {
-        Ok(prepared)
-    }
+    cancel.check()?;
+    Ok(prepared)
 }
 
 pub(crate) fn hit_layer_name(
@@ -229,8 +233,81 @@ pub(crate) fn selection_identity(target: pomelo_core::selection::SelectionTarget
         SelectionTarget::Object(SelectedObject::Drawing(id)) => (Key::SourceDrawing, id.0),
         SelectionTarget::Track(id) => (Key::ModeTrack, id.0),
         SelectionTarget::Net(id) => (Key::ModeNet, id.0),
-        SelectionTarget::Component(id) => (Key::ModeComponent, id.0),
+        SelectionTarget::Component(id) | SelectionTarget::Object(SelectedObject::Placement(id)) => {
+            (Key::ModeComponent, id.0)
+        }
         SelectionTarget::ComponentGroup(anchor) => (Key::ModeComponent, anchor.id().0),
+    }
+}
+
+/// One typed source object, looked up once per inspection target so each field
+/// below reads it directly instead of rescanning the scene by ID.
+#[derive(Clone, Copy)]
+enum SourceObject<'a> {
+    Component(&'a pomelo_core::model::ComponentPlacement),
+    Pin(&'a pomelo_core::model::Pin),
+    Via(&'a pomelo_core::model::Via),
+    Segment(&'a pomelo_core::model::Segment),
+    Zone(&'a pomelo_core::model::Zone),
+    Drawing(&'a pomelo_core::model::BoardDrawing),
+}
+
+fn find_by_id<'a, T>(
+    items: &'a [T],
+    id: pomelo_core::model::ObjectId,
+    item_id: impl Fn(&T) -> pomelo_core::model::ObjectId,
+    cancel: &pomelo_core::task::CancellationToken,
+) -> Option<&'a T> {
+    items
+        .iter()
+        .take_while(|_| !cancel.is_cancelled())
+        .find(|item| item_id(item) == id)
+}
+
+fn resolve_source<'a>(
+    target: pomelo_core::selection::SelectionTarget,
+    scene: &'a BoardScene,
+    cancel: &pomelo_core::task::CancellationToken,
+) -> Option<SourceObject<'a>> {
+    use pomelo_core::selection::{SelectedObject, SelectionTarget};
+    match target {
+        SelectionTarget::Component(id) | SelectionTarget::Object(SelectedObject::Placement(id)) => {
+            find_by_id(&scene.components, id, |c| c.id, cancel).map(SourceObject::Component)
+        }
+        SelectionTarget::Object(SelectedObject::Pin(id)) => {
+            find_by_id(&scene.pins, id, |p| p.id, cancel).map(SourceObject::Pin)
+        }
+        SelectionTarget::Object(SelectedObject::Via(id)) => {
+            find_by_id(&scene.vias, id, |v| v.id, cancel).map(SourceObject::Via)
+        }
+        SelectionTarget::Object(SelectedObject::Segment(id)) => {
+            find_by_id(&scene.segments, id, |s| s.id, cancel).map(SourceObject::Segment)
+        }
+        SelectionTarget::Object(SelectedObject::Zone(id)) => {
+            find_by_id(&scene.zones, id, |z| z.id, cancel).map(SourceObject::Zone)
+        }
+        SelectionTarget::Object(SelectedObject::Drawing(id)) => {
+            find_by_id(&scene.drawings, id, |d| d.id, cancel).map(SourceObject::Drawing)
+        }
+        SelectionTarget::Net(_)
+        | SelectionTarget::Track(_)
+        | SelectionTarget::ComponentGroup(_) => None,
+    }
+}
+
+fn push_name(labels: &mut Vec<Message>, key: Key, value: &str) {
+    if !value.is_empty() {
+        labels.push(Message::new(key).arg("name", value));
+    }
+}
+
+fn push_point(labels: &mut Vec<Message>, key: Key, point: pomelo_core::model::Point) {
+    if point.x.is_finite() && point.y.is_finite() {
+        labels.push(
+            Message::new(key)
+                .arg("x", point.x.to_string())
+                .arg("y", point.y.to_string()),
+        );
     }
 }
 
@@ -239,169 +316,81 @@ pub(crate) fn selection_source_labels(
     scene: &BoardScene,
     cancel: &pomelo_core::task::CancellationToken,
 ) -> Vec<Message> {
-    use pomelo_core::selection::{SelectedObject, SelectionTarget};
+    use pomelo_core::selection::SelectionTarget;
     let mut labels = Vec::new();
-    let mut add = |key, value: &str| {
-        if !value.is_empty() {
-            labels.push(Message::new(key).arg("name", value));
-        }
-    };
+    let net_name = |net| scene.nets.get(&net).map(String::as_str);
     match target {
         SelectionTarget::ComponentGroup(anchor) => {
             if let Ok(Some(reference)) = anchor.reference(scene, cancel) {
-                add(Key::SourceReference, reference);
+                push_name(&mut labels, Key::SourceReference, reference);
             }
+            return labels;
         }
         SelectionTarget::Net(id) => {
-            if let Some(name) = scene.nets.get(&id) {
-                add(Key::SourceNetName, name);
+            if let Some(name) = net_name(id) {
+                push_name(&mut labels, Key::SourceNetName, name);
             }
-        }
-        SelectionTarget::Component(id) => {
-            if let Some(component) = scene
-                .components
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|component| component.id == id)
-            {
-                add(Key::SourceReference, &component.reference);
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Pin(id)) => {
-            if let Some(pin) = scene
-                .pins
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|pin| pin.id == id)
-            {
-                add(Key::SourceReference, &pin.reference);
-                add(Key::SourcePinName, &pin.name);
-                if let Some(name) = scene.nets.get(&pin.net) {
-                    add(Key::SourceNetName, name);
-                }
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Via(id)) => {
-            if let Some(via) = scene
-                .vias
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|via| via.id == id)
-            {
-                add(Key::SourcePadstackName, &via.padstack_name);
-                if let Some(name) = scene.nets.get(&via.net) {
-                    add(Key::SourceNetName, name);
-                }
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Segment(id)) => {
-            if let Some(segment) = scene
-                .segments
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|segment| segment.id == id)
-                && let Some(name) = scene.nets.get(&segment.net)
-            {
-                add(Key::SourceNetName, name);
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Zone(id)) => {
-            if let Some(zone) = scene
-                .zones
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|zone| zone.id == id)
-                && let Some(name) = scene.nets.get(&zone.net)
-            {
-                add(Key::SourceNetName, name);
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Drawing(id)) => {
-            if let Some(drawing) = scene
-                .drawings
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|drawing| drawing.id == id)
-            {
-                for source in scene
-                    .texts
-                    .iter()
-                    .take_while(|_| !cancel.is_cancelled())
-                    .filter(|text| drawing.text_ids.contains(&text.id))
-                    .take(16)
-                {
-                    add(Key::SourceText, &source.text);
-                }
-            }
-        }
-        SelectionTarget::Track(_) => {}
-    }
-    let mut coordinate = |key, point: pomelo_core::model::Point| {
-        if point.x.is_finite() && point.y.is_finite() {
-            labels.push(
-                Message::new(key)
-                    .arg("x", point.x.to_string())
-                    .arg("y", point.y.to_string()),
-            );
-        }
-    };
-    match target {
-        SelectionTarget::Component(id) => {
-            if let Some(value) = scene
-                .components
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|value| value.id == id)
-            {
-                coordinate(Key::SourcePosition, value.at);
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Pin(id)) => {
-            if let Some(value) = scene
-                .pins
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|value| value.id == id)
-            {
-                coordinate(Key::SourcePosition, value.at);
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Via(id)) => {
-            if let Some(value) = scene
-                .vias
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|value| value.id == id)
-            {
-                coordinate(Key::SourcePosition, value.at);
-            }
-        }
-        SelectionTarget::Object(SelectedObject::Segment(id)) => {
-            if let Some(value) = scene
-                .segments
-                .iter()
-                .take_while(|_| !cancel.is_cancelled())
-                .find(|value| value.id == id)
-            {
-                coordinate(Key::SourceStart, value.a);
-                coordinate(Key::SourceEnd, value.b);
-            }
+            return labels;
         }
         _ => {}
     }
-    let drill = match target {
-        SelectionTarget::Object(SelectedObject::Pin(id)) => scene
-            .pins
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .map(|value| value.drill_shape),
-        SelectionTarget::Object(SelectedObject::Via(id)) => scene
-            .vias
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .map(|value| value.drill_shape),
+    let Some(source) = resolve_source(target, scene, cancel) else {
+        return labels;
+    };
+    match source {
+        SourceObject::Component(component) => {
+            push_name(&mut labels, Key::SourceReference, &component.reference);
+        }
+        SourceObject::Pin(pin) => {
+            push_name(&mut labels, Key::SourceReference, &pin.reference);
+            push_name(&mut labels, Key::SourcePinName, &pin.name);
+            if let Some(name) = net_name(pin.net) {
+                push_name(&mut labels, Key::SourceNetName, name);
+            }
+        }
+        SourceObject::Via(via) => {
+            push_name(&mut labels, Key::SourcePadstackName, &via.padstack_name);
+            if let Some(name) = net_name(via.net) {
+                push_name(&mut labels, Key::SourceNetName, name);
+            }
+        }
+        SourceObject::Segment(segment) => {
+            if let Some(name) = net_name(segment.net) {
+                push_name(&mut labels, Key::SourceNetName, name);
+            }
+        }
+        SourceObject::Zone(zone) => {
+            if let Some(name) = net_name(zone.net) {
+                push_name(&mut labels, Key::SourceNetName, name);
+            }
+        }
+        SourceObject::Drawing(drawing) => {
+            for source in scene
+                .texts
+                .iter()
+                .take_while(|_| !cancel.is_cancelled())
+                .filter(|text| drawing.text_ids.contains(&text.id))
+                .take(16)
+            {
+                push_name(&mut labels, Key::SourceText, &source.text);
+            }
+        }
+    }
+    match source {
+        SourceObject::Component(component) => {
+            push_point(&mut labels, Key::SourcePosition, component.at);
+        }
+        SourceObject::Pin(pin) => push_point(&mut labels, Key::SourcePosition, pin.at),
+        SourceObject::Via(via) => push_point(&mut labels, Key::SourcePosition, via.at),
+        SourceObject::Segment(segment) => {
+            push_point(&mut labels, Key::SourceStart, segment.a);
+            push_point(&mut labels, Key::SourceEnd, segment.b);
+        }
+        SourceObject::Zone(_) | SourceObject::Drawing(_) => {}
+    }
+    let drill = match source {
+        SourceObject::Pin(pin) => Some(pin.drill_shape),
+        SourceObject::Via(via) => Some(via.drill_shape),
         _ => None,
     };
     if let Some(drill) = drill.filter(|drill| {
@@ -416,36 +405,16 @@ pub(crate) fn selection_source_labels(
                 .arg("height", drill.height.to_string()),
         );
     }
-    if let SelectionTarget::Object(SelectedObject::Segment(id)) = target
-        && let Some(segment) = scene
-            .segments
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
+    if let SourceObject::Segment(segment) = source
         && segment.width.is_finite()
         && segment.width >= 0.0
     {
         labels.push(Message::new(Key::SourceTraceWidth).arg("width", segment.width.to_string()));
     }
-    let placement = match target {
-        SelectionTarget::Component(id) => scene
-            .components
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .map(|value| (value.angle, value.mirrored)),
-        SelectionTarget::Object(SelectedObject::Pin(id)) => scene
-            .pins
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .map(|value| (value.angle, value.mirrored)),
-        SelectionTarget::Object(SelectedObject::Via(id)) => scene
-            .vias
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .map(|value| (value.angle, value.mirrored)),
+    let placement = match source {
+        SourceObject::Component(component) => Some((component.angle, component.mirrored)),
+        SourceObject::Pin(pin) => Some((pin.angle, pin.mirrored)),
+        SourceObject::Via(via) => Some((via.angle, via.mirrored)),
         _ => None,
     };
     if let Some((angle, mirrored)) = placement {
@@ -459,60 +428,13 @@ pub(crate) fn selection_source_labels(
             Key::SourceUnmirrored
         }));
     }
-    let layers: BTreeSet<_> = match target {
-        SelectionTarget::Object(SelectedObject::Pin(id)) => scene
-            .pins
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .into_iter()
-            .flat_map(|value| {
-                value
-                    .pads
-                    .iter()
-                    .take_while(|_| !cancel.is_cancelled())
-                    .map(|pad| pad.layer)
-            })
-            .collect(),
-        SelectionTarget::Object(SelectedObject::Via(id)) => scene
-            .vias
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .into_iter()
-            .flat_map(|value| {
-                value
-                    .pads
-                    .iter()
-                    .take_while(|_| !cancel.is_cancelled())
-                    .map(|pad| pad.layer)
-            })
-            .collect(),
-        SelectionTarget::Object(SelectedObject::Segment(id)) => scene
-            .segments
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .map(|value| value.layer)
-            .into_iter()
-            .collect(),
-        SelectionTarget::Object(SelectedObject::Zone(id)) => scene
-            .zones
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|value| value.id == id)
-            .map(|value| value.layer)
-            .into_iter()
-            .collect(),
-        SelectionTarget::Object(SelectedObject::Drawing(id)) => scene
-            .drawings
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|d| d.id == id)
-            .map(|d| d.layer)
-            .into_iter()
-            .collect(),
-        _ => BTreeSet::new(),
+    let layers: BTreeSet<_> = match source {
+        SourceObject::Pin(pin) => pin.pads.iter().map(|pad| pad.layer).collect(),
+        SourceObject::Via(via) => via.pads.iter().map(|pad| pad.layer).collect(),
+        SourceObject::Segment(segment) => BTreeSet::from([segment.layer]),
+        SourceObject::Zone(zone) => BTreeSet::from([zone.layer]),
+        SourceObject::Drawing(drawing) => BTreeSet::from([drawing.layer]),
+        SourceObject::Component(_) => BTreeSet::new(),
     };
     for layer in layers {
         if cancel.is_cancelled() {
@@ -521,10 +443,8 @@ pub(crate) fn selection_source_labels(
         let name = scene
             .layers
             .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .map(|definition| (definition.id, definition.name.as_str()))
-            .find(|(id, _)| *id == layer)
-            .map(|(_, name)| name)
+            .find(|definition| definition.id == layer)
+            .map(|definition| definition.name.as_str())
             .filter(|name| !name.is_empty());
         labels.push(if let Some(name) = name {
             Message::new(Key::SourceLayerName)
@@ -534,13 +454,8 @@ pub(crate) fn selection_source_labels(
             Message::new(Key::SourceLayerId).arg("id", layer.0)
         });
     }
-    if let SelectionTarget::Object(SelectedObject::Via(id)) = target
-        && let Some(backdrill) = scene
-            .vias
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|via| via.id == id)
-            .and_then(|via| via.backdrill.as_ref())
+    if let SourceObject::Via(via) = source
+        && let Some(backdrill) = via.backdrill.as_ref()
     {
         labels.push(
             Message::new(Key::SourceBackdrillReference).arg("id", backdrill.source_reference.0),
@@ -564,13 +479,8 @@ pub(crate) fn selection_source_labels(
             );
         }
     }
-    if let SelectionTarget::Object(SelectedObject::Segment(id)) = target
-        && let Some(wire) = scene
-            .segments
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|segment| segment.id == id)
-            .and_then(|segment| segment.bond_wire.as_ref())
+    if let SourceObject::Segment(segment) = source
+        && let Some(wire) = segment.bond_wire.as_ref()
     {
         labels.push(Message::new(Key::SourceBondPin).arg("id", wire.source_pin.0));
         labels.push(Message::new(Key::SourceBondFinger).arg("id", wire.finger.0));
@@ -583,18 +493,11 @@ pub(crate) fn selection_source_labels(
             (Key::SourceReference, wire.reference.as_str()),
             (Key::SourcePinName, wire.pin_name.as_str()),
         ] {
-            if !name.is_empty() {
-                labels.push(Message::new(key).arg("name", name));
-            }
+            push_name(&mut labels, key, name);
         }
     }
-    if let SelectionTarget::Object(SelectedObject::Via(id)) = target
-        && let Some(finger) = scene
-            .vias
-            .iter()
-            .take_while(|_| !cancel.is_cancelled())
-            .find(|via| via.id == id)
-            .and_then(|via| via.finger.as_ref())
+    if let SourceObject::Via(via) = source
+        && let Some(finger) = via.finger.as_ref()
     {
         if let Some(pin) = finger.source_pin {
             labels.push(Message::new(Key::SourceBondPin).arg("id", pin.0));
@@ -603,9 +506,7 @@ pub(crate) fn selection_source_labels(
             (Key::SourceReference, finger.reference.as_str()),
             (Key::SourceFingerName, finger.name.as_str()),
         ] {
-            if !name.is_empty() {
-                labels.push(Message::new(key).arg("name", name));
-            }
+            push_name(&mut labels, key, name);
         }
     }
     labels
@@ -614,6 +515,146 @@ pub(crate) fn selection_source_labels(
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use pomelo_core::{
+        model::{Bounds, DrillShape, LayerId, NetId, ObjectId, Pad, Pin, Point},
+        selection::{SelectedObject, SelectionTarget},
+        task::CancellationToken,
+    };
+
+    fn pin_scene() -> BoardScene {
+        BoardScene {
+            layers: vec![],
+            special_layers: vec![],
+            nets: [(NetId(7), "GND".to_owned())].into(),
+            segments: vec![],
+            pins: vec![Pin {
+                id: ObjectId(3),
+                owner_id: ObjectId(1),
+                net: NetId(7),
+                name: "1".into(),
+                reference: "U1".into(),
+                at: Point::new(1.0, 2.0),
+                angle: 0.0,
+                mirrored: false,
+                drill: 0.3,
+                drill_shape: DrillShape {
+                    width: 0.3,
+                    height: 0.3,
+                    plated: true,
+                },
+                pads: vec![Pad::circle(LayerId(2), 1.0), Pad::circle(LayerId(1), 1.0)],
+                stackup_region: None,
+                die: None,
+            }],
+            components: vec![],
+            vias: vec![],
+            zones: vec![],
+            outline: vec![],
+            texts: vec![],
+            drawing_layers: vec![],
+            drawings: vec![],
+            bounds: Bounds {
+                min: Point::default(),
+                max: Point::new(3.0, 3.0),
+            },
+            diagnostics: vec![],
+        }
+    }
+
+    #[test]
+    fn pin_labels_keep_their_field_order() {
+        let scene = pin_scene();
+        let target = SelectionTarget::Object(SelectedObject::Pin(ObjectId(3)));
+        let keys: Vec<_> = selection_source_labels(target, &scene, &CancellationToken::default())
+            .into_iter()
+            .map(|message| message.key)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                Key::SourceReference,
+                Key::SourcePinName,
+                Key::SourceNetName,
+                Key::SourcePosition,
+                Key::SourceDrillSize,
+                Key::SourceRotation,
+                Key::SourceUnmirrored,
+                Key::SourceLayerId,
+                Key::SourceLayerId,
+            ]
+        );
+    }
+
+    #[test]
+    fn placement_anchor_inspects_the_component_and_highlights_its_own_area() {
+        use pomelo_core::{
+            display::DisplayCategory,
+            model::{ComponentBody, ComponentPlacement},
+            picking_index::SelectionAnchor,
+        };
+        let mut scene = pin_scene();
+        scene.components.push(ComponentPlacement {
+            id: ObjectId(1),
+            source_reference: None,
+            reference: "U1".into(),
+            at: Point::new(1.0, 2.0),
+            angle: 0.0,
+            mirrored: false,
+            pins: vec![ObjectId(3)],
+            body: Some(ComponentBody {
+                layer: LayerId(2),
+                regions: vec![],
+            }),
+        });
+        let cancel = CancellationToken::default();
+        let anchor = SelectionAnchor {
+            object: SelectedObject::Placement(ObjectId(1)),
+            layer: LayerId(2),
+            category: DisplayCategory::Placement,
+        };
+        let target = pomelo_core::selection::canvas_target(
+            &scene,
+            anchor.object,
+            pomelo_core::interaction::SelectionMode::Object,
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(target, SelectionTarget::Component(ObjectId(1)));
+        let prepared = prepare_inspection(target, Some(anchor), &scene, &cancel).unwrap();
+        assert!(prepared.labels.iter().any(
+            |field| field.key == Key::SourceReference && field.args["name"].to_string() == "U1"
+        ));
+        assert!(
+            !prepared
+                .labels
+                .iter()
+                .any(|field| field.key == Key::SourcePinName)
+        );
+        assert_eq!(
+            prepared.net, None,
+            "the body is not assigned the net of an arbitrary pin"
+        );
+        assert!(
+            prepared
+                .related_objects
+                .contains(&SelectedObject::Placement(ObjectId(1)))
+        );
+        assert_eq!(
+            target.pin_ids(&scene, &cancel).unwrap(),
+            [ObjectId(3)].into()
+        );
+    }
+
+    #[test]
+    fn missing_or_cancelled_sources_produce_no_labels() {
+        let scene = pin_scene();
+        let missing = SelectionTarget::Object(SelectedObject::Pin(ObjectId(99)));
+        assert!(selection_source_labels(missing, &scene, &CancellationToken::default()).is_empty());
+        let cancel = CancellationToken::default();
+        cancel.cancel();
+        let target = SelectionTarget::Object(SelectedObject::Pin(ObjectId(3)));
+        assert!(selection_source_labels(target, &scene, &cancel).is_empty());
+    }
     #[test]
     fn dimensions_round_only_after_unit_conversion() {
         use pomelo_core::{i18n::Locale, units::LengthUnit};

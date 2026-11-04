@@ -10,7 +10,21 @@ impl BoardViewport {
     fn source_color(&self, target: ColorTarget) -> Hsla {
         match target {
             ColorTarget::Background => crate::theme::canvas_colors().0,
+            ColorTarget::Grid => crate::theme::canvas_colors().2,
             ColorTarget::Drill => hsla([0.46, 0.49, 0.51, 1.0]),
+            ColorTarget::Net(net, kind) => {
+                let whole = self.display.appearance.nets.get(&net).and_then(|colors| {
+                    (kind != pomelo_core::appearance::net::NetColorKind::All)
+                        .then_some(colors.all)
+                        .flatten()
+                });
+                hsla(
+                    whole
+                        .map(RgbColor::rgba)
+                        .or_else(|| pomelo_render::scene::colors::net_color(net))
+                        .unwrap_or([0.6, 0.68, 0.73, 1.0]),
+                )
+            }
             ColorTarget::Etch(layer) | ColorTarget::Pin(layer) | ColorTarget::Via(layer) => hsla(
                 self.colors
                     .get(&layer)
@@ -19,7 +33,7 @@ impl BoardViewport {
             ),
         }
     }
-    fn display_color(&self, target: ColorTarget) -> Hsla {
+    pub(super) fn display_color(&self, target: ColorTarget) -> Hsla {
         self.display
             .appearance
             .color(target)
@@ -28,6 +42,7 @@ impl BoardViewport {
     pub(super) fn canvas_background(&self) -> Hsla {
         self.display_color(ColorTarget::Background)
     }
+    /// A labeled color row for settings lists.
     pub(super) fn color_control(
         &mut self,
         target: ColorTarget,
@@ -35,14 +50,28 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let key = match target {
-            ColorTarget::Background => Key::CanvasBackgroundColor,
-            ColorTarget::Drill => Key::DrillColor,
-            ColorTarget::Etch(_) => Key::TraceColor,
-            ColorTarget::Pin(_) => Key::PadColor,
-            ColorTarget::Via(_) => Key::ViaColor,
-        };
-        let label = text(locale, key);
+        let label = text(locale, color_target_key(target));
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .min_w_0()
+            .child(div().flex_1().min_w_0().text_sm().truncate().child(label))
+            .child(self.color_swatch(target, locale, window, cx))
+            .into_any_element()
+    }
+
+    /// The picker and its restore command, for rows that already name the target.
+    pub(super) fn color_swatch(
+        &mut self,
+        target: ColorTarget,
+        locale: pomelo_core::i18n::Locale,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let label = text(locale, color_target_key(target));
         let value = self.display_color(target);
         let picker = if let Some(picker) = self.color_pickers.get(&target) {
             picker.clone()
@@ -51,7 +80,7 @@ impl BoardViewport {
             cx.subscribe_in(
                 &picker,
                 window,
-                move |this, picker, event: &ColorPickerEvent, window, cx| {
+                move |this, _picker, event: &ColorPickerEvent, window, cx| {
                     let ColorPickerEvent::Change(color) = event;
                     let color = color.map(|color| {
                         let color: Rgba = color.into();
@@ -65,8 +94,7 @@ impl BoardViewport {
                         .set_color(target, color);
                     // The picker supports alpha; PCB material alpha belongs to the
                     // independent opacity setting. Keep its swatch truthful as RGB8.
-                    let committed = this.display_color(target);
-                    picker.update(cx, |picker, cx| picker.set_value(committed, window, cx));
+                    this.sync_color_pickers(target, window, cx);
                     cx.notify();
                 },
             )
@@ -81,9 +109,9 @@ impl BoardViewport {
         div()
             .flex()
             .items_center()
-            .gap_2()
-            .min_w_0()
-            .child(div().flex_1().min_w_0().text_sm().child(label.clone()))
+            .gap_1()
+            .flex_shrink_0()
+            .children(self.pattern_button(target, locale, cx))
             .child(ColorPicker::new(&picker).small().accessibility_label(label))
             .child(
                 Button::new(("restore-color", picker.entity_id()))
@@ -97,13 +125,50 @@ impl BoardViewport {
                         Arc::make_mut(&mut this.display)
                             .appearance
                             .set_color(target, None);
-                        let source = this.source_color(target);
-                        if let Some(picker) = this.color_pickers.get(&target) {
-                            picker.update(cx, |picker, cx| picker.set_value(source, window, cx));
-                        }
+                        this.sync_color_pickers(target, window, cx);
                         cx.notify();
                     })),
             )
             .into_any_element()
+    }
+    pub(super) fn sync_color_pickers(
+        &mut self,
+        target: ColorTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let targets: Vec<_> = self
+            .color_pickers
+            .keys()
+            .copied()
+            .filter(|other| match (target, *other) {
+                (ColorTarget::Net(net, _), ColorTarget::Net(candidate, _)) => net == candidate,
+                _ => *other == target,
+            })
+            .collect();
+        for target in targets {
+            let value = self.display_color(target);
+            if let Some(picker) = self.color_pickers.get(&target) {
+                picker.update(cx, |picker, cx| picker.set_value(value, window, cx));
+            }
+        }
+    }
+}
+
+fn color_target_key(target: ColorTarget) -> Key {
+    match target {
+        ColorTarget::Background => Key::CanvasBackgroundColor,
+        ColorTarget::Grid => Key::GridColor,
+        ColorTarget::Drill => Key::DrillColor,
+        ColorTarget::Etch(_) => Key::TraceColor,
+        ColorTarget::Pin(_) => Key::PadColor,
+        ColorTarget::Via(_) => Key::ViaColor,
+        ColorTarget::Net(_, kind) => match kind {
+            pomelo_core::appearance::net::NetColorKind::All => Key::NetColorAll,
+            pomelo_core::appearance::net::NetColorKind::Traces => Key::LayerTraces,
+            pomelo_core::appearance::net::NetColorKind::Pins => Key::PadColor,
+            pomelo_core::appearance::net::NetColorKind::Vias => Key::ViaColor,
+            pomelo_core::appearance::net::NetColorKind::Shapes => Key::NetColorShapes,
+        },
     }
 }

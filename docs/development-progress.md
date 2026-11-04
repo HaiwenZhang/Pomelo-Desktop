@@ -2,6 +2,10 @@
 
 项目处于开发阶段，现有功能包括本地文件导入、图层控制、网络与元件搜索、对象属性查看、多文档、最近文件及查看偏好保存。文件版本差异、显示精度、大型文件性能和各平台稳定性仍需持续验证。
 
+桌面界面沿用 Pomelo Native 的窗口布局与主题：左侧图层、网络和元件列表，右侧检查器、显示设置和审阅工具；面板可折叠及调整宽度。测量和选择集合保存在当前会话，高亮组和命名视图随文档查看状态保存。GPU 着色器和各格式导入流程沿用本项目实现，通过适配层接入新版 GPUI。
+
+框选后可在画布工具栏点击“清除选择”，或按 Esc 清空选择并退出框选。测量时可点击“取消测量”或按 Esc 退出当前测量；已完成的标注通过“清除测量”移除。取消还会终止对应后台任务，避免结果随后重新出现。
+
 从仓库根目录执行：
 
 ```sh
@@ -31,3 +35,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 核心测试包含 `camera_navigation`、`search_scene`、`search_collation`、`component_groups`、`curve`、`copper_mesh` 和国际化资源检查。渲染单元测试按场景、文字及平台后端组织。
 
 针对修改先执行最接近的测试；跨模块接线或发布前再执行工作区检查。界面和 GPU 变更还需目标平台实机检查，方法见[验证指南](validation-guide.md)。
+
+Windows 的 UI 回调回归覆盖带偏移画布的完整目标坐标与高亮颜色，需硬件 GPU 显式运行：
+
+```sh
+cargo test -p pomelo-render --features native-gpu --locked hardware_ui_callback_keeps_canvas_coordinates_and_review_colors -- --ignored
+```

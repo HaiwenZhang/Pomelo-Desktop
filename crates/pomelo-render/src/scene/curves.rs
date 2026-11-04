@@ -332,6 +332,8 @@ fn prepare_zone(
                 .extend_from_slice(&[base, base + j as u32, base + j as u32 + 1]);
         }
         ranges.push(ParityRing {
+            filter_bounds: pomelo_core::geometry::path_bounds(path)
+                .or_else(|| zone.mesh.ring_bounds.get(ring_index).copied()),
             indices: start..source.indices.len() as u32,
             outer: ring_index == 0,
         });

@@ -9,6 +9,7 @@ cbuffer Frame : register(b0) {
     float4 shape_color;
     uint4 shape_kind;
     float4 inherited;
+    uint4 material_pattern[4];
 };
 
 struct VertexOutput { float4 position : SV_Position; float3 color : COLOR0; };

@@ -8,7 +8,8 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-struct RankedHit {
+struct RankedHit<G> {
+    group: G,
     object: SelectedObject,
     layer: LayerId,
     category: DisplayCategory,
@@ -30,7 +31,7 @@ impl CanvasHit {
         }
     }
 }
-impl RankedHit {
+impl<G> RankedHit<G> {
     fn compare(&self, other: &Self) -> Ordering {
         let exact = self.distance <= 0.0;
         let other_exact = other.distance <= 0.0;
@@ -45,6 +46,98 @@ impl RankedHit {
             })
             .then_with(|| other.rank.cmp(&self.rank))
             .then_with(|| other.sequence.cmp(&self.sequence))
+    }
+}
+
+/// One canvas query, shared by every per-category collector.
+#[derive(Clone, Copy)]
+struct VisibleQuery<'a> {
+    query: PickQuery,
+    /// `query` widened by the half-pixel minimum stroke for bounds tests.
+    broad: PickQuery,
+    query_bounds: Bounds,
+    /// Millimetres per screen pixel.
+    px: f64,
+    filter: PickFilter,
+    display: &'a BoardDisplay,
+    cancel: &'a CancellationToken,
+}
+
+/// Best hit per selection group, ordered by signed distance, display rank and
+/// source sequence, and truncated to `limit` only after grouping.
+struct Ranking<'a, G, F> {
+    hits: Vec<RankedHit<G>>,
+    /// Objects repeat across pads/layers; resolve each object's group only once.
+    groups: Vec<(SelectedObject, G)>,
+    group: F,
+    display: &'a BoardDisplay,
+    tolerance_mm: f64,
+    limit: usize,
+}
+
+impl<G, F> Ranking<'_, G, F>
+where
+    G: Copy + PartialEq,
+    F: FnMut(SelectedObject) -> Result<G, PathError>,
+{
+    fn insert(
+        &mut self,
+        object: SelectedObject,
+        distance: f64,
+        layer: LayerId,
+        category: DisplayCategory,
+        sequence: usize,
+    ) -> Result<(), PathError> {
+        if !distance.is_finite() || distance > self.tolerance_mm {
+            return Ok(());
+        }
+        let key = match self.groups.iter().find(|(known, _)| *known == object) {
+            Some(&(_, key)) => key,
+            None => {
+                let key = (self.group)(object)?;
+                self.groups.push((object, key));
+                key
+            }
+        };
+        let hit = RankedHit {
+            group: key,
+            object,
+            layer,
+            category,
+            distance,
+            rank: self.display.display_rank(layer, category),
+            sequence,
+        };
+        if let Some(index) = self.hits.iter().position(|old| old.group == key) {
+            if hit.compare(&self.hits[index]) != Ordering::Less {
+                return Ok(());
+            }
+            self.hits.remove(index);
+        }
+        let position = self
+            .hits
+            .partition_point(|old| old.compare(&hit) != Ordering::Greater);
+        if position < self.limit {
+            self.hits.insert(position, hit);
+            self.hits.truncate(self.limit);
+        }
+        Ok(())
+    }
+
+    /// SelectionCandidate's public metric is nonnegative; signed coverage
+    /// has already determined the order and must not be sorted again.
+    fn finish(self) -> Vec<CanvasHit> {
+        self.hits
+            .into_iter()
+            .map(|hit| CanvasHit {
+                anchor: SelectionAnchor {
+                    object: hit.object,
+                    layer: hit.layer,
+                    category: hit.category,
+                },
+                distance_mm: hit.distance.max(0.0),
+            })
+            .collect()
     }
 }
 
@@ -74,9 +167,27 @@ impl BoardPickingIndex {
         limit: usize,
         cancel: &CancellationToken,
     ) -> Result<Vec<CanvasHit>, PathError> {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        self.query_visible_hits_grouped(query, pixels_per_mm, filter, display, limit, cancel, Ok)
+    }
+
+    /// Like `query_visible_hits`, but deduplicates by `group(object)` before applying
+    /// `limit`, keeping each group's highest-ranked hit as its anchor. One dense group
+    /// therefore cannot exhaust the limit and hide other selectable groups below it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors query_visible_hits plus a key"
+    )]
+    pub fn query_visible_hits_grouped<G: Copy + PartialEq>(
+        &self,
+        query: PickQuery,
+        pixels_per_mm: f64,
+        filter: PickFilter,
+        display: &BoardDisplay,
+        limit: usize,
+        cancel: &CancellationToken,
+        group: impl FnMut(SelectedObject) -> Result<G, PathError>,
+    ) -> Result<Vec<CanvasHit>, PathError> {
+        cancel.check()?;
         if !pixels_per_mm.is_finite() || pixels_per_mm <= 0.0 {
             return Ok(Vec::new());
         }
@@ -85,37 +196,106 @@ impl BoardPickingIndex {
             return Ok(Vec::new());
         }
         let px = 1.0 / pixels_per_mm;
-        let mut hits: Vec<RankedHit> = Vec::new();
-        let mut insert = |object, distance: f64, layer, category, sequence| {
-            if !distance.is_finite() || distance > query.tolerance_mm {
-                return;
-            }
-            let hit = RankedHit {
-                object,
-                layer,
-                category,
-                distance,
-                rank: display.display_rank(layer, category),
-                sequence,
-            };
-            if let Some(index) = hits.iter().position(|old| old.object == object) {
-                if hit.compare(&hits[index]) != Ordering::Less {
-                    return;
-                }
-                hits.remove(index);
-            }
-            let position = hits.partition_point(|old| old.compare(&hit) != Ordering::Greater);
-            if position < limit {
-                hits.insert(position, hit);
-                hits.truncate(limit);
-            }
+        // Fine checks thicken strokes and glyph edges to at least one screen pixel,
+        // so the broad phase must cover that extra half pixel or it drops valid hits.
+        let broad = PickQuery {
+            tolerance_mm: query.tolerance_mm + px * 0.5,
+            ..query
         };
-        let broad = query;
+        let query_bounds = crate::model::Bounds {
+            min: Point::new(
+                broad.point.x - broad.tolerance_mm,
+                broad.point.y - broad.tolerance_mm,
+            ),
+            max: Point::new(
+                broad.point.x + broad.tolerance_mm,
+                broad.point.y + broad.tolerance_mm,
+            ),
+        };
+        let visible = VisibleQuery {
+            query,
+            broad,
+            query_bounds,
+            px,
+            filter,
+            display,
+            cancel,
+        };
+        let mut ranking = Ranking {
+            hits: Vec::new(),
+            groups: Vec::new(),
+            group,
+            display,
+            tolerance_mm: query.tolerance_mm,
+            limit,
+        };
+        self.rank_segments(&visible, &mut ranking)?;
+        self.rank_drawings(&visible, &mut ranking)?;
+        self.rank_zones(&visible, &mut ranking)?;
+        self.rank_placements(&visible, &mut ranking)?;
+        self.rank_pins(&visible, &mut ranking)?;
+        self.rank_vias(&visible, &mut ranking)?;
+        cancel.check()?;
+        Ok(ranking.finish())
+    }
+
+    fn rank_placements<G: Copy + PartialEq>(
+        &self,
+        visible: &VisibleQuery<'_>,
+        ranking: &mut Ranking<'_, G, impl FnMut(SelectedObject) -> Result<G, PathError>>,
+    ) -> Result<(), PathError> {
+        // Placement regions follow the existing Pins picking switch; toggling
+        // Quickview's temporary Pin visibility does not hide the component body.
+        if !visible.filter.contains(PickCategory::Pin) {
+            return Ok(());
+        }
+        for source in self
+            .placements
+            .query(visible.query_bounds, visible.cancel)?
+        {
+            let component = &self.scene.components[source];
+            let Some(body) = component.body.as_ref().filter(|body| {
+                visible
+                    .display
+                    .category_visible(body.layer, DisplayCategory::Placement)
+            }) else {
+                continue;
+            };
+            if let Some(distance) = super::placements::distance(
+                body,
+                visible.query.point,
+                visible.px * 0.5,
+                visible.cancel,
+            )? {
+                ranking.insert(
+                    SelectedObject::Placement(component.id),
+                    distance,
+                    body.layer,
+                    DisplayCategory::Placement,
+                    source,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    /// Segments, through the bounding-volume hierarchy.
+    fn rank_segments<G: Copy + PartialEq>(
+        &self,
+        visible: &VisibleQuery<'_>,
+        ranking: &mut Ranking<'_, G, impl FnMut(SelectedObject) -> Result<G, PathError>>,
+    ) -> Result<(), PathError> {
+        let VisibleQuery {
+            query,
+            broad,
+            px,
+            filter,
+            display,
+            cancel,
+            ..
+        } = *visible;
         let mut pending = vec![1usize];
         while let Some(index) = pending.pop() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if self.bounds[index].is_none_or(|bounds| !broad.intersects(bounds)) {
                 continue;
             }
@@ -133,7 +313,7 @@ impl BoardPickingIndex {
             ) {
                 continue;
             }
-            insert(
+            ranking.insert(
                 SelectedObject::Segment(segment.id),
                 centerline_distance(segment, query.point)? - (segment.width * 0.5).max(px * 0.5),
                 segment.layer,
@@ -144,18 +324,25 @@ impl BoardPickingIndex {
                 },
                 source
                     .saturating_add(usize::from(segment.arc.is_some()) * self.scene.segments.len()),
-            );
+            )?;
         }
-        let query_bounds = crate::model::Bounds {
-            min: Point::new(
-                query.point.x - query.tolerance_mm,
-                query.point.y - query.tolerance_mm,
-            ),
-            max: Point::new(
-                query.point.x + query.tolerance_mm,
-                query.point.y + query.tolerance_mm,
-            ),
-        };
+        Ok(())
+    }
+    /// Drawing strokes and text glyph quads.
+    fn rank_drawings<G: Copy + PartialEq>(
+        &self,
+        visible: &VisibleQuery<'_>,
+        ranking: &mut Ranking<'_, G, impl FnMut(SelectedObject) -> Result<G, PathError>>,
+    ) -> Result<(), PathError> {
+        let VisibleQuery {
+            query,
+            query_bounds,
+            px,
+            filter,
+            display,
+            cancel,
+            ..
+        } = *visible;
         if filter.contains(PickCategory::Drawing) {
             for entry_index in self.drawings.bounds.query(query_bounds, cancel)? {
                 let entry = &self.drawings.entries[entry_index];
@@ -175,14 +362,20 @@ impl BoardPickingIndex {
                         )
                     }
                     super::drawings::DrawingGeometry::Glyphs { start, count } => {
-                        if !display.show_texts {
+                        if !display.show_texts
+                            || entry.text_height.is_some_and(|height| {
+                                !display.object_filter.visible(
+                                    crate::display::filter::FilterKind::Text,
+                                    height,
+                                    1.0 / px,
+                                )
+                            })
+                        {
                             continue;
                         }
                         let mut distance = f64::INFINITY;
                         for quad in &self.drawings.glyphs[start..start + count] {
-                            if cancel.is_cancelled() {
-                                return Err(PathError::Cancelled);
-                            }
+                            cancel.check()?;
                             let mut inside = false;
                             let mut edge_distance = f64::INFINITY;
                             for i in 0..4 {
@@ -203,20 +396,36 @@ impl BoardPickingIndex {
                         (distance, DisplayCategory::Text)
                     }
                 };
-                insert(
+                ranking.insert(
                     SelectedObject::Drawing(entry.owner),
                     distance,
                     entry.layer,
                     category,
                     entry.sequence,
-                );
+                )?;
             }
         }
+        Ok(())
+    }
+    /// Copper fills (signed coverage) or their outlines when unfilled.
+    fn rank_zones<G: Copy + PartialEq>(
+        &self,
+        visible: &VisibleQuery<'_>,
+        ranking: &mut Ranking<'_, G, impl FnMut(SelectedObject) -> Result<G, PathError>>,
+    ) -> Result<(), PathError> {
+        let VisibleQuery {
+            query,
+            broad,
+            query_bounds,
+            px,
+            filter,
+            display,
+            cancel,
+            ..
+        } = *visible;
         for source in self.zone_bounds.query(query_bounds, cancel)? {
             let zone = &self.scene.zones[source];
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if !filter.contains(PickCategory::Zone)
                 || !display.show_copper
                 || !display.layer_visible(zone.layer)
@@ -229,12 +438,27 @@ impl BoardPickingIndex {
                 .copied()
                 .flatten()
                 .or_else(|| zone.mesh.ring_bounds.first().copied());
-            if bounds.is_none_or(|bounds| !broad.intersects(bounds)) {
+            if bounds.is_none_or(|bounds| {
+                !broad.intersects(bounds)
+                    || !display.object_filter.bounds_visible(
+                        crate::display::filter::FilterKind::Copper,
+                        bounds,
+                        1.0 / px,
+                    )
+            }) {
                 continue;
             }
             let contains = if zone.paths.is_empty() {
                 zone.mesh
-                    .covers_fill(query.point, cancel)
+                    .covers_fill_where(query.point, cancel, |ring| {
+                        zone.mesh.ring_bounds.get(ring).is_none_or(|b| {
+                            display.object_filter.bounds_visible(
+                                crate::display::filter::FilterKind::Void,
+                                *b,
+                                1.0 / px,
+                            )
+                        })
+                    })
                     .map_err(|_| PathError::Invalid(zone.id))?
             } else {
                 let mut covered =
@@ -242,6 +466,15 @@ impl BoardPickingIndex {
                 for (path, bounds) in zone.paths.iter().zip(paths_bounds).skip(1) {
                     if !covered {
                         break;
+                    }
+                    if bounds.is_some_and(|b| {
+                        !display.object_filter.bounds_visible(
+                            crate::display::filter::FilterKind::Void,
+                            b,
+                            1.0 / px,
+                        )
+                    }) {
+                        continue;
                     }
                     if bounds.is_none_or(|bounds| point_in_bounds(query.point, bounds))
                         && crate::geometry::path_contains(path, query.point, cancel)?
@@ -260,6 +493,16 @@ impl BoardPickingIndex {
                         &zone.mesh.ring_offsets,
                         query.point,
                         cancel,
+                        |ring| {
+                            ring == 0
+                                || zone.mesh.ring_bounds.get(ring).is_none_or(|b| {
+                                    display.object_filter.bounds_visible(
+                                        crate::display::filter::FilterKind::Void,
+                                        *b,
+                                        1.0 / px,
+                                    )
+                                })
+                        },
                     )?
                 } else {
                     let nearby = PickQuery {
@@ -267,10 +510,19 @@ impl BoardPickingIndex {
                         tolerance_mm: query.tolerance_mm + 0.65 * px,
                     };
                     let mut distance = f64::INFINITY;
-                    for (path, bounds) in zone.paths.iter().zip(paths_bounds) {
-                        if cancel.is_cancelled() {
-                            return Err(PathError::Cancelled);
+                    for (ring, (path, bounds)) in zone.paths.iter().zip(paths_bounds).enumerate() {
+                        if ring > 0
+                            && bounds.is_some_and(|b| {
+                                !display.object_filter.bounds_visible(
+                                    crate::display::filter::FilterKind::Void,
+                                    b,
+                                    1.0 / px,
+                                )
+                            })
+                        {
+                            continue;
                         }
+                        cancel.check()?;
                         if bounds.is_none_or(|bounds| nearby.intersects(bounds)) {
                             distance = distance.min(paths_distance(
                                 std::slice::from_ref(path),
@@ -283,21 +535,37 @@ impl BoardPickingIndex {
                 };
                 (distance - 0.65 * px, DisplayCategory::ZoneOutline)
             };
-            insert(
+            ranking.insert(
                 SelectedObject::Zone(zone.id),
                 distance,
                 zone.layer,
                 category,
                 source,
-            );
+            )?;
         }
+        Ok(())
+    }
+    /// Pin pads and pin drills.
+    fn rank_pins<G: Copy + PartialEq>(
+        &self,
+        visible: &VisibleQuery<'_>,
+        ranking: &mut Ranking<'_, G, impl FnMut(SelectedObject) -> Result<G, PathError>>,
+    ) -> Result<(), PathError> {
+        let VisibleQuery {
+            query,
+            broad,
+            query_bounds,
+            px,
+            filter,
+            display,
+            cancel,
+            ..
+        } = *visible;
         // PrimitiveBatchBuilder submits pin pads before via pads. Within each
         // category analytic pads precede custom fills; last source entry wins.
         for source in self.pins.query(query_bounds, cancel)? {
             let pin = &self.scene.pins[source];
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if !filter.contains(PickCategory::Pin) {
                 continue;
             }
@@ -313,6 +581,12 @@ impl BoardPickingIndex {
                     DisplayCategory::Pin
                 };
                 if pad.backdrill
+                    || !display.object_filter.pad_visible(
+                        crate::display::filter::FilterKind::Pin,
+                        pad,
+                        owner,
+                        1.0 / px,
+                    )
                     || !display.primitive_visible(
                         pad.layer,
                         if category == DisplayCategory::Trace {
@@ -337,32 +611,48 @@ impl BoardPickingIndex {
                     distance.abs() - 0.65 * px
                 };
                 let sequence = source.saturating_mul(65536).saturating_add(pad_index);
-                insert(
+                ranking.insert(
                     SelectedObject::Pin(pin.id),
                     distance,
                     pad.layer,
                     category,
                     sequence.saturating_add(usize::from(pad.custom.is_some()) * (usize::MAX / 2)),
-                );
+                )?;
             }
             if display.show_drills
                 && let Some(pad) = pin.drill_shape.pad()
             {
                 let distance = signed_pad_distance(&pad, query.point, owner, pin.id, cancel)?;
-                insert(
+                ranking.insert(
                     SelectedObject::Pin(pin.id),
                     distance,
                     LayerId::UNASSIGNED,
                     DisplayCategory::Drill,
                     self.scene.pins.len() + source,
-                );
+                )?;
             }
         }
+        Ok(())
+    }
+    /// Via pads, via drills and backdrills.
+    fn rank_vias<G: Copy + PartialEq>(
+        &self,
+        visible: &VisibleQuery<'_>,
+        ranking: &mut Ranking<'_, G, impl FnMut(SelectedObject) -> Result<G, PathError>>,
+    ) -> Result<(), PathError> {
+        let VisibleQuery {
+            query,
+            broad,
+            query_bounds,
+            px,
+            filter,
+            display,
+            cancel,
+            ..
+        } = *visible;
         for source in self.vias.query(query_bounds, cancel)? {
             let via = &self.scene.vias[source];
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if !filter.contains(PickCategory::Via) {
                 continue;
             }
@@ -373,6 +663,12 @@ impl BoardPickingIndex {
             };
             for (pad_index, pad) in via.pads.iter().enumerate() {
                 if pad.backdrill
+                    || !display.object_filter.pad_visible(
+                        crate::display::filter::FilterKind::Via,
+                        pad,
+                        owner,
+                        1.0 / px,
+                    )
                     || (pad.backdrill_base && display.show_backdrills)
                     || !display.primitive_visible(pad.layer, LayerPrimitive::Vias)
                 {
@@ -390,7 +686,7 @@ impl BoardPickingIndex {
                 } else {
                     distance.abs() - 0.65 * px
                 };
-                insert(
+                ranking.insert(
                     SelectedObject::Via(via.id),
                     distance,
                     pad.layer,
@@ -399,7 +695,7 @@ impl BoardPickingIndex {
                         .saturating_mul(65536)
                         .saturating_add(pad_index)
                         .saturating_add(usize::from(pad.custom.is_some()) * (usize::MAX / 2)),
-                );
+                )?;
             }
             let visible = via
                 .pads
@@ -410,13 +706,13 @@ impl BoardPickingIndex {
                 && let Some(pad) = via.drill_shape.pad()
             {
                 let distance = signed_pad_distance(&pad, query.point, owner, via.id, cancel)?;
-                insert(
+                ranking.insert(
                     SelectedObject::Via(via.id),
                     distance,
                     LayerId::UNASSIGNED,
                     DisplayCategory::Drill,
                     self.scene.pins.len() + source,
-                );
+                )?;
             }
             if display.show_backdrills
                 && via.backdrill.is_some()
@@ -426,31 +722,16 @@ impl BoardPickingIndex {
                 && let Some(pad) = via.pads.iter().find(|pad| pad.backdrill)
             {
                 let distance = signed_pad_distance(pad, query.point, owner, via.id, cancel)?;
-                insert(
+                ranking.insert(
                     SelectedObject::Via(via.id),
                     distance,
                     LayerId::UNASSIGNED,
                     DisplayCategory::Drill,
                     usize::MAX / 4 + source,
-                );
+                )?;
             }
         }
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
-        // SelectionCandidate's public metric is nonnegative; signed coverage
-        // has already determined the order and must not be sorted again.
-        Ok(hits
-            .into_iter()
-            .map(|hit| CanvasHit {
-                anchor: SelectionAnchor {
-                    object: hit.object,
-                    layer: hit.layer,
-                    category: hit.category,
-                },
-                distance_mm: hit.distance.max(0.0),
-            })
-            .collect())
+        Ok(())
     }
 }
 
@@ -471,9 +752,7 @@ fn paths_distance(
 ) -> Result<f64, PathError> {
     let mut distance = f64::INFINITY;
     for edge in paths.iter().flatten() {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         distance = distance.min(centerline_distance(edge, point)?);
     }
     Ok(distance)
@@ -483,16 +762,18 @@ fn ring_distance(
     offsets: &[u32],
     point: Point,
     cancel: &CancellationToken,
+    include: impl Fn(usize) -> bool,
 ) -> Result<f64, PathError> {
     let mut distance = f64::INFINITY;
-    for range in offsets.windows(2) {
+    for (ring_index, range) in offsets.windows(2).enumerate() {
         let ring = points
             .get(range[0] as usize..range[1] as usize)
             .ok_or(PathError::Invalid(ObjectId(0)))?;
+        if !include(ring_index) {
+            continue;
+        }
         for (index, &a) in ring.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             distance = distance.min(crate::geometry::distance_to_line(
                 point,
                 a,
@@ -524,9 +805,7 @@ fn signed_pad_distance(
         let mut distance = f64::INFINITY;
         for ring in &custom.contours {
             for (index, &a) in ring.iter().enumerate() {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
+                cancel.check()?;
                 distance = distance.min(crate::geometry::distance_to_line(
                     local,
                     a,

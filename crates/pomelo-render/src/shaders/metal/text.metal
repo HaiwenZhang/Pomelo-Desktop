@@ -20,6 +20,7 @@ struct Frame {
     metal::uint4 batch;
     metal::float4 highlight;
     metal::float4 inherited;
+    metal::uint4 material_pattern[4];
 };
 struct type_3 {
     uint inner[203];
@@ -184,7 +185,7 @@ metal::float4 fragment_color(
     }
     metal::float4 _e60 = u.color;
     float _e65 = u.color.w;
-    return metal::float4(_e60.xyz, _e65 * alpha);
+    return metal::float4(_e60.xyz * u.inherited.y, _e65 * alpha);
 }
 
 struct vertex_mainInput {
@@ -246,6 +247,10 @@ struct fragment_mainInput {
 struct fragment_mainOutput {
     metal::float4 member_1 [[color(0)]];
 };
+float material_ink(metal::float2 p,constant Frame& u) {
+    metal::uint2 cell=metal::uint2(metal::max(metal::floor((p-u.canvas.xy)/u.viewport.z),metal::float2(0.0)))&metal::uint2(15u);
+    uint row=u.material_pattern[cell.y>>2u][cell.y&3u];return float((row>>cell.x)&1u);
+}
 fragment fragment_mainOutput fragment_main(
   fragment_mainInput varyings_1 [[stage_in]]
 , metal::float4 position_2 [[position]]
@@ -254,5 +259,5 @@ fragment fragment_mainOutput fragment_main(
     const Out i = { position_2, varyings_1.a, varyings_1.b, varyings_1.width };
     metal::float4 _e1 = fragment_color(i, u);
     float _e7 = u.inherited.x;
-    return fragment_mainOutput { metal::float4(_e1.xyz, _e1.w * _e7) };
+    return fragment_mainOutput { metal::float4(_e1.xyz * u.inherited.y, _e1.w * _e7 * material_ink(position_2.xy,u)) };
 }

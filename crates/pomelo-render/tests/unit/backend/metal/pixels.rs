@@ -295,6 +295,11 @@ fn metal_empty_curve_override_preserves_background_without_missing_buffers() {
     empty.active = true;
     let overrides = BTreeMap::from([(ObjectId(1), empty)]);
     let frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         tracks: Arc::new(
             crate::tracks::PreparedTracks::build(&[], Default::default(), &cancel).unwrap(),
         ),

@@ -2,6 +2,7 @@
 use super::*;
 use crate::{
     display::{DisplayCategory, LayerPrimitive},
+    interaction::membership::Membership,
     model::{LayerId, Pad},
     selection::SelectionTarget,
 };
@@ -113,25 +114,18 @@ impl BoardPickingIndex {
         preferred: Option<SelectionAnchor>,
         cancel: &CancellationToken,
     ) -> Result<Option<SelectionAnchor>, PathError> {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         let scene = &self.scene;
         let target = target.canonical_reference(scene, cancel)?;
-        let reference = if let SelectionTarget::ComponentGroup(anchor) = target {
-            anchor.reference(scene, cancel)?
-        } else {
-            None
-        };
+        // Every via is still scanned below: drill scope groups count unselected vias too.
+        let membership = Membership::new(target, scene, cancel)?;
         let mut result = Anchors {
             preferred,
             ..Anchors::default()
         };
         for (source, segment) in scene.segments.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if target.matches_segment(segment) {
+            cancel.check()?;
+            if membership.segment(segment) {
                 let category = if segment.bond_wire.is_some() {
                     DisplayCategory::BondWire
                 } else {
@@ -150,10 +144,8 @@ impl BoardPickingIndex {
             }
         }
         for (source, zone) in scene.zones.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if target.matches_zone(zone)
+            cancel.check()?;
+            if membership.zone(zone)
                 && (zone.paths.first().is_some_and(|path| !path.is_empty())
                     || !zone.mesh.ring_bounds.is_empty())
             {
@@ -172,19 +164,13 @@ impl BoardPickingIndex {
         }
         let mut drawings = BTreeSet::new();
         for drawing in &scene.drawings {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            if target == SelectionTarget::Object(SelectedObject::Drawing(drawing.id))
-                || matches!(target, SelectionTarget::Net(net) if net.0 != 0 && net == drawing.net)
-            {
+            cancel.check()?;
+            if membership.drawing(drawing) {
                 drawings.insert(drawing.id);
             }
         }
         for entry in &self.drawings.entries {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if !drawings.contains(&entry.owner) {
                 continue;
             }
@@ -207,7 +193,7 @@ impl BoardPickingIndex {
                 display.layer_visible(entry.layer)
                     && if text {
                         display.show_texts
-                            && (entry.layer.0 >= 0x10000 || display.primitives(entry.layer).traces)
+                            && (!entry.layer.is_copper() || display.primitives(entry.layer).traces)
                     } else {
                         display.show_drawings
                     },
@@ -215,23 +201,14 @@ impl BoardPickingIndex {
             );
         }
         for (source, pin) in scene.pins.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            let selected = if let SelectionTarget::ComponentGroup(_) = target {
-                reference.is_some_and(|reference| pin.reference == reference)
-            } else {
-                target.matches_pin(pin, scene)
-            };
-            if !selected {
+            cancel.check()?;
+            if !membership.pin(pin) {
                 continue;
             }
             let object = SelectedObject::Pin(pin.id);
             let category = pad_category(pin);
             for (pad_index, pad) in pin.pads.iter().enumerate() {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
+                cancel.check()?;
                 if !pad.supported() || pad.backdrill {
                     continue;
                 }
@@ -272,22 +249,13 @@ impl BoardPickingIndex {
         let mut holes = BTreeMap::<Vec<LayerId>, usize>::new();
         let mut backdrills = BTreeMap::<Vec<LayerId>, usize>::new();
         for (source, via) in scene.vias.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
-            let selected = target.matches_via(via)
-                || reference.is_some_and(|reference| {
-                    via.finger
-                        .as_ref()
-                        .is_some_and(|finger| finger.reference == reference)
-                });
+            cancel.check()?;
+            let selected = membership.via(via);
             let object = SelectedObject::Via(via.id);
             let mut scope = Vec::new();
             let mut back_scope = Vec::new();
             for (pad_index, pad) in via.pads.iter().enumerate() {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
+                cancel.check()?;
                 scope.push(pad.layer);
                 if pad.backdrill {
                     back_scope.push(pad.layer);
@@ -344,10 +312,26 @@ impl BoardPickingIndex {
                 }
             }
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(result.finish())
+        let placements = target.placement_ids(scene, cancel)?;
+        for (source, component) in scene.components.iter().enumerate() {
+            cancel.check()?;
+            if placements.contains(&component.id)
+                && let Some(body) = &component.body
+                && super::placements::bounds(body).is_some()
+            {
+                result.include(
+                    SelectionAnchor {
+                        object: SelectedObject::Placement(component.id),
+                        layer: body.layer,
+                        category: DisplayCategory::Placement,
+                    },
+                    [6, 0, 0, source, 0],
+                    display.category_visible(body.layer, DisplayCategory::Placement),
+                    display,
+                );
+            }
         }
+        cancel.check()?;
+        Ok(result.finish())
     }
 }

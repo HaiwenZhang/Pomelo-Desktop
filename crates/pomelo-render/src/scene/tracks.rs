@@ -45,6 +45,8 @@ pub struct TraceBatch {
 pub struct PreparedTracks {
     pub instances: Vec<TraceInstance>,
     pub batches: Vec<TraceBatch>,
+    /// Source owner category without consuming bits used by analytic hole indices.
+    pub(crate) placements: bool,
     // Keep last: buffers must drop before the shared budget returns their bytes.
     pub(crate) memory_reservation: Option<pomelo_core::memory::MemoryReservation>,
 }
@@ -185,27 +187,34 @@ impl PreparedTracks {
         // Stream borrowed paths and compact rings into the final instance allocation.
         // Retaining an intermediate Segment array doubles geometry residency on large boards.
         let edges = zones.iter().flat_map(|zone| {
-            let paths = zone.paths.iter().flatten().map(move |edge| Segment {
-                id: zone.id,
-                track_id: ObjectId(0),
-                layer: zone.layer,
-                net: zone.net,
-                a: edge.a,
-                b: edge.b,
-                width: 0.0,
-                arc: edge.arc,
-                bond_wire: None,
-            });
+            let paths = zone
+                .paths
+                .iter()
+                .enumerate()
+                .flat_map(move |(ring_index, path)| {
+                    path.iter().map(move |edge| Segment {
+                        id: zone.id,
+                        track_id: ObjectId(ring_index as u32),
+                        layer: zone.layer,
+                        net: zone.net,
+                        a: edge.a,
+                        b: edge.b,
+                        width: 0.0,
+                        arc: edge.arc,
+                        bond_wire: None,
+                    })
+                });
             let rings = zone
                 .mesh
                 .ring_offsets
                 .windows(2)
+                .enumerate()
                 .filter(move |_| zone.paths.is_empty())
-                .flat_map(move |range| {
+                .flat_map(move |(ring_index, range)| {
                     let ring = &zone.mesh.vertices[range[0] as usize..range[1] as usize];
                     ring.iter().enumerate().map(move |(index, &a)| Segment {
                         id: zone.id,
-                        track_id: ObjectId(0),
+                        track_id: ObjectId(ring_index as u32),
                         layer: zone.layer,
                         net: zone.net,
                         a,
@@ -233,6 +242,11 @@ impl PreparedTracks {
             if index % 256 == 0 && cancellation.is_cancelled() {
                 return Err(PrepareError::Cancelled);
             }
+            let ring = instance.ids[1];
+            if ring > 0 {
+                instance.flags[3] |= 256 | (ring << 9);
+            }
+            instance.ids[1] = 0;
             instance.flags[3] |= 8;
             if dynamic_ids
                 .binary_search(&ObjectId(instance.ids[0]))
@@ -268,6 +282,47 @@ impl PreparedTracks {
             limits,
             cancellation,
         )
+    }
+
+    /// Placement contours retain analytic arcs and use logical hairline strokes.
+    pub fn build_placements(
+        scene: &pomelo_core::model::BoardScene,
+        limits: TraceLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, PrepareError> {
+        let mut count = 0usize;
+        for component in &scene.components {
+            if cancellation.is_cancelled() {
+                return Err(PrepareError::Cancelled);
+            }
+            if let Some(body) = &component.body {
+                for region in &body.regions {
+                    for path in &region.paths {
+                        count = count.saturating_add(path.len());
+                    }
+                }
+            }
+        }
+        let edges = scene.components.iter().flat_map(|component| {
+            component.body.iter().flat_map(move |body| {
+                body.regions.iter().flat_map(move |region| {
+                    region.paths.iter().flat_map(move |path| {
+                        path.iter().map(move |edge| {
+                            let mut edge = edge.clone();
+                            edge.id = component.id;
+                            edge.track_id = component.id;
+                            edge.layer = body.layer;
+                            edge.net = pomelo_core::model::NetId(0);
+                            edge.width = 0.0;
+                            edge
+                        })
+                    })
+                })
+            })
+        });
+        let mut source = Self::build_segments(edges, count, count, limits, cancellation)?;
+        source.placements = true;
+        Ok(source)
     }
 
     /// Prepare dimension strokes without cloning or flattening source geometry.
@@ -656,6 +711,7 @@ impl PreparedTracks {
             }
         }
         Ok(Self {
+            placements: false,
             instances,
             batches,
             memory_reservation: None,

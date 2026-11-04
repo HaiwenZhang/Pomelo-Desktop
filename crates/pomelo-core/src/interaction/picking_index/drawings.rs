@@ -19,6 +19,7 @@ pub(super) struct DrawingEntry {
     pub layer: LayerId,
     pub sequence: usize,
     pub geometry: DrawingGeometry,
+    pub text_height: Option<f64>,
     pub bounds: Bounds,
 }
 pub(super) struct DrawingIndex {
@@ -33,10 +34,8 @@ impl DrawingIndex {
         max_bytes: usize,
         cancel: &CancellationToken,
     ) -> Result<Self, IndexError> {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled.into());
-        }
-        let limit = max_bytes.min(256 * 1024 * 1024);
+        cancel.check()?;
+        let limit = max_bytes;
         let owner_count = scene
             .drawings
             .iter()
@@ -57,9 +56,7 @@ impl DrawingIndex {
         // hundreds of thousands and must not consume drawing storage or budget.
         let mut glyph_count = 0usize;
         for quad in quads {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             glyph_count += usize::from(owners.contains_key(&quad.text));
         }
         let stroke_count = scene
@@ -72,9 +69,18 @@ impl DrawingIndex {
             .filter(|text| owners.contains_key(&text.id))
             .count();
         let count = stroke_count.saturating_add(text_count);
+        // Sorting keys, duplicate text quads and the spatial hierarchy live in
+        // different phases. Charge the largest phase, with actual type sizes.
+        let glyph_bytes = glyph_count.saturating_mul(size_of::<TextPickQuad>());
+        let sort_bytes = stroke_count.saturating_mul(size_of::<(LayerId, bool, usize)>());
+        let hierarchy_bytes = BoundsIndex::max_allocation_bytes(count).saturating_add(glyph_bytes);
         let bytes = count
-            .saturating_mul(std::mem::size_of::<DrawingEntry>() + 512)
-            .saturating_add(glyph_count.saturating_mul(2 * std::mem::size_of::<TextPickQuad>()))
+            .saturating_mul(size_of::<DrawingEntry>())
+            .saturating_add(
+                sort_bytes
+                    .max(glyph_bytes.saturating_mul(2))
+                    .max(hierarchy_bytes),
+            )
             .saturating_add(owner_bytes);
         if bytes > limit {
             return Err(IndexError::ByteLimit {
@@ -86,47 +92,46 @@ impl DrawingIndex {
         entries
             .try_reserve_exact(count)
             .map_err(|_| IndexError::Allocation)?;
-        let mut layer_counts = std::collections::BTreeMap::<LayerId, usize>::new();
         let mut keys = Vec::new();
         keys.try_reserve_exact(stroke_count)
             .map_err(|_| IndexError::Allocation)?;
         for (drawing, d) in scene.drawings.iter().enumerate() {
             for (segment, s) in d.segments.iter().enumerate() {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled.into());
-                }
+                cancel.check()?;
                 crate::picking::segment_centerline_distance_mm(s, s.a)?;
                 let bounds = s.bounds().ok_or(PathError::Invalid(d.id))?;
-                let offset = layer_counts.entry(d.layer).or_default();
-                keys.push((
-                    d.layer,
-                    *offset / 16384,
-                    s.arc.is_some(),
-                    *offset,
-                    entries.len(),
-                ));
-                *offset += 1;
+                keys.push((d.layer, s.arc.is_some(), entries.len()));
                 entries.push(DrawingEntry {
                     owner: d.id,
                     layer: d.layer,
                     sequence: 0,
                     geometry: DrawingGeometry::Stroke { drawing, segment },
+                    text_height: None,
                     bounds,
                 });
             }
         }
-        keys.sort_unstable();
+        keys.sort_unstable_by_key(|key| (key.0, key.2));
+        let mut first = 0;
+        while first < keys.len() {
+            let layer = keys[first].0;
+            let end = first + keys[first..].partition_point(|key| key.0 == layer);
+            // Match native 16,384-stroke batches: lines, then arcs, preserving
+            // source sequence within each kind. No per-layer map is retained.
+            for chunk in keys[first..end].chunks_mut(16384) {
+                chunk.sort_unstable_by_key(|key| (key.1, key.2));
+            }
+            first = end;
+        }
         for (sequence, key) in keys.into_iter().enumerate() {
-            entries[key.4].sequence = sequence;
+            entries[key.2].sequence = sequence;
         }
         let mut text_quads = Vec::new();
         text_quads
             .try_reserve_exact(glyph_count)
             .map_err(|_| IndexError::Allocation)?;
         for &quad in quads {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             if owners.contains_key(&quad.text) {
                 text_quads.push(quad);
             }
@@ -137,9 +142,7 @@ impl DrawingIndex {
             .try_reserve_exact(glyph_count)
             .map_err(|_| IndexError::Allocation)?;
         for (sequence, text) in scene.texts.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled.into());
-            }
+            cancel.check()?;
             if let Some(owner) = owners.remove(&text.id) {
                 let start = text_quads.partition_point(|quad| quad.text < text.id);
                 let end = start + text_quads[start..].partition_point(|quad| quad.text == text.id);
@@ -159,10 +162,12 @@ impl DrawingIndex {
                     layer: text.layer,
                     sequence,
                     geometry: DrawingGeometry::Glyphs { start, count },
+                    text_height: Some(text.height),
                     bounds,
                 });
             }
         }
+        drop(text_quads);
         let bounds = BoundsIndex::build(entries.iter().map(|e| Some(e.bounds)), cancel)?;
         Ok(Self {
             entries,

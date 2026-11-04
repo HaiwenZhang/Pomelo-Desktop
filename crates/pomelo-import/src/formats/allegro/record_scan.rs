@@ -26,8 +26,8 @@ pub(super) fn scan_record(
     let key = match kind {
         0x03 => scan_field(reader, version, limits, offset)?,
         0x1a => {
-            // V165/V166 paired nets retain the 88-byte layout, verified against real records.
-            if ![152, 157, 165, 166, 172, 174, 251, 261].contains(&version) {
+            // V165/V166 use 88 bytes; V180/V181 have the V174 extra word (92 bytes).
+            if ![152, 157, 165, 166, 172, 174, 180, 181, 251, 261].contains(&version) {
                 return Err(ImportError::UnsupportedRecordLayout {
                     record_type: kind,
                     version,
@@ -156,6 +156,16 @@ pub(super) fn scan_record(
                 return Err(invalid(offset, "REFERENCE_COUNT", u64::from(count)));
             }
             skip_entries(reader, count as usize, 4)?;
+            key
+        }
+        0x37 => {
+            // Capacity includes unused slots; count alone does not locate the next record.
+            reader.skip(3)?;
+            let key = reader.u32()?;
+            reader.skip(8)?;
+            let capacity = reader.u32()?;
+            reader.skip(8 + if version >= 174 { 4 } else { 0 })?;
+            skip_entries(reader, capacity as usize, 4)?;
             key
         }
         // Older fixed records have inline text, which must retain decoding errors.
@@ -437,7 +447,6 @@ fn fixed_length(kind: u8, version: u16) -> Option<usize> {
         0x33 => (if modern { 72 } else { 68 }) + 2 * v172,
         0x34 => (if modern { 32 } else { 28 }) + v172,
         0x35 => 124,
-        0x37 => 428 + v174,
         0x38 if version >= 166 => 52 + v174,
         0x39 => 60,
         0x3a => 16 + v174,

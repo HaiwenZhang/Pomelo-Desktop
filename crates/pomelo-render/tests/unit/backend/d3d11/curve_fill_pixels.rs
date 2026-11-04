@@ -185,6 +185,11 @@ fn hardware_curve_fill_preserves_disjoint_islands_hole_union_and_cache() {
                         );
                         for highlight in 0..3 {
                             let mut frame = TraceFrame {
+                                net_colors: None,
+                                pattern: None,
+                                object_filter: Default::default(),
+                                brightness: 1.0,
+                                object_colors: None,
                                 pass: crate::backend::OverlayPass::Base,
                                 filled: true,
                                 hover_selection: None,
@@ -341,15 +346,19 @@ fn hardware_curve_uploads_share_one_four_mib_budget() {
     )
     .unwrap();
     // Stress the real D3D11 uploader with two independent nine-MiB sources.
-    // Drawing is irrelevant here; no batches reference these diagnostic buffers.
+    // Each diagnostic buffer needs a batch: the paged uploader skips unreferenced data.
+    // Drawing is irrelevant here; the test only submits uploads.
     for entry in cache.entries.values_mut() {
-        entry.source = Arc::new(PreparedCopper {
-            memory_reservation: None,
-            source: None,
-            vertices: vec![CopperVertex { position: [0.0; 4] }; 600_000],
-            indices: vec![0, 0, 0],
-            batches: vec![],
-        });
+        let mut source =
+            PreparedCopper::build(&[fixture(0).0], CopperLimits::default(), &cancel).unwrap();
+        assert_eq!(source.batches.len(), 1);
+        let index_count = source.index_count();
+        source.source = None;
+        source.vertices = vec![CopperVertex { position: [0.0; 4] }; 600_000];
+        source.indices = vec![0; index_count];
+        source.batches[0].vertex_start = 0;
+        source.batches[0].vertex_count = 600_000;
+        entry.source = Arc::new(source);
     }
     let telemetry = Arc::new(CopperTelemetry::default());
     let mut renderer = CopperRenderer::new(Arc::clone(&telemetry));
@@ -446,6 +455,11 @@ fn hardware_curve_zone_labels_share_the_final_hole_mask() {
         glyph.ids[1] = pomelo_core::display::DisplayCategory::Zone as u32;
     }
     let frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         pass: crate::backend::OverlayPass::Base,
         filled: true,
         hover_selection: None,

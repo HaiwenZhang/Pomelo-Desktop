@@ -131,7 +131,8 @@ pub(crate) fn prepare_document(input: DocumentPreparation) -> Result<PreparedDoc
             .texts
             .iter()
             .map(|text| text.text.as_str())
-            .chain(board.scene.nets.values().map(String::as_str)),
+            .chain(board.scene.nets.values().map(String::as_str))
+            .chain(board.scene.components.iter().map(|c| c.reference.as_str())),
         &cancellation,
     ) {
         Ok(font) => Some(std::sync::Arc::new(font)),
@@ -215,6 +216,22 @@ pub(crate) fn prepare_document(input: DocumentPreparation) -> Result<PreparedDoc
         PreparedCopper::allocation_bytes,
     )?;
     begin_stage(ImportStage::PreparingPads)?;
+    let placement_outlines = preparation_memory.prepare_tracks(|limits| {
+        PreparedTracks::build_placements(&board.scene, limits, &cancellation)
+    })?;
+    let placements = preparation_memory.prepare(
+        |bytes| {
+            pomelo_render::scene::placement::prepare(
+                &board.scene,
+                CopperLimits {
+                    max_bytes: bytes,
+                    ..Default::default()
+                },
+                &cancellation,
+            )
+        },
+        PreparedCopper::allocation_bytes,
+    )?;
     let mut pads = preparation_memory.prepare(
         |bytes| {
             pomelo_render::pads::PreparedPads::build(
@@ -337,6 +354,8 @@ pub(crate) fn prepare_document(input: DocumentPreparation) -> Result<PreparedDoc
         ));
     }
     Ok::<_, LoadError>(PreparedDocument {
+        placements: std::sync::Arc::new(placements),
+        placement_outlines: std::sync::Arc::new(placement_outlines),
         preview,
         restored_view: restored_view.map(Box::new),
         drawings: std::sync::Arc::new(drawings),
@@ -369,6 +388,47 @@ mod tests {
         interaction::{Camera, SelectionMode},
         model::Point,
     };
+
+    #[test]
+    #[ignore = "requires POMELO_DOCUMENT_CASES with explicitly selected local board paths"]
+    fn local_native_boards_prepare_for_the_desktop() {
+        let paths = std::env::var_os("POMELO_DOCUMENT_CASES").expect("set POMELO_DOCUMENT_CASES");
+        for path in std::env::split_paths(&paths) {
+            let started = std::time::Instant::now();
+            let budget = MemoryBudget::new(0);
+            let prepared = prepare_document(DocumentPreparation {
+                path: path.clone(),
+                options: ImportOptions::default(),
+                cancellation: CancellationToken::default(),
+                mailbox: LatestImportProgress::default(),
+                reload_view: None,
+                search_locale: Locale::English,
+                source_font: None,
+                preparation_budget: budget.clone(),
+            })
+            .unwrap_or_else(|error| panic!("{}: {:?}", path.display(), error.diagnostic()));
+            assert_eq!(
+                prepared.picking.segment_count(),
+                prepared.board.scene.segments.len()
+            );
+            eprintln!(
+                "DOCUMENT_PREPARED {} tracks={} drawings={} zone_edges={} pads={} managed_bytes={} seconds={:.2}",
+                path.display(),
+                prepared.tracks.instances.len(),
+                prepared.drawings.instances.len(),
+                prepared.zone_outlines.instances.len(),
+                prepared.pads.analytic.len(),
+                budget.used(),
+                started.elapsed().as_secs_f64()
+            );
+            drop(prepared);
+            assert_eq!(
+                budget.used(),
+                0,
+                "document geometry reservations must be released"
+            );
+        }
+    }
 
     #[test]
     fn prepares_a_board_with_indexes_and_restores_its_matching_view() {
@@ -405,6 +465,7 @@ mod tests {
             pick_filter: Default::default(),
             selection: None,
             selection_anchor: None,
+            review: Default::default(),
         };
         let budget = MemoryBudget::new(0);
         let prepared = prepare_document(DocumentPreparation {

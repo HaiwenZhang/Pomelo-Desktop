@@ -6,20 +6,33 @@ mod curves;
 mod diagnostics_panel;
 mod frame;
 mod gesture;
+mod gpu_trace;
+mod grid;
 mod hover;
 mod inspector_panel;
+mod labels;
 mod layer_panel;
 mod layout;
+mod motion;
 mod navigation;
+mod net_colors;
+mod object_filter;
 mod opacity;
+mod patterns;
 mod picking;
+mod review;
+mod review_export;
+mod review_overlay;
+mod review_panel;
 mod scale_label;
 mod search;
+mod selection;
+mod telemetry;
 mod toolbar;
 
 pub use crate::actions::FocusSearch;
 use crate::i18n;
-use crate::panels::inspector::{prepare_inspection, selection_identity};
+use crate::panels::inspector::selection_identity;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Icon, ResizableState, Sizable, h_resizable, resizable_panel,
@@ -43,7 +56,7 @@ use pomelo_core::{
     model::BoardScene,
 };
 use pomelo_render::{
-    backend::native::{BoardFrame, BoardRenderer, CopperTelemetry, TraceFrame, TraceTelemetry},
+    backend::native::{BoardFrame, TraceFrame},
     tracks::PreparedTracks,
 };
 use std::{
@@ -59,12 +72,23 @@ actions!(
         NextCandidate,
         FitBoard,
         FlipBoard,
+        ToggleGrid,
         ZoomIn,
         ZoomOut,
         PanLeft,
         PanRight,
         PanUp,
-        PanDown
+        PanDown,
+        CancelCanvasAction,
+        MeasureDistance,
+        MeasurePolyline,
+        MeasureClearance,
+        BoxSelect,
+        ZoomToArea,
+        FinishMeasurement,
+        RemoveLastPoint,
+        NavigateBack,
+        NavigateForward
     ]
 );
 
@@ -86,9 +110,11 @@ pub struct BoardViewport {
     texts: Option<Arc<pomelo_render::text::msdf::PreparedGlyphs>>,
     source_strokes: Option<Arc<pomelo_render::text::instances::PreparedTextInstances>>,
     label_index: Option<Arc<pomelo_render::text::msdf::LabelIndex>>,
-    label_cache: Option<LabelCache>,
+    labels: labels::LabelState,
     curve_fill: curves::CurveState,
     copper: Arc<pomelo_render::copper::PreparedCopper>,
+    placements: Arc<pomelo_render::copper::PreparedCopper>,
+    placement_outlines: Arc<PreparedTracks>,
     pads: Arc<pomelo_render::pads::PreparedPads>,
     drills: Arc<pomelo_render::pads::PreparedPads>,
     scene: Arc<BoardScene>,
@@ -100,14 +126,31 @@ pub struct BoardViewport {
     picking: Arc<pomelo_core::picking_index::BoardPickingIndex>,
     search_input: Entity<InputState>,
     layer_input: Entity<InputState>,
+    /// Narrows the net and component lists without changing the board search.
+    entity_filter_input: Entity<InputState>,
+    entity_filter: String,
+    /// Keyboard-highlighted row in the net and component list.
+    entity_highlight: usize,
+    entity_scroll: UniformListScrollHandle,
     layer_query: String,
     input_locale: Option<pomelo_core::i18n::Locale>,
-    left_panel: usize,
-    show_display: bool,
+    left_panel: LeftPanelTab,
+    right_panel: RightPanelTab,
+    review: review::ReviewSession,
+    rename_input: Entity<InputState>,
+    /// Source file name, offered in exports unless the user anonymizes them.
+    source_name: String,
     file_information_expanded: bool,
+    file_information_scroll: ScrollHandle,
     pan_tool: bool,
+    pan_start: Option<pomelo_core::interaction::Camera>,
+    wheel_history_at: Option<std::time::Instant>,
     copper_slider: Entity<SliderState>,
     global_slider: Entity<SliderState>,
+    shadow_slider: Entity<SliderState>,
+    object_filter_slider: Entity<SliderState>,
+    last_visibility: Option<pomelo_core::display::LayerVisibility>,
+    net_color_target: Option<pomelo_core::model::NetId>,
     color_pickers: BTreeMap<
         pomelo_core::appearance::ColorTarget,
         Entity<gpui_kit::component::color_picker::ColorPickerState>,
@@ -133,7 +176,7 @@ pub struct BoardViewport {
     members_scroll: ScrollHandle,
     members_navigation: crate::panels::diagnostics::NavigationFocus,
     selected_pins: Arc<BTreeSet<pomelo_core::model::ObjectId>>,
-    selected_bonds: Arc<BTreeSet<pomelo_core::selection::SelectedObject>>,
+    selected_related_objects: Arc<BTreeSet<pomelo_core::selection::SelectedObject>>,
     search_cancel: pomelo_core::task::CancellationToken,
     search_task: Option<Task<()>>,
     search_pending: bool,
@@ -143,31 +186,82 @@ pub struct BoardViewport {
     locate_details: Option<pomelo_core::geometry::PathError>,
     search_query: String,
     layer_scroll: ListState,
-    layer_list_ids: Vec<pomelo_core::model::LayerId>,
+    layer_list_ids: Vec<layer_panel::LayerListKey>,
+    collapsed_layer_groups: BTreeSet<crate::panels::layers::LayerGroup>,
     expanded_layer: Option<pomelo_core::model::LayerId>,
-    layer_scroll_target: Option<usize>,
+    entity_sort: layer_panel::EntitySort,
+    entity_rows: Option<layer_panel::EntityRows>,
+    layer_scroll_target: Option<LayerScrollTarget>,
     display: Arc<pomelo_core::display::BoardDisplay>,
     colors: Arc<BTreeMap<pomelo_core::model::LayerId, [f32; 4]>>,
     renderer: Result<GpuPainterHandle<BoardFrame>, String>,
-    telemetry: Arc<TraceTelemetry>,
-    copper_telemetry: Arc<CopperTelemetry>,
-    pad_telemetry: Arc<TraceTelemetry>,
-    custom_pad_telemetry: Arc<CopperTelemetry>,
-    custom_outline_telemetry: Arc<TraceTelemetry>,
-    drill_telemetry: Arc<TraceTelemetry>,
-    drawing_telemetry: Arc<TraceTelemetry>,
-    text_telemetry: Arc<TraceTelemetry>,
-    source_stroke_telemetry: Arc<TraceTelemetry>,
-    zone_outline_telemetry: Arc<TraceTelemetry>,
-    label_telemetry: Arc<TraceTelemetry>,
+    telemetry: telemetry::RendererTelemetry,
     paint_error: Option<String>,
     navigation: ViewportNavigation,
     bounds: Option<Bounds<Pixels>>,
     pointer_gesture: Option<gesture::PointerGesture>,
     pointer_position: Option<Point<Pixels>>,
+    camera_motion: motion::CameraMotion,
     focus: FocusHandle,
     diagnostics_navigation: crate::panels::diagnostics::NavigationFocus,
     inspector_focus: crate::panels::focus_scroll::InspectorFocus,
+}
+
+/// Left sidebar tabs, in display order; the tab bar addresses them by index.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LeftPanelTab {
+    Layers,
+    Nets,
+    Components,
+}
+
+impl LeftPanelTab {
+    const ALL: [Self; 3] = [Self::Layers, Self::Nets, Self::Components];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::Layers)
+    }
+
+    /// Search result group listed by this tab, if it lists search results.
+    fn search_category(self) -> Option<pomelo_core::search::SearchCategory> {
+        match self {
+            Self::Layers => None,
+            Self::Nets => Some(pomelo_core::search::SearchCategory::Net),
+            Self::Components => Some(pomelo_core::search::SearchCategory::Component),
+        }
+    }
+}
+
+/// Right sidebar tabs, in display order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RightPanelTab {
+    Inspector,
+    Display,
+    Review,
+}
+
+impl RightPanelTab {
+    const ALL: [Self; 3] = [Self::Inspector, Self::Display, Self::Review];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::Inspector)
+    }
+}
+
+/// What the layer list should reveal on its next render. A layer is stored by
+/// identity, not index, because reordering and name filtering change positions.
+#[derive(Clone, Copy)]
+enum LayerScrollTarget {
+    Start,
+    Layer(pomelo_core::model::LayerId),
 }
 
 fn snapshot_selection(
@@ -269,11 +363,13 @@ impl BoardViewport {
             pick_filter: self.pick_filter,
             selection,
             selection_anchor: selection.and(self.selected_anchor),
+            review: self.review.state.clone(),
         })
     }
 
     pub fn new(
         prepared: &crate::document::PreparedDocument,
+        source_name: String,
         panel_layout: Entity<crate::workbench::panel_layout::PanelLayout>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -284,37 +380,16 @@ impl BoardViewport {
         let texts = prepared.texts.clone();
         let source_strokes = prepared.source_strokes.clone();
         let copper = Arc::clone(&prepared.copper);
+        let placements = Arc::clone(&prepared.placements);
+        let placement_outlines = Arc::clone(&prepared.placement_outlines);
         let pads = Arc::clone(&prepared.pads);
         let drills = Arc::clone(&prepared.drills);
         let scene = Arc::clone(&prepared.board.scene);
         let search = Arc::clone(&prepared.search);
-        let telemetry = Arc::new(TraceTelemetry::default());
-        let copper_telemetry = Arc::new(CopperTelemetry::default());
-        let pad_telemetry = Arc::new(TraceTelemetry::default());
-        let custom_pad_telemetry = Arc::new(CopperTelemetry::default());
-        let custom_outline_telemetry = Arc::new(TraceTelemetry::default());
-        let drill_telemetry = Arc::new(TraceTelemetry::default());
-        let drawing_telemetry = Arc::new(TraceTelemetry::default());
-        let text_telemetry = Arc::new(TraceTelemetry::default());
-        let source_stroke_telemetry = Arc::new(TraceTelemetry::default());
-        let zone_outline_telemetry = Arc::new(TraceTelemetry::default());
-        let label_telemetry = Arc::new(TraceTelemetry::default());
+        let telemetry = telemetry::RendererTelemetry::default();
         let renderer = window
             .register_gpu_painter(pomelo_render::backend::native::painter(
-                BoardRenderer::new(
-                    Arc::clone(&telemetry),
-                    Arc::clone(&copper_telemetry),
-                    Arc::clone(&pad_telemetry),
-                    Arc::clone(&custom_pad_telemetry),
-                    Arc::clone(&drill_telemetry),
-                    Arc::clone(&drawing_telemetry),
-                    Arc::clone(&text_telemetry),
-                )
-                .with_source_stroke_telemetry(Arc::clone(&source_stroke_telemetry))
-                .with_custom_outline_telemetry(Arc::clone(&custom_outline_telemetry))
-                .with_zone_outline_telemetry(Arc::clone(&zone_outline_telemetry))
-                .with_label_telemetry(Arc::clone(&label_telemetry))
-                .with_trace_residency(64 * 1024 * 1024),
+                telemetry.renderer().with_trace_residency(0),
             ))
             .map_err(|error| format!("{error:#}"));
         let colors =
@@ -335,6 +410,12 @@ impl BoardViewport {
                 .collect();
         let top_layer = scene.layers.first().map(|layer| layer.id);
         let initial_display = pomelo_core::display::BoardDisplay {
+            trace_render_mode: if std::env::var("POMELO_TRACE_RENDERER").is_ok_and(|v| v == "sdf") {
+                pomelo_core::display::TraceRenderMode::Sdf
+            } else {
+                pomelo_core::display::TraceRenderMode::Stencil
+            },
+            active_layer: top_layer,
             static_shapes_fill_solid: true,
             color_mode: pomelo_core::display::ColorMode::Net,
             hidden_layers: scene
@@ -363,25 +444,59 @@ impl BoardViewport {
                 }
             ) && !this.search_pending
             {
-                let first = this.search_results.iter().find(|entry| match entry.target {
-                    pomelo_core::search::SearchTarget::Net(_) => this.left_panel == 1,
-                    pomelo_core::search::SearchTarget::Component(_)
-                    | pomelo_core::search::SearchTarget::ComponentGroup(_) => this.left_panel == 2,
-                });
+                let category = this.left_panel.search_category();
+                let first = this
+                    .search_results
+                    .iter()
+                    .find(|entry| Some(entry.target.category()) == category);
                 if let Some(entry) = first {
                     this.locate_search(entry.target, window, cx);
                 }
             }
         })
         .detach();
+        let rename_input = cx.new(|cx| InputState::new(window, cx));
+        cx.subscribe_in(
+            &rename_input,
+            window,
+            |this, input, event, window, cx| match event {
+                InputEvent::PressEnter { .. } => {
+                    if let Some(target) = this.review.rename.take() {
+                        let name = input.read(cx).value().to_string();
+                        this.rename_review_item(target, &name, cx);
+                    }
+                    window.focus(&this.focus, cx);
+                    cx.notify();
+                }
+                InputEvent::Blur if this.review.rename.take().is_some() => cx.notify(),
+                _ => {}
+            },
+        )
+        .detach();
         let layer_input = cx.new(|cx| InputState::new(window, cx));
         cx.subscribe_in(&layer_input, window, |this, input, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.layer_query = input.read(cx).value().to_lowercase();
-                this.layer_scroll_target = Some(0);
+                this.layer_scroll_target = Some(LayerScrollTarget::Start);
                 cx.notify();
             }
         })
+        .detach();
+        let entity_filter_input = cx.new(|cx| InputState::new(window, cx));
+        cx.subscribe_in(
+            &entity_filter_input,
+            window,
+            |this, input, event, window, cx| match event {
+                InputEvent::Change => {
+                    this.entity_filter = input.read(cx).value().to_lowercase();
+                    this.entity_highlight = 0;
+                    this.entity_scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => this.locate_highlighted_entity(window, cx),
+                _ => {}
+            },
+        )
         .detach();
         let opacity = prepared
             .restored_view
@@ -423,6 +538,45 @@ impl BoardViewport {
             }
         })
         .detach();
+        let shadow_brightness = prepared
+            .restored_view
+            .as_ref()
+            .map_or(0.6, |state| state.display.shadow.brightness);
+        let shadow_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .step(1.0)
+                .default_value(shadow_brightness * 100.0)
+        });
+        cx.subscribe(&shadow_slider, |this, _, event, cx| {
+            if let SliderEvent::Change(value) = event {
+                Arc::make_mut(&mut this.display).shadow.brightness = value.end() / 100.0;
+                cx.notify();
+            }
+        })
+        .detach();
+        let filter_pixels = prepared
+            .restored_view
+            .as_ref()
+            .map_or(0, |state| state.display.object_filter.minimum_pixels);
+        let object_filter_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .step(1.0)
+                .default_value(f32::from(filter_pixels))
+        });
+        cx.subscribe(&object_filter_slider, |this, _, event, cx| {
+            if let SliderEvent::Change(value) = event {
+                Arc::make_mut(&mut this.display)
+                    .object_filter
+                    .minimum_pixels = value.end().round() as u16;
+                this.invalidate_hover();
+                cx.notify();
+            }
+        })
+        .detach();
         let mut viewport = Self {
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),
@@ -430,16 +584,30 @@ impl BoardViewport {
             inspector_focus: crate::panels::focus_scroll::InspectorFocus::new(cx),
             search_input,
             layer_input,
+            entity_filter_input,
+            entity_filter: String::new(),
+            entity_highlight: 0,
+            entity_scroll: UniformListScrollHandle::new(),
             layer_query: String::new(),
             input_locale: None,
-            left_panel: 0,
-            show_display: false,
-            file_information_expanded: true,
+            left_panel: LeftPanelTab::Layers,
+            right_panel: RightPanelTab::Inspector,
+            review: review::ReviewSession::default(),
+            rename_input,
+            source_name,
+            file_information_expanded: false,
+            file_information_scroll: ScrollHandle::new(),
             pan_tool: false,
+            pan_start: None,
+            wheel_history_at: None,
             panel_sizes: panel_layout.read(cx).sizes.clone(),
             panel_layout,
             copper_slider,
             global_slider,
+            shadow_slider,
+            object_filter_slider,
+            last_visibility: None,
+            net_color_target: None,
             color_pickers: BTreeMap::new(),
             search_results: Vec::new(),
             selected_target: None,
@@ -465,7 +633,7 @@ impl BoardViewport {
             members_scroll: ScrollHandle::new(),
             members_navigation: crate::panels::diagnostics::NavigationFocus::new(cx),
             selected_pins: Arc::new(BTreeSet::new()),
-            selected_bonds: Arc::new(BTreeSet::new()),
+            selected_related_objects: Arc::new(BTreeSet::new()),
             search_cancel: pomelo_core::task::CancellationToken::default(),
             search_task: None,
             search_pending: false,
@@ -476,12 +644,18 @@ impl BoardViewport {
             search_query: String::new(),
             layer_scroll: ListState::new(0, ListAlignment::Top, px(128.0)),
             layer_list_ids: Vec::new(),
-            expanded_layer: scene.layers.first().map(|layer| layer.id),
+            // Drawing families are long and rarely needed first.
+            collapsed_layer_groups: BTreeSet::from([crate::panels::layers::LayerGroup::Drawings]),
+            expanded_layer: None,
+            entity_sort: layer_panel::EntitySort::default(),
+            entity_rows: None,
             layer_scroll_target: None,
             tracks,
             zone_outlines: Arc::clone(&prepared.zone_outlines),
             drawings,
             copper,
+            placements,
+            placement_outlines,
             pads,
             drills,
             scene,
@@ -494,32 +668,26 @@ impl BoardViewport {
             colors: Arc::new(colors),
             renderer,
             telemetry,
-            copper_telemetry,
-            pad_telemetry,
-            custom_pad_telemetry,
-            custom_outline_telemetry,
-            drill_telemetry,
-            drawing_telemetry,
-            text_telemetry,
-            source_stroke_telemetry,
-            zone_outline_telemetry,
-            label_telemetry,
             texts,
             source_strokes,
             label_index: prepared.label_index.clone(),
-            label_cache: None,
+            labels: labels::LabelState::default(),
             curve_fill: curves::CurveState::default(),
             paint_error: None,
             navigation: ViewportNavigation::default(),
             bounds: None,
             pointer_gesture: None,
             pointer_position: None,
+            camera_motion: Default::default(),
             focus: cx.focus_handle(),
         };
         if let Some(state) = &prepared.restored_view
             && viewport.navigation.restore_camera(state.camera)
         {
             viewport.display = Arc::new(state.display.clone());
+            viewport.review.state = state.review.clone();
+            viewport.review.refresh_colors();
+            viewport.validate_review_state(window, cx);
             viewport.selection_mode = state.selection_mode;
             viewport.pick_filter = state.pick_filter;
             viewport.invalidate_hover();
@@ -550,12 +718,6 @@ impl Focusable for BoardViewport {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
     }
-}
-
-struct LabelCache {
-    key: [u64; 6],
-    display: Arc<pomelo_core::display::BoardDisplay>,
-    source: Arc<pomelo_render::text::msdf::PreparedGlyphs>,
 }
 
 #[cfg(test)]

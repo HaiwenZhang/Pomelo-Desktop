@@ -72,6 +72,7 @@ fn category(object: SelectedObject) -> u8 {
         SelectedObject::Via(_) => 4,
         SelectedObject::Zone(_) => 8,
         SelectedObject::Drawing(_) => 16,
+        SelectedObject::Placement(_) => 32,
     }
 }
 
@@ -85,6 +86,7 @@ mod tests {
     #[test]
     fn net_runs_match_source_order_for_partial_chunks_and_clipped_ranges() {
         let source = PreparedTracks {
+            placements: false,
             instances: (0..16_385)
                 .map(|i| {
                     let mut line = TraceInstance::zeroed();

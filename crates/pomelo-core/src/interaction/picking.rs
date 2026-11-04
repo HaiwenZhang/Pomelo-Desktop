@@ -104,9 +104,7 @@ impl PickQuery {
         let limit = limit.min(64);
         let mut hits = Vec::new();
         for zone in &scene.zones {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if limit == 0
                 || !filter.contains(PickCategory::Zone)
                 || !display.show_copper
@@ -129,11 +127,8 @@ impl PickQuery {
                 });
             }
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(hits)
-        }
+        cancel.check()?;
+        Ok(hits)
     }
 
     /// Reference via scan; pad layer visibility is independent of drill display.
@@ -149,9 +144,7 @@ impl PickQuery {
         let limit = limit.min(64);
         let mut hits: Vec<ViaHit<'a>> = Vec::new();
         for via in &scene.vias {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if limit == 0 || !filter.contains(PickCategory::Via) || !eligible(via) {
                 continue;
             }
@@ -162,9 +155,7 @@ impl PickQuery {
             };
             let mut distance = f64::INFINITY;
             for pad in via.pads.iter() {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
+                cancel.check()?;
                 if !display.primitive_visible(pad.layer, crate::display::LayerPrimitive::Vias) {
                     continue;
                 }
@@ -190,11 +181,8 @@ impl PickQuery {
                 },
             );
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(hits)
-        }
+        cancel.check()?;
+        Ok(hits)
     }
 
     /// Query analytic pin pads only. Custom contours require a separate path query.
@@ -266,9 +254,7 @@ impl PickQuery {
         let limit = options.limit.min(64);
         let mut hits: Vec<PinHit<'a>> = Vec::new();
         for pin in &scene.pins {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if limit == 0 || !options.filter.contains(PickCategory::Pin) || !eligible(pin) {
                 continue;
             }
@@ -279,9 +265,7 @@ impl PickQuery {
             };
             let mut distance = f64::INFINITY;
             for pad in &pin.pads {
-                if cancel.is_cancelled() {
-                    return Err(PathError::Cancelled);
-                }
+                cancel.check()?;
                 if !display.primitive_visible(pad.layer, crate::display::LayerPrimitive::Pads) {
                     continue;
                 }
@@ -310,11 +294,8 @@ impl PickQuery {
                 },
             );
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(hits)
-        }
+        cancel.check()?;
+        Ok(hits)
     }
 
     pub(crate) fn intersects(self, bounds: crate::model::Bounds) -> bool {
@@ -376,9 +357,7 @@ impl PickQuery {
         let limit = limit.min(64);
         let mut hits: Vec<SegmentHit<'a>> = Vec::new();
         for segment in segments {
-            if cancel.is_cancelled() {
-                return Err(PathError::Cancelled);
-            }
+            cancel.check()?;
             if limit == 0
                 || !filter.allows(
                     SelectedObject::Segment(segment.id),
@@ -407,11 +386,8 @@ impl PickQuery {
                 },
             );
         }
-        if cancel.is_cancelled() {
-            Err(PathError::Cancelled)
-        } else {
-            Ok(hits)
-        }
+        cancel.check()?;
+        Ok(hits)
     }
 }
 
@@ -460,7 +436,7 @@ impl From<SelectedObject> for PickCategory {
     fn from(value: SelectedObject) -> Self {
         match value {
             SelectedObject::Segment(_) => Self::Segment,
-            SelectedObject::Pin(_) => Self::Pin,
+            SelectedObject::Pin(_) | SelectedObject::Placement(_) => Self::Pin,
             SelectedObject::Via(_) => Self::Via,
             SelectedObject::Zone(_) => Self::Zone,
             SelectedObject::Drawing(_) => Self::Drawing,

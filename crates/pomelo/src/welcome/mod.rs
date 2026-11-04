@@ -238,10 +238,11 @@ pub fn render(
                                                                 .border_color(
                                                                     theme.primary_foreground,
                                                                 )
-                                                                .child(text(
-                                                                    locale,
-                                                                    Key::ShortcutOpen,
-                                                                )),
+                                                                .child(
+                                                                    crate::shortcuts::shortcut_label(
+                                                                        crate::shortcuts::keys::OPEN_FILE,
+                                                                    ),
+                                                                ),
                                                         ),
                                                 )
                                                 .on_click(|_, window, cx| {
@@ -277,9 +278,9 @@ pub fn render(
                                 )
                                 .children(
                                     [
-                                        ("Ctrl O", Key::OpenFile),
-                                        ("Ctrl K", Key::SearchBoard),
-                                        ("F2", Key::FitBoard),
+                                        (crate::shortcuts::keys::OPEN_FILE, Key::OpenFile),
+                                        (crate::shortcuts::keys::FOCUS_SEARCH, Key::SearchBoard),
+                                        (crate::shortcuts::keys::FIT_ACTIVE_BOARD, Key::FitBoard),
                                     ]
                                     .into_iter()
                                     .map(|(shortcut, key)| {
@@ -295,7 +296,7 @@ pub fn render(
                                                     .px_3()
                                                     .py_1()
                                                     .text_sm()
-                                                    .child(shortcut),
+                                                    .child(crate::shortcuts::shortcut_label(shortcut)),
                                             )
                                             .child(
                                                 div()

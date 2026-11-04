@@ -32,7 +32,16 @@ pub(super) enum TraceScope {
     ),
 }
 
+pub type ObjectColors = BTreeMap<pomelo_core::selection::SelectedObject, [f32; 3]>;
+
 pub struct TraceFrame<S: InstanceSource = PreparedTracks> {
+    /// Borrow the document snapshot for net colors; no source geometry expansion.
+    pub net_colors: Option<Arc<pomelo_core::display::BoardDisplay>>,
+    /// RGB modulation of this command; overlays use full brightness.
+    pub pattern: Option<pomelo_core::appearance::pattern::FillPattern>,
+    pub object_filter: pomelo_core::display::filter::ObjectFilter,
+    pub brightness: f32,
+    pub object_colors: Option<Arc<ObjectColors>>,
     pub pass: OverlayPass,
     pub filled: bool,
     pub hover_selection: Option<(
@@ -78,6 +87,11 @@ pub enum OverlayPass {
 impl<S: InstanceSource> Clone for TraceFrame<S> {
     fn clone(&self) -> Self {
         Self {
+            net_colors: self.net_colors.clone(),
+            pattern: self.pattern,
+            object_filter: self.object_filter,
+            brightness: self.brightness,
+            object_colors: self.object_colors.clone(),
             pass: self.pass,
             filled: self.filled,
             hover_selection: self.hover_selection.clone(),
@@ -153,7 +167,12 @@ impl<S: InstanceSource> TraceFrame<S> {
 
     pub(super) fn with_source<T: InstanceSource>(&self, tracks: Arc<T>) -> TraceFrame<T> {
         TraceFrame {
+            net_colors: self.net_colors.clone(),
             tracks,
+            pattern: self.pattern,
+            object_filter: self.object_filter,
+            brightness: self.brightness,
+            object_colors: self.object_colors.clone(),
             pass: self.pass,
             filled: self.filled,
             hover_selection: self.hover_selection.clone(),
@@ -225,6 +244,15 @@ impl<S: InstanceSource> TraceFrame<S> {
         crate::scene::colors::copper_color(self.color_mode, self.layer_color(layer), net)
     }
 
+    pub(super) fn has_color_overrides(&self) -> bool {
+        self.object_colors
+            .as_ref()
+            .is_some_and(|colors| !colors.is_empty())
+            || self.net_colors.as_ref().is_some_and(|display| {
+                !display.appearance.hide_net_colors && !display.appearance.nets.is_empty()
+            })
+    }
+
     pub(super) fn object_highlight(
         &self,
         object: pomelo_core::selection::SelectedObject,
@@ -253,6 +281,34 @@ impl<S: InstanceSource> TraceFrame<S> {
                 || self.hovered_object.is_some_and(|(id, _)| id == object);
             return (hovered && !self.selected(object, net, track))
                 .then_some([0.63, 1.0, 0.85, 0.9]);
+        }
+        if self.pass == OverlayPass::Base
+            && let Some([r, g, b]) = self
+                .object_colors
+                .as_ref()
+                .and_then(|colors| colors.get(&object).copied())
+        {
+            return Some([r, g, b, self.opacity]);
+        }
+        if self.pass == OverlayPass::Base {
+            use pomelo_core::display::DisplayCategory as Category;
+            let category = match object {
+                SelectedObject::Segment(_) => Category::Trace,
+                SelectedObject::Pin(_) => Category::Pin,
+                SelectedObject::Via(_) => Category::Via,
+                SelectedObject::Zone(_) => Category::Zone,
+                SelectedObject::Drawing(_) => Category::Drawing,
+                SelectedObject::Placement(_) => Category::Placement,
+            };
+            if let Some(color) = self
+                .net_colors
+                .as_ref()
+                .and_then(|display| display.appearance.net_material(net, category))
+            {
+                let mut rgba = color.rgba();
+                rgba[3] = self.opacity;
+                return Some(rgba);
+            }
         }
         if let Some((selected, color)) = self.highlighted_object
             && selected == object

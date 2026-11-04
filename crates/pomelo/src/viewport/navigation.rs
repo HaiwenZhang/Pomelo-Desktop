@@ -3,36 +3,60 @@ use super::*;
 
 impl BoardViewport {
     pub(crate) fn fit_board(&mut self, _: &FitBoard, _: &mut Window, cx: &mut Context<Self>) {
+        self.wheel_history_at = None;
+        let previous = self.navigation.camera();
         if self.navigation.fit(self.scene.bounds) {
+            self.review
+                .history
+                .record(previous, self.navigation.camera());
+            self.refresh_measure_preview(cx);
             self.invalidate_hover();
             cx.notify();
         }
     }
 
     pub(super) fn flip_board(&mut self, _: &FlipBoard, _: &mut Window, cx: &mut Context<Self>) {
+        self.wheel_history_at = None;
+        let previous = self.navigation.camera();
         self.invalidate_hover();
         self.navigation.flip();
+        self.review
+            .history
+            .record(previous, self.navigation.camera());
+        self.refresh_measure_preview(cx);
         cx.notify();
     }
 
     pub(super) fn zoom(&mut self, factor: f64, cx: &mut Context<Self>) {
+        self.wheel_history_at = None;
+        let previous = self.navigation.camera();
         let size = self.navigation.size();
         if self.navigation.zoom_at(
             pomelo_core::model::Point::new(size.x * 0.5, size.y * 0.5),
             factor,
         ) {
+            self.review
+                .history
+                .record(previous, self.navigation.camera());
+            self.refresh_measure_preview(cx);
             self.invalidate_hover();
             cx.notify();
         }
     }
 
     pub(super) fn pan(&mut self, x: f64, y: f64, cx: &mut Context<Self>) {
+        self.wheel_history_at = None;
+        let previous = self.navigation.camera();
         let size = self.navigation.size();
         // Keyboard movement is proportional to the viewport, independent of DPI.
         if self.navigation.pan(pomelo_core::model::Point::new(
             x * size.x * 0.1,
             y * size.y * 0.1,
         )) {
+            self.review
+                .history
+                .record(previous, self.navigation.camera());
+            self.refresh_measure_preview(cx);
             self.invalidate_hover();
             cx.notify();
         }
@@ -56,6 +80,7 @@ impl BoardViewport {
             return;
         }
         let anchor = event.position - bounds.origin;
+        let previous = self.navigation.camera();
         if self.navigation.zoom_at(
             pomelo_core::model::Point::new(
                 f64::from(f32::from(anchor.x)),
@@ -63,6 +88,18 @@ impl BoardViewport {
             ),
             1.2_f64.powf(steps.clamp(-10.0, 10.0)),
         ) {
+            // A wheel burst is one history entry, not one entry per device event.
+            let now = std::time::Instant::now();
+            if self
+                .wheel_history_at
+                .is_none_or(|last| now.duration_since(last).as_millis() > 250)
+            {
+                self.review
+                    .history
+                    .record(previous, self.navigation.camera());
+            }
+            self.wheel_history_at = Some(now);
+            self.refresh_measure_preview(cx);
             cx.stop_propagation();
             self.invalidate_hover();
             cx.notify();
@@ -80,11 +117,18 @@ impl BoardViewport {
         }
         self.invalidate_hover();
         window.focus(&self.focus, cx);
+        if self.start_review_drag(event) {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         self.pointer_gesture = Some(gesture::PointerGesture::new(
             event.position,
             event.button,
             self.pan_tool,
         ));
+        self.wheel_history_at = None;
+        self.pan_start = Some(self.navigation.camera());
         cx.stop_propagation();
         cx.notify();
     }
@@ -95,6 +139,8 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.review.free_measure = event.modifiers.alt;
+        self.review.orthogonal_measure = event.modifiers.shift;
         if self.pointer_position != Some(event.position) {
             self.pointer_position = Some(event.position);
             cx.notify();
@@ -104,6 +150,7 @@ impl BoardViewport {
             .as_ref()
             .is_some_and(|gesture| event.pressed_button != Some(gesture.button))
         {
+            self.record_pan_history();
             self.pointer_gesture = None;
             cx.notify();
         }
@@ -113,8 +160,11 @@ impl BoardViewport {
                     f64::from(f32::from(delta.x)),
                     f64::from(f32::from(delta.y)),
                 ));
+                self.refresh_measure_preview(cx);
                 cx.notify();
             }
+        } else if self.review.drag.is_some() || self.review.tool.is_some() {
+            self.move_review_pointer(event.position, cx);
         } else if event.pressed_button.is_none() {
             self.hover_at(event.position, window, cx);
         }
@@ -126,6 +176,10 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.button == MouseButton::Left && self.finish_review_drag(event, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if !self
             .pointer_gesture
             .as_ref()
@@ -134,7 +188,9 @@ impl BoardViewport {
             return;
         }
         if let Some(gesture) = self.pointer_gesture.take() {
-            if gesture.is_click() {
+            self.record_pan_history();
+            self.refresh_measure_preview(cx);
+            if gesture.is_click() && !self.review_click(event, window, cx) {
                 self.pick_trace(event.position, window, cx);
             }
             cx.stop_propagation();
@@ -153,8 +209,29 @@ impl BoardViewport {
             .as_ref()
             .is_some_and(|gesture| gesture.button == event.button)
         {
+            self.record_pan_history();
             self.pointer_gesture = None;
             cx.notify();
+        }
+        if event.button == MouseButton::Left && self.review.drag.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn record_pan_history(&mut self) {
+        if let Some(previous) = self.pan_start.take() {
+            self.review
+                .history
+                .record(previous, self.navigation.camera());
+        }
+    }
+
+    /// Camera changes must move the live measurement endpoint under the cursor.
+    pub(super) fn refresh_measure_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(position) = self.pointer_position
+            && matches!(self.review.tool, Some(review::ReviewTool::Measure(_)))
+        {
+            self.move_review_pointer(position, cx);
         }
     }
 }

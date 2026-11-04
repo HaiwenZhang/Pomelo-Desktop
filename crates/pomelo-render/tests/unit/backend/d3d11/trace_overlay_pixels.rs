@@ -16,6 +16,7 @@ fn hardware_trace_overlay_matches_scalar_after_mutation_and_partial_residency() 
     let template = frame.tracks.instances[0];
     for owner_flags in [None, Some(8), Some(0)] {
         let source = Arc::new(PreparedTracks {
+            placements: false,
             instances: (0..16385)
                 .map(|i| {
                     let mut line = template;

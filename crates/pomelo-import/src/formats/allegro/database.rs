@@ -44,7 +44,8 @@ impl Default for ChainLimits {
     }
 }
 
-/// The caller supplies each list's sentinel and known record types; zero is always an end link.
+/// The caller supplies each list's sentinel and known record types. Zero and modern
+/// header-defined sentinels also terminate traversal without a record lookup.
 pub struct ChainRequest<'a> {
     pub start: RecordKey,
     pub terminator: RecordKey,
@@ -180,7 +181,10 @@ impl BrdDatabase {
         let mut current = request.start;
         let mut origin = request.origin;
         let mut visited = HashSet::new();
-        while current.0 != 0 && current != request.terminator {
+        while current.0 != 0
+            && current != request.terminator
+            && !self.header().sentinel_keys.contains(&current.0)
+        {
             context.check_cancelled()?;
             if visited.contains(&current) {
                 return Err(ImportError::ReferenceCycle {

@@ -1,12 +1,11 @@
-//! Standard collapse commands in sidebar headers and compact expansion rails.
+//! Standard collapse and expand commands for the side panels.
 use crate::{tooltips::ButtonTooltipExt, workbench::panel_layout::Side};
 use gpui_kit::{
     assets::IconName,
     component::{
-        ActiveTheme, Sizable,
+        Sizable,
         button::{Button, ButtonVariants},
     },
-    prelude::FluentBuilder,
     *,
 };
 use pomelo_core::i18n::{Locale, MessageKey as Key, text};
@@ -19,62 +18,39 @@ pub(crate) fn toggle_button(
 ) -> Button {
     let (id, key, icon, shortcut) = match (side, collapsed) {
         (Side::Left, false) => (
-            "collapse-left-panel",
+            "left-panel-toggle",
             Key::CollapseLeftPanel,
-            IconName::PanelLeftClose,
-            "Ctrl+B",
+            IconName::PanelLeft,
+            crate::shortcuts::keys::TOGGLE_LEFT_PANEL,
         ),
         (Side::Left, true) => (
-            "expand-left-panel",
+            "left-panel-toggle",
             Key::ExpandLeftPanel,
-            IconName::PanelLeftOpen,
-            "Ctrl+B",
+            IconName::PanelLeft,
+            crate::shortcuts::keys::TOGGLE_LEFT_PANEL,
         ),
         (Side::Right, false) => (
-            "collapse-right-panel",
+            "right-panel-toggle",
             Key::CollapseRightPanel,
-            IconName::PanelRightClose,
-            "Ctrl+Shift+B",
+            IconName::PanelRight,
+            crate::shortcuts::keys::TOGGLE_RIGHT_PANEL,
         ),
         (Side::Right, true) => (
-            "expand-right-panel",
+            "right-panel-toggle",
             Key::ExpandRightPanel,
-            IconName::PanelRightOpen,
-            "Ctrl+Shift+B",
+            IconName::PanelRight,
+            crate::shortcuts::keys::TOGGLE_RIGHT_PANEL,
         ),
     };
     Button::new(id)
         .ghost()
         .small()
-        .size_8()
         .icon(icon)
         .accessibility_label(text(locale, key))
-        .native_tooltip(format!("{} ({shortcut})", text(locale, key)))
+        .native_tooltip(format!(
+            "{} ({})",
+            text(locale, key),
+            crate::shortcuts::shortcut_label(shortcut)
+        ))
         .on_click(on_click)
-}
-pub(crate) fn rail(side: Side, button: Button, cx: &App) -> impl IntoElement {
-    div()
-        .w_10()
-        .h_full()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .items_center()
-        .pt_2()
-        .bg(cx.theme().sidebar)
-        .border_color(cx.theme().border)
-        .map(|rail| match side {
-            Side::Left => rail.border_r_1(),
-            Side::Right => rail.border_l_1(),
-        })
-        .child(button)
-}
-pub(crate) fn header(tabs: AnyElement, side: Side, button: Button) -> impl IntoElement {
-    let row = div().flex().items_center().flex_shrink_0();
-    let tabs = div().flex_1().min_w_0().child(tabs);
-    let command = div().flex_none().px_1().child(button);
-    match side {
-        Side::Left => row.child(tabs).child(command),
-        Side::Right => row.child(command).child(tabs),
-    }
 }

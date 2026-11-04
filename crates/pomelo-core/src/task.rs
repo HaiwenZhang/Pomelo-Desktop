@@ -15,7 +15,21 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
+    /// `cancel.check()?` stops work in any routine whose error type converts from
+    /// [`Cancelled`], instead of a three-line `if is_cancelled() { return Err(..) }`.
+    pub fn check(&self) -> Result<(), Cancelled> {
+        if self.is_cancelled() {
+            Err(Cancelled)
+        } else {
+            Ok(())
+        }
+    }
 }
+
+/// The work was abandoned through its [`CancellationToken`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("CANCELLED")]
+pub struct Cancelled;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DocumentId(pub u64);

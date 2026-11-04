@@ -206,6 +206,38 @@ fn boundaries_and_unsigned_keys_are_exact_for_all_supported_families() {
 }
 
 #[test]
+fn pointer_array_capacity_keeps_the_following_record_aligned() {
+    for version in [166, 174, 180, 181, 251, 261] {
+        for capacity in [0, 1, 100, 4096] {
+            let header_size = if version >= 174 { 32 } else { 28 };
+            let size = header_size + capacity * 4;
+            let mut array = record(0x37, version, 10, size);
+            put32(&mut array, 16, capacity as u32);
+            let mut bytes = board(version, 0);
+            bytes.extend(&array);
+            bytes.extend(record(4, version, 20, if version >= 174 { 24 } else { 20 }));
+            let index = scan(&bytes).unwrap();
+            assert_eq!(
+                index.record(RecordKey(10)).unwrap().byte_length as usize,
+                size
+            );
+            assert_eq!(
+                index.record(RecordKey(20)).unwrap().offset.0 as usize,
+                START + size
+            );
+            for length in [header_size - 1, size.saturating_sub(1)] {
+                let mut truncated = board(version, 0);
+                truncated.extend_from_slice(&array[..length]);
+                assert!(
+                    scan(&truncated).is_err(),
+                    "version={version} capacity={capacity} prefix={length}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn every_truncated_fixed_body_is_rejected_even_when_key_is_zero() {
     for version in [152, 174] {
         let length = if version >= 174 { 24 } else { 20 };

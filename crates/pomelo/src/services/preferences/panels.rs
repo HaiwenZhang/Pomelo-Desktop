@@ -2,6 +2,12 @@
 use super::json_file::JsonFileStore;
 use pomelo_core::{i18n::MessageKey, model::Diagnostic};
 use serde::{Deserialize, Serialize};
+use std::ops::RangeInclusive;
+
+/// Persisted and interactive width limits of the side panels, in logical pixels.
+pub const LEFT_PANEL_WIDTH: RangeInclusive<f32> = 200.0..=440.0;
+pub const RIGHT_PANEL_WIDTH: RangeInclusive<f32> = 240.0..=440.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelPreferences {
@@ -45,10 +51,8 @@ impl PanelStore {
         Ok(parsed.panels)
     }
     fn validate(&self, panels: PanelPreferences) -> Result<(), Diagnostic> {
-        if !panels.left_width.is_finite()
-            || !panels.right_width.is_finite()
-            || !(200.0..=440.0).contains(&panels.left_width)
-            || !(240.0..=440.0).contains(&panels.right_width)
+        if !LEFT_PANEL_WIDTH.contains(&panels.left_width)
+            || !RIGHT_PANEL_WIDTH.contains(&panels.right_width)
         {
             return Err(self
                 .0

@@ -1,6 +1,5 @@
-//! Inspector and display panel bindings for the viewport.
+//! Right panel bindings: inspector, display settings, review and the file footer.
 use super::*;
-use crate::workbench::panel_layout::Side;
 impl BoardViewport {
     pub(super) fn render_inspector_panel(
         &mut self,
@@ -9,50 +8,157 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let locale = i18n::current(cx);
-        let opacity_controls: Vec<_> = if self.show_display {
-            vec![self.opacity_control(locale, cx)]
-        } else {
-            Vec::new()
+        let measurements = self.review.measurements.len();
+        let switcher = crate::panels::tabs::render(
+            crate::panels::tabs::SidebarTabs {
+                id: "right-panel-tabs",
+                tabs: vec![
+                    crate::panels::tabs::SidebarTab {
+                        label: text(locale, Key::Inspector).into(),
+                        icon: IconName::ScanSearch,
+                        count: None,
+                    },
+                    crate::panels::tabs::SidebarTab {
+                        label: text(locale, Key::DisplayPanel).into(),
+                        icon: IconName::SlidersHorizontal,
+                        count: None,
+                    },
+                    crate::panels::tabs::SidebarTab {
+                        label: text(locale, Key::ReviewPanel).into(),
+                        icon: IconName::Ruler,
+                        count: (measurements > 0).then(|| {
+                            Message::new(Key::UiNumber)
+                                .arg("value", measurements)
+                                .display(locale)
+                                .into()
+                        }),
+                    },
+                ],
+                selected: self.right_panel.index(),
+                width: right_panel_width - window.rem_size() * 1.5,
+            },
+            cx.listener(|this, index: &usize, _, cx| {
+                this.right_panel = super::RightPanelTab::from_index(*index);
+                cx.notify();
+            }),
+            window,
+            cx,
+        );
+        let body = match self.right_panel {
+            super::RightPanelTab::Inspector => self.render_inspector_body(locale, window, cx),
+            super::RightPanelTab::Display => self.render_display_body(locale, window, cx),
+            super::RightPanelTab::Review => self.render_review_panel(window, cx),
         };
-        let appearance_controls = if self.show_display {
-            Some(
+        let diagnostic_count = self.scene.diagnostics.len() + self.render_diagnostics.len();
+        div()
+            .w_full()
+            .h_full()
+            .flex_shrink_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .bg(cx.theme().sidebar)
+            .child(switcher)
+            .child(
                 div()
-                    .px_4()
-                    .py_2()
+                    .id("right-panel-body")
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
                     .flex()
                     .flex_col()
-                    .gap_3()
-                    .children(
-                        [
-                            (
-                                "canvas-background-color",
-                                pomelo_core::appearance::ColorTarget::Background,
-                            ),
-                            (
-                                "drill-display-color",
-                                pomelo_core::appearance::ColorTarget::Drill,
-                            ),
-                        ]
-                        .map(|(id, target)| {
-                            let control = self.color_control(target, locale, window, cx);
-                            FocusScroll::new(id, &self.inspector_focus.scroll, control)
-                        }),
-                    )
-                    .into_any_element(),
+                    .overflow_y_scroll()
+                    .track_scroll(&self.inspector_focus.scroll)
+                    .vertical_scrollbar(&self.inspector_focus.scroll)
+                    .child(
+                        div()
+                            .flex_none()
+                            .h_auto()
+                            .min_h_full()
+                            .children(self.render_selection_notices(locale, cx))
+                            .child(body),
+                    ),
             )
-        } else {
-            None
+            .child(crate::panels::file_info::render(
+                crate::panels::file_info::FileInformation {
+                    locale,
+                    expanded: self.file_information_expanded,
+                    scene: &self.scene,
+                    format_name: &self.format_name,
+                    diagnostic_count,
+                },
+                self.diagnostics_panel(window, cx),
+                &self.inspector_focus.file_information,
+                &self.file_information_scroll,
+                cx.listener(|this, expanded: &bool, _, cx| {
+                    this.file_information_expanded = *expanded;
+                    cx.notify();
+                }),
+                window,
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    /// Pending locate work and recoverable selection failures, above any tab.
+    fn render_selection_notices(
+        &self,
+        locale: pomelo_core::i18n::Locale,
+        cx: &App,
+    ) -> Vec<AnyElement> {
+        let notice = |message: String, color: Hsla| {
+            div()
+                .mx_4()
+                .mt_3()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(cx.theme().secondary)
+                .text_sm()
+                .text_color(color)
+                .child(message)
+                .into_any_element()
         };
-        let right_tab_labels: Vec<SharedString> = [Key::Inspector, Key::DisplayPanel]
-            .map(|key| text(locale, key).into())
-            .into();
-        let inspector_details = crate::panels::selection_details::render(
+        let mut notices = Vec::new();
+        if self.locate_pending {
+            notices.push(notice(
+                text(locale, self.pending_message),
+                cx.theme().muted_foreground,
+            ));
+        }
+        if let Some(message) = &self.search_notice {
+            notices.push(notice(message.display(locale), cx.theme().warning));
+        }
+        if let Some(error) = &self.locate_details {
+            let message = match error {
+                pomelo_core::geometry::PathError::Cancelled => Message::new(Key::Cancelled),
+                pomelo_core::geometry::PathError::Invalid(id) => {
+                    Message::new(Key::PickInvalid).arg("object", id.0)
+                }
+                pomelo_core::geometry::PathError::PointLimit { actual, limit } => {
+                    Message::new(Key::GeometryLimit)
+                        .arg("actual", *actual)
+                        .arg("limit", *limit)
+                }
+            };
+            notices.push(notice(message.display(locale), cx.theme().warning));
+        }
+        notices
+    }
+
+    fn render_inspector_body(
+        &mut self,
+        locale: pomelo_core::i18n::Locale,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        crate::panels::selection_details::render(
             crate::panels::selection_details::SelectionDetails {
                 selected_target: self.selected_target,
                 selected_anchor: self.selected_anchor,
                 selected_related_net: self.selected_related_net,
                 selected_related_component: self.selected_related_component,
-                selected_summary: self.selected_summary,
+                selected_summary: self.selected_summary.as_ref(),
                 locate_pending: self.locate_pending,
                 members_offset: self.members_offset,
                 members_page_revision: self.members_page_revision,
@@ -80,6 +186,9 @@ impl BoardViewport {
                         this.locate_target(*target, window, cx)
                     },
                 )),
+                clear: Box::new(cx.listener(|this, _, window, cx| {
+                    this.clear_selection(&ClearSelection, window, cx)
+                })),
                 previous_page: Box::new(cx.listener(|this, _, window, cx| {
                     this.page_members(this.members_offset.saturating_sub(256), window, cx)
                 })),
@@ -90,361 +199,132 @@ impl BoardViewport {
             locale,
             window,
             cx,
-        );
-        let inspector = div()
-            .w_full()
-            .h_full()
-            .flex_shrink_0()
-            .min_h_0()
+        )
+    }
+
+    fn render_display_body(
+        &mut self,
+        locale: pomelo_core::i18n::Locale,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut appearance = self.opacity_controls(locale, cx);
+        appearance.push(self.grid_spacing_control(locale, cx));
+        for (id, target) in [
+            ("grid-color", pomelo_core::appearance::ColorTarget::Grid),
+            (
+                "canvas-background-color",
+                pomelo_core::appearance::ColorTarget::Background,
+            ),
+            (
+                "drill-display-color",
+                pomelo_core::appearance::ColorTarget::Drill,
+            ),
+        ] {
+            let control = self.color_control(target, locale, window, cx);
+            appearance.push(
+                FocusScroll::new(id, &self.inspector_focus.scroll, control)
+                    .w_full()
+                    .min_h_8()
+                    .into_any_element(),
+            );
+        }
+        let net_colors = self.net_color_controls(locale, window, cx);
+        div()
             .flex()
             .flex_col()
-            .bg(cx.theme().sidebar)
-            .border_l_1()
-            .border_color(cx.theme().border)
-            .child(crate::panels::sidebar::header(crate::panels::tabs::render(
-                crate::panels::tabs::SidebarTabs {
-                    id: "right-panel-tabs",
-                    locale,
-                    labels: right_tab_labels,
-                    selected: usize::from(self.show_display),
-                    width: right_panel_width - window.rem_size() * 2.5,
-                },
-                cx.listener(|this, index: &usize, _, cx| {
-                    this.show_display = *index == 1;
-                    cx.notify();
-                }),
-                window,
+            .children(net_colors)
+            .children(crate::panels::display::controls(
+                locale,
+                &self.display,
+                self.display_commands(cx),
+                appearance,
+                self.object_filter_controls(locale, cx),
+                &self.inspector_focus.scroll,
                 cx,
-            ), Side::Right, crate::panels::sidebar::toggle_button(Side::Right, false, locale,
-                |_, window, cx| window.dispatch_action(Box::new(crate::actions::ToggleRightPanel), cx))))
-            .child(
-                div()
-                    .id("right-panel-body")
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.inspector_focus.scroll)
-                    .vertical_scrollbar(&self.inspector_focus.scroll)
-                    .child(
-                        div()
-                            .flex_none()
-                            .h_auto()
-                            .min_h_full()
-                            .when(self.locate_pending, |body| {
-                                body.child(
-                                    div()
-                                        .p_3()
-                                        .text_sm()
-                                        .child(text(locale, self.pending_message)),
-                                )
-                            })
-                            .when_some(self.search_notice.as_ref(), |body, message| {
-                                body.child(
-                                    div()
-                                        .p_3()
-                                        .text_sm()
-                                        .text_color(cx.theme().warning)
-                                        .child(message.display(locale)),
-                                )
-                            })
-                            .when_some(self.locate_details.as_ref(), |body, error| {
-                                let message = match error {
-                                    pomelo_core::geometry::PathError::Cancelled => {
-                                        Message::new(Key::Cancelled)
-                                    }
-                                    pomelo_core::geometry::PathError::Invalid(id) => {
-                                        Message::new(Key::PickInvalid).arg("object", id.0)
-                                    }
-                                    pomelo_core::geometry::PathError::PointLimit {
-                                        actual,
-                                        limit,
-                                    } => Message::new(Key::GeometryLimit)
-                                        .arg("actual", *actual)
-                                        .arg("limit", *limit),
-                                };
-                                body.child(
-                                    div()
-                                        .p_3()
-                                        .text_sm()
-                                        .text_color(cx.theme().warning)
-                                        .child(message.display(locale)),
-                                )
-                            })
-                            .when(!self.show_display, |body| {
-                                body.child(
-                            div()
-                                .px_4()
-                                .pt_4()
-                                .pb_2()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(text(locale, Key::SelectedObject))
-                                .when(
-                                    self.selected_target.is_some() || self.locate_pending,
-                                    |heading| {
-                                        heading.child(
-                                            Button::new("inspector-clear-selection")
-                                                .ghost()
-                                                .xsmall()
-                                                .icon(IconName::X)
-                                                .accessibility_label(text(
-                                                    locale,
-                                                    Key::ClearSelection,
-                                                ))
-                                                .native_tooltip(text(locale, Key::ClearSelection))
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.clear_selection(
-                                                        &ClearSelection,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                }))
-                                                .map(|button| FocusScroll::new("inspector-clear-selection", &self.inspector_focus.scroll, button)),
-                                        )
-                                    },
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .gap_1()
-                                .mx_4()
-                                .p_1()
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .rounded_md()
-                                .children(
-                                    [
-                                        (
-                                            pomelo_core::interaction::SelectionMode::Object,
-                                            Key::ModeObject,
-                                            0u32,
-                                        ),
-                                        (
-                                            pomelo_core::interaction::SelectionMode::Track,
-                                            Key::ModeTrack,
-                                            1u32,
-                                        ),
-                                        (
-                                            pomelo_core::interaction::SelectionMode::Net,
-                                            Key::ModeNet,
-                                            2u32,
-                                        ),
-                                        (
-                                            pomelo_core::interaction::SelectionMode::Component,
-                                            Key::ModeComponent,
-                                            3u32,
-                                        ),
-                                    ]
-                                    .into_iter()
-                                    .map(|(mode, key, id)| {
-                                        Button::new(("selection-mode", id))
-                                            .ghost()
-                                            .small()
-                                            .when(self.selection_mode == mode, |button| button.primary())
-                                            .px_1()
-                                            .flex_grow(1.0)
-                                            .flex_shrink_0()
-                                            .native_tooltip(text(locale, key))
-                                            .label(text(locale, key))
-                                            .selected(self.selection_mode == mode)
-                                            .toggled(self.selection_mode == mode)
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.set_selection_mode(mode, window, cx);
-                                            }))
-                                            .map(|button| FocusScroll::new(("selection-mode", id), &self.inspector_focus.scroll, button.w_full()).flex_grow(1.0).flex_shrink_0())
-                                    }),
-                                ),
-                        )
-                        .child(inspector_details)
-                        .child(
-                            div()
-                                .px_4()
-                                .py_2()
-                                .flex()
-                                .flex_wrap()
-                                .gap_2()
-                                .child(
-                                    Button::new("locate-selection")
-                                        .primary()
-                                        .flex_grow(1.0)
-                                        .flex_shrink_0()
-                                        .label(
-                                            Message::new(Key::LocateSelected)
-                                                .arg(
-                                                    "kind",
-                                                    text(
-                                                        locale,
-                                                        self.selected_target
-                                                            .map(|target| {
-                                                                selection_identity(target).0
-                                                            })
-                                                            .unwrap_or(Key::ModeObject),
-                                                    ),
-                                                )
-                                                .display(locale),
-                                        )
-                                        .disabled(
-                                            self.selected_target.is_none() || self.locate_pending,
-                                        )
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            if let Some(target) = this.selected_target {
-                                                this.locate_target(target, window, cx);
-                                            }
-                                        }))
-                                        .map(|button| FocusScroll::new("locate-selection", &self.inspector_focus.scroll, button.w_full()).flex_grow(1.0).flex_shrink_0()),
-                                )
-                                .child(
-                                    Button::new("clear-selection")
-                                        .outline()
-                                        .flex_grow(1.0)
-                                        .flex_shrink_0()
-                                        .label(text(locale, Key::ClearSelection))
-                                        .disabled(
-                                            self.selected_target.is_none() && !self.locate_pending,
-                                        )
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.clear_selection(&ClearSelection, window, cx)
-                                        }))
-                                        .map(|button| FocusScroll::new("clear-selection", &self.inspector_focus.scroll, button.w_full()).flex_grow(1.0).flex_shrink_0()),
-                                ),
-                        )
-                        .child(crate::panels::picking::controls(
-                            locale,
-                            self.pick_filter,
-                            self.selection_mode,
-                            &self.inspector_focus.scroll,
-                            cx,
-                            |category| {
-                                Box::new(cx.listener(move |this, enabled: &bool, _, cx| {
-                                    if this.pick_filter.contains(category) == *enabled {
-                                        return;
-                                    }
-                                    this.pick_filter.set(category, *enabled);
-                                    this.hover_cancel.cancel();
-                                    this.hovered = None;
-                                    this.hover_notice = None;
-                                    this.last_pick = None;
-                                    this.candidate_position = None;
-                                    this.search_cancel.cancel();
-                                    this.search_pending = false;
-                                    this.locate_pending = false;
-                                    this.search_notice = None;
-                                    this.locate_details = None;
-                                    cx.notify();
-                                }))
-                            },
-                        ))
-                            })
-                            .when(self.show_display, |body| {
-                                body.when_some(appearance_controls, |body, controls| body.child(controls)).children(opacity_controls).children(crate::panels::display::controls(
-                                    locale,
-                                    &self.display,
-                                    crate::panels::display::DisplayCommands {
-                                        filled: Box::new(cx.listener(
-                                            |this, filled: &bool, _, cx| {
-                                                if this.display.filled != *filled {
-                                                    Arc::make_mut(&mut this.display).filled = *filled;
-                                                    this.invalidate_hover();
-                                                    cx.notify();
-                                                }
-                                            },
-                                        )),
-                                        horizontal_pin_names: Box::new(cx.listener(
-                                            |this, horizontal: &bool, _, cx| {
-                                                Arc::make_mut(&mut this.display).horizontal_pin_names = *horizontal;
-                                                this.invalidate_hover();
-                                                cx.notify();
-                                            },
-                                        )),
-                                        labels: Box::new(cx.listener(
-                                            |this, (kind, enabled): &(pomelo_core::display::LabelKind, bool), _, cx| {
-                                                Arc::make_mut(&mut this.display).label_options.set(*kind, *enabled);
-                                                cx.notify();
-                                            },
-                                        )),
-                                        drills: Box::new(cx.listener(
-                                            |this, visible: &bool, _, cx| {
-                                                if this.display.show_drills != *visible {
-                                                    Arc::make_mut(&mut this.display).show_drills =
-                                                        *visible;
-                                                    this.invalidate_hover();
-                                                    cx.notify();
-                                                }
-                                            },
-                                        )),
-                                        backdrills: Box::new(cx.listener(
-                                            |this, visible: &bool, _, cx| {
-                                                if this.display.show_backdrills != *visible {
-                                                    Arc::make_mut(&mut this.display).show_backdrills = *visible;
-                                                    this.invalidate_hover();
-                                                    cx.notify();
-                                                }
-                                            },
-                                        )),
-                                        copper: Box::new(cx.listener(
-                                            |this, visible: &bool, _, cx| {
-                                                Arc::make_mut(&mut this.display).show_copper =
-                                                    *visible;
-                                                this.invalidate_hover();
-                                                cx.notify();
-                                            },
-                                        )),
-                                        static_shapes_fill_solid: Box::new(cx.listener(
-                                            |this, solid: &bool, _, cx| {
-                                                Arc::make_mut(&mut this.display).static_shapes_fill_solid = *solid;
-                                                cx.notify();
-                                            },
-                                        )),
-                                        texts: Box::new(cx.listener(
-                                            |this, visible: &bool, _, cx| {
-                                                Arc::make_mut(&mut this.display).show_texts =
-                                                    *visible;
-                                                cx.notify();
-                                            },
-                                        )),
-                                        drawings: Box::new(cx.listener(
-                                            |this, visible: &bool, _, cx| {
-                                                Arc::make_mut(&mut this.display).show_drawings =
-                                                    *visible;
-                                                cx.notify();
-                                            },
-                                        )),
-                                        reset_order: Box::new(cx.listener(|this, _, _, cx| {
-                                            Arc::make_mut(&mut this.display).layer_order.clear();
-                                            this.layer_scroll_target = Some(0);
-                                            this.invalidate_hover();
-                                            cx.notify();
-                                        })),
-                                    },
-                                    &self.inspector_focus.scroll,
-                                ))
-                            })
-                            .child(crate::panels::file_info::render(
-                                crate::panels::file_info::FileInformation {
-                                    locale,
-                                    expanded: self.file_information_expanded,
-                                    scene: &self.scene,
-                                    format_name: &self.format_name,
-                                },
-                                self.diagnostics_panel(window, cx),
-                                &self.inspector_focus.file_information,
-                                cx.listener(|this, expanded: &bool, _, cx| {
-                                    this.file_information_expanded = *expanded;
-                                    cx.notify();
-                                }),
-                                window,
-                                cx,
-                            )),
-                    ),
-            );
+            ))
+            .into_any_element()
+    }
 
-        inspector.into_any_element()
+    fn display_commands(&self, cx: &mut Context<Self>) -> crate::panels::display::DisplayCommands {
+        crate::panels::display::DisplayCommands {
+            net_colors: Box::new(cx.listener(|this, shown: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).appearance.hide_net_colors = !*shown;
+                cx.notify();
+            })),
+            grid: Box::new(cx.listener(|this, enabled: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).grid.visible = *enabled;
+                cx.notify();
+            })),
+            shadow: Box::new(cx.listener(|this, enabled: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).shadow.enabled = *enabled;
+                cx.notify();
+            })),
+            dim_active: Box::new(cx.listener(|this, enabled: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).shadow.dim_active = *enabled;
+                cx.notify();
+            })),
+            filled: Box::new(cx.listener(|this, filled: &bool, _, cx| {
+                if this.display.filled != *filled {
+                    Arc::make_mut(&mut this.display).filled = *filled;
+                    this.invalidate_hover();
+                    cx.notify();
+                }
+            })),
+            horizontal_pin_names: Box::new(cx.listener(|this, horizontal: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).horizontal_pin_names = *horizontal;
+                this.invalidate_hover();
+                cx.notify();
+            })),
+            active_layer_labels_only: Box::new(cx.listener(|this, enabled: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).active_layer_labels_only = *enabled;
+                cx.notify();
+            })),
+            labels: Box::new(cx.listener(
+                |this, (kind, enabled): &(pomelo_core::display::LabelKind, bool), _, cx| {
+                    Arc::make_mut(&mut this.display)
+                        .label_options
+                        .set(*kind, *enabled);
+                    cx.notify();
+                },
+            )),
+            drills: Box::new(cx.listener(|this, visible: &bool, _, cx| {
+                if this.display.show_drills != *visible {
+                    Arc::make_mut(&mut this.display).show_drills = *visible;
+                    this.invalidate_hover();
+                    cx.notify();
+                }
+            })),
+            backdrills: Box::new(cx.listener(|this, visible: &bool, _, cx| {
+                if this.display.show_backdrills != *visible {
+                    Arc::make_mut(&mut this.display).show_backdrills = *visible;
+                    this.invalidate_hover();
+                    cx.notify();
+                }
+            })),
+            copper: Box::new(cx.listener(|this, visible: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).show_copper = *visible;
+                this.invalidate_hover();
+                cx.notify();
+            })),
+            static_shapes_fill_solid: Box::new(cx.listener(|this, solid: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).static_shapes_fill_solid = *solid;
+                cx.notify();
+            })),
+            texts: Box::new(cx.listener(|this, visible: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).show_texts = *visible;
+                cx.notify();
+            })),
+            drawings: Box::new(cx.listener(|this, visible: &bool, _, cx| {
+                Arc::make_mut(&mut this.display).show_drawings = *visible;
+                cx.notify();
+            })),
+            reset_order: Box::new(cx.listener(|this, _, _, cx| {
+                Arc::make_mut(&mut this.display).layer_order.clear();
+                this.layer_scroll_target = Some(super::LayerScrollTarget::Start);
+                this.invalidate_hover();
+                cx.notify();
+            })),
+        }
     }
 }

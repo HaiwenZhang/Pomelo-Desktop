@@ -774,6 +774,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                 next += 1;
                 component_ids.insert(reference.to_owned(), i);
                 output.scene.components.push(ComponentPlacement {
+                    body: None,
                     id,
                     source_reference: None,
                     reference: reference.into(),

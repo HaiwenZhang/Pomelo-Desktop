@@ -78,6 +78,11 @@ fn hardware_long_lines_match_f64_capsules_at_deep_zoom() {
                 .unwrap();
                 tracks.instances[0].flags[3] = flag;
                 let mut frame = TraceFrame {
+                    net_colors: None,
+                    pattern: None,
+                    object_filter: Default::default(),
+                    brightness: 1.0,
+                    object_colors: None,
                     tracks: Arc::new(tracks),
                     bounds: segment.bounds().unwrap(),
                     camera: None,

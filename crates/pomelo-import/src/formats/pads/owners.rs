@@ -290,6 +290,7 @@ pub(super) fn build(
                 let index = components.len();
                 component_ids.insert(placement, index);
                 components.push(ComponentPlacement {
+                    body: None,
                     id: ObjectId(0x70000000 + placement as u32),
                     source_reference: Some(ObjectId(placement as u32)),
                     reference: part.reference.clone(),

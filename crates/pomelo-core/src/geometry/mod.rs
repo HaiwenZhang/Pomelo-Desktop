@@ -49,9 +49,7 @@ pub fn path_contains(
     };
     let mut previous = first.a;
     for edge in path {
-        if cancel.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancel.check()?;
         if edge.centreline_bounds().is_none() {
             return Err(PathError::Invalid(edge.id));
         }
@@ -98,7 +96,13 @@ pub fn path_contains(
                 if next == end {
                     break;
                 }
+                cancel.check()?;
+                // Huge finite start angles can make `k + 1 == k`; never spin without progress.
+                let previous = k;
                 k += direction;
+                if k == previous {
+                    return Err(PathError::Invalid(edge.id));
+                }
             }
             line(&mut hit, a, edge.b);
         } else {
@@ -118,6 +122,12 @@ pub enum PathError {
     Invalid(ObjectId),
     #[error("GEOMETRY_POINT_LIMIT actual={actual} limit={limit}")]
     PointLimit { actual: usize, limit: usize },
+}
+
+impl From<crate::task::Cancelled> for PathError {
+    fn from(_: crate::task::Cancelled) -> Self {
+        Self::Cancelled
+    }
 }
 
 /// Analytic circular sweep, including a full circle when the two angles coincide.
@@ -149,9 +159,7 @@ pub fn flatten_path(
     max_points: usize,
     cancellation: &CancellationToken,
 ) -> Result<Vec<Point>, PathError> {
-    if cancellation.is_cancelled() {
-        return Err(PathError::Cancelled);
-    }
+    cancellation.check()?;
     if !tolerance.is_finite() || tolerance <= 0.0 {
         return Err(PathError::Invalid(
             path.first().map_or(ObjectId(0), |edge| edge.id),
@@ -184,9 +192,7 @@ pub fn flatten_path(
         Ok(())
     };
     for edge in path {
-        if cancellation.is_cancelled() {
-            return Err(PathError::Cancelled);
-        }
+        cancellation.check()?;
         add(edge.a, edge.id)?;
         if let Some(arc) = edge.arc {
             if ![arc.radius, arc.start, arc.sweep, arc.center.x, arc.center.y]
@@ -222,9 +228,7 @@ pub fn flatten_path(
     if points.len() > 1 && points[0].distance(points[points.len() - 1]) < 1e-9 {
         points.pop();
     }
-    if cancellation.is_cancelled() {
-        return Err(PathError::Cancelled);
-    }
+    cancellation.check()?;
     Ok(points)
 }
 

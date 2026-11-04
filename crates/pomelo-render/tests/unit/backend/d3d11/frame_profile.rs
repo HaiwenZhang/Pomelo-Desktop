@@ -8,21 +8,15 @@ fn hardware_real_board_frame_profile() {
         copper::PreparedCopper, drills::PreparedDrills, pads::PreparedPads,
         preparation_memory::PreparationMemory,
     };
-    use pomelo_import::{
-        BoardImporter, ImportContext, ImportOptions, TextEncoding,
-        formats::allegro::AllegroImporter,
-    };
+    use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::FormatImporter};
     let path =
         std::env::var_os("POMELO_FRAME_PROFILE_CASE").expect("explicit POMELO_FRAME_PROFILE_CASE");
     let output = std::env::var_os("POMELO_FRAME_PROFILE_OUTPUT").map(std::path::PathBuf::from);
     let cancel = CancellationToken::default();
-    let board = AllegroImporter
+    let board = FormatImporter
         .import(
             std::path::Path::new(&path),
-            &ImportOptions {
-                text_encoding: TextEncoding::Windows1252,
-                ..Default::default()
-            },
+            &ImportOptions::default(),
             &ImportContext {
                 cancellation: &cancel,
                 progress: &|_| {},
@@ -127,6 +121,9 @@ fn hardware_real_board_frame_profile() {
         "object_hover_local",
         "mixed_hover_local",
     ] {
+        if std::env::var_os("POMELO_FRAME_PROFILE_FIT_ONLY").is_some() && mode != "fit" {
+            continue;
+        }
         let mut view = camera;
         if !matches!(mode, "fit" | "hover_fit" | "object_hover_fit") {
             view.pixels_per_mm *= 16.0;
@@ -181,6 +178,10 @@ fn hardware_real_board_frame_profile() {
             {
                 std::fs::create_dir_all(output).unwrap();
                 std::fs::write(output.join(format!("{mode}.rgba")), &pixels).unwrap();
+                image::RgbaImage::from_raw(1280, 720, pixels.clone())
+                    .unwrap()
+                    .save(output.join(format!("{mode}.png")))
+                    .unwrap();
             }
         }
     }

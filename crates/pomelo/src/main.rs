@@ -7,11 +7,10 @@ mod assets;
 mod document;
 mod i18n;
 mod main_window;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-mod native_gpu_demo;
 mod panels;
 mod services;
 mod settings;
+mod shortcuts;
 mod theme;
 mod tooltips;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]

@@ -34,7 +34,7 @@ pub(crate) struct Device<'a> {
     active: Cell<bool>,
 }
 impl<'a> Device<'a> {
-    pub fn new(context: &'a mut gpui_wgpu::WgpuPaintContext<'_>) -> Self {
+    pub fn new(context: &'a mut gpui::WgpuPaintContext<'_>) -> Self {
         Self {
             raw: context.device,
             encoder: RefCell::new(context.encoder),
@@ -395,7 +395,7 @@ impl<'a> Device<'a> {
             "GPU_SCISSOR_INVALID"
         );
         let mut bytes = draw.uniforms.to_vec();
-        bytes.extend_from_slice(bytemuck::cast_slice(&[self.opacity, 0.0, 0.0, 0.0]));
+        bytes.extend_from_slice(bytemuck::bytes_of(&draw.material_uniforms(self.opacity)));
         let uniforms = self.raw.create_buffer(&BufferDescriptor {
             label: Some("PCB draw uniforms"),
             size: bytes.len() as u64,

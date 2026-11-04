@@ -5,7 +5,6 @@ members = [
   "crates/pomelo-import",
   "crates/pomelo-render",
   "crates/pomelo",
-  "support/gpui-compat/*",
 ]
 default-members = [
   "crates/pomelo-core",
@@ -14,7 +13,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -26,16 +25,11 @@ pomelo-import = { path = "crates/pomelo-import" }
 pomelo-render = { path = "crates/pomelo-render" }
 
 # GPUI Kit and native GPU backends
-gpui-kit = "=0.7.1"
-gpui = { git = "https://github.com/HaiwenZhang/zed.git", branch = "gpui-pre-native-gpu", default-features = false }
-gpui-apple = { package = "gpui_apple", git = "https://github.com/HaiwenZhang/zed.git", branch = "gpui-pre-native-gpu", default-features = false }
-gpui-wgpu = { package = "gpui_wgpu", git = "https://github.com/HaiwenZhang/zed.git", branch = "gpui-pre-native-gpu", default-features = false }
-gpui-windows = { package = "gpui_windows", git = "https://github.com/HaiwenZhang/zed.git", branch = "gpui-pre-native-gpu", default-features = false }
-
-# GPUI Kit package-name bridges
-gpui-macros = { package = "gpui_macros", git = "https://github.com/HaiwenZhang/zed.git", branch = "gpui-pre-native-gpu", default-features = false }
-gpui-platform = { package = "gpui_platform", git = "https://github.com/HaiwenZhang/zed.git", branch = "gpui-pre-native-gpu", default-features = false }
-sum-tree = { package = "sum_tree", git = "https://github.com/HaiwenZhang/zed.git", branch = "gpui-pre-native-gpu", default-features = false }
+gpui-kit = "=0.8.0"
+gpui = { git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu", default-features = false }
+gpui-apple = { package = "gpui_apple", git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu", default-features = false }
+gpui-wgpu = { package = "gpui_wgpu", git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu", default-features = false }
+gpui-windows = { package = "gpui_windows", git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu", default-features = false }
 
 # Geometry and collation
 earcut = "=0.4.11"
@@ -75,7 +69,7 @@ bytemuck = { version = "1", features = ["derive"] }
 embed-resource = "=3.0.11"
 metal = "0.33"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
-resvg = { version = "=0.48.1", default-features = false }
+resvg = { version = "=0.48.1", default-features = false, features = ["raster-images"] }
 rfd = { version = "=0.17.2", default-features = false, features = [
   "common-controls-v6",
 ] }
@@ -87,13 +81,14 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dxgi_Common",
 ] }
 
-# GPUI Kit uses the gpui-pre package names. These crates only re-export
-# the fork above; no GPUI or GPUI Kit source patches are applied.
+# GPUI Kit's gpui-pre packages re-export the same native-gpu fork.
+# Use the fork's compatibility crates to keep UI and GPU types identical.
 [patch.crates-io]
-gpui-pre = { path = "support/gpui-compat/gpui-pre" }
-gpui-pre-platform = { path = "support/gpui-compat/gpui-pre-platform" }
-gpui-pre-macros = { path = "support/gpui-compat/gpui-pre-macros" }
-gpui-pre-sum-tree = { path = "support/gpui-compat/gpui-pre-sum-tree" }
+gpui-pre = { git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu" }
+gpui-pre-platform = { git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu" }
+gpui-pre-macros = { git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu" }
+gpui-pre-sum-tree = { git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu" }
+gpui-pre-web = { git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

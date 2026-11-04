@@ -13,6 +13,36 @@ use std::{
 fn point(node: &Node) -> Result<Point, ImportError> {
     Ok(Point::new(node.number(1)?, -node.number(2)?))
 }
+
+/// Fit a physical board outline without letting distant documentation graphics
+/// dominate the initial camera. Incomplete outlines retain the geometry fallback.
+fn closed_outline_bounds(outline: &[Segment]) -> Option<Bounds> {
+    let mut ends = HashMap::<(i64, i64), usize>::new();
+    let mut bounds: Option<Bounds> = None;
+    let grid = |p: Point| {
+        let x = (p.x * 1_000_000.0).round();
+        let y = (p.y * 1_000_000.0).round();
+        (x.is_finite() && y.is_finite() && x.abs() < i64::MAX as f64 && y.abs() < i64::MAX as f64)
+            .then_some((x as i64, y as i64))
+    };
+    for edge in outline {
+        for point in [edge.a, edge.b] {
+            *ends.entry(grid(point)?).or_default() += 1;
+        }
+        let b = edge.bounds()?;
+        if let Some(bounds) = &mut bounds {
+            bounds.include(b.min);
+            bounds.include(b.max);
+        } else {
+            bounds = Some(b);
+        }
+    }
+    let bounds = bounds?;
+    (ends.values().all(|&count| count == 2)
+        && bounds.max.x > bounds.min.x
+        && bounds.max.y > bounds.min.y)
+        .then_some(bounds)
+}
 fn id(value: f64) -> Result<u32, ImportError> {
     if value < 0.0 || value > u32::MAX as f64 || value.fract() != 0.0 {
         Err(error("Invalid integer identifier"))
@@ -228,13 +258,10 @@ fn pad_kind(name: &str) -> Result<PadKind, ImportError> {
 }
 
 pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
-    let root = sexpr::read(bytes, context)?;
-    if root.head() != "kicad_pcb" {
-        return Err(error("Root is not kicad_pcb"));
-    }
+    let root = sexpr::document(bytes, context)?;
     let version = id(root.required("version")?.number(1)?)?;
     let mut output = scene_builder::new_parsed_board(version);
-    if root.children("layers").count() != 1 {
+    if root.count("layers") != 1 {
         return Err(error("Missing or duplicate layer table"));
     }
     let colors = [
@@ -266,6 +293,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     let mut net_names = HashMap::new();
     let mut seen = HashSet::new();
     for node in root.children("net") {
+        let node = node?;
         let id = id(node.number(1)?)?;
         if !seen.insert(id) {
             return Err(error("Duplicate net ID"));
@@ -278,6 +306,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     }
     for kind in ["segment", "arc"] {
         for node in root.children(kind) {
+            let node = node?;
             context.check_cancelled()?;
             let a = point(node.required("start")?)?;
             let b = point(node.required("end")?)?;
@@ -286,7 +315,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                 return Err(error("Nonpositive track width"));
             }
             let layer = layer(node.required("layer")?.atom(1)?, &layers)?;
-            let net = net(node, &mut output, &mut net_names)?;
+            let net = net(&node, &mut output, &mut net_names)?;
             let arc = if kind == "arc" {
                 arc(a, point(node.required("mid")?)?, b)?
             } else {
@@ -304,6 +333,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         }
     }
     for node in root.children("via") {
+        let node = node?;
         context.check_cancelled()?;
         if node.find_child("padstack").is_some() {
             return Err(error("Per-layer via padstack not supported"));
@@ -320,7 +350,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         if a == b {
             return Err(error("Zero via layer span"));
         }
-        let net = net(node, &mut output, &mut net_names)?;
+        let net = net(&node, &mut output, &mut net_names)?;
         let index = output.scene.vias.len() as u32;
         output.scene.vias.push(Via {
             id: ObjectId(0x50000000 + index),
@@ -352,6 +382,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         .chain(root.children("module"))
         .enumerate()
     {
+        let fp = fp?;
         context.check_cancelled()?;
         let at_node = fp.required("at")?;
         let origin = point(at_node)?;
@@ -369,6 +400,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             .unwrap_or_else(|| format!("FP{}", index + 1));
         let component_id = ObjectId(0x79000000 + index as u32);
         let mut component = ComponentPlacement {
+            body: None,
             id: component_id,
             source_reference: None,
             reference: reference.clone(),
@@ -547,6 +579,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             .push("KiCad footprint graphics and text are not yet imported".into());
     }
     for node in root.children("zone") {
+        let node = node?;
         context.check_cancelled()?;
         let fills: Vec<_> = node.children("filled_polygon").collect();
         if fills.is_empty() {
@@ -557,7 +590,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             }
             continue;
         }
-        let net = net(node, &mut output, &mut net_names)?;
+        let net = net(&node, &mut output, &mut net_names)?;
         for fill in fills {
             let layer = layer(fill.required("layer")?.atom(1)?, &layers)?;
             let ring = fill
@@ -579,11 +612,14 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     }
     graphics(&root, &mut output, context)?;
     scene_builder::update_scene_bounds(&mut output);
+    if let Some(bounds) = closed_outline_bounds(&output.scene.outline) {
+        output.scene.bounds = bounds;
+    }
     Ok(output)
 }
 
 fn graphics(
-    root: &Node,
+    root: &sexpr::Document<'_, '_>,
     output: &mut ParsedBoard,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
@@ -591,6 +627,7 @@ fn graphics(
     let mut next_segment = 0;
     for kind in ["gr_line", "gr_arc", "gr_rect", "gr_poly", "gr_circle"] {
         for node in root.children(kind) {
+            let node = node?;
             context.check_cancelled()?;
             let name = node.required("layer")?.atom(1)?;
             let edge = name == "Edge.Cuts";
@@ -730,7 +767,7 @@ fn graphics(
             }
         }
     }
-    if root.children("gr_text").next().is_some() {
+    if root.count("gr_text") != 0 {
         output
             .diagnostics
             .push("KiCad board text is not yet imported".into());

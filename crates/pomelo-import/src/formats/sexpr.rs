@@ -1,5 +1,189 @@
 //! Bounded S-expression reader for KiCad. Nodes own atoms and retain source structure.
 use crate::{ImportContext, ImportError};
+
+/// Board-level expressions are indexed as byte spans, then decoded one object
+/// at a time. Large boards must not retain an owning AST for every XY/UUID.
+pub(super) struct Document<'a, 'c> {
+    text: &'a str,
+    spans: Vec<[u32; 2]>,
+    context: &'c ImportContext<'c>,
+}
+impl Document<'_, '_> {
+    fn slice(&self, span: [u32; 2]) -> &[u8] {
+        &self.text.as_bytes()[span[0] as usize..span[1] as usize]
+    }
+    fn kind(&self, span: [u32; 2]) -> &str {
+        let text = &self.text[span[0] as usize + 1..span[1] as usize];
+        let text = text.trim_ascii_start();
+        let end = text
+            .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == ')')
+            .unwrap_or(text.len());
+        &text[..end]
+    }
+    pub fn count(&self, head: &str) -> usize {
+        self.spans
+            .iter()
+            .filter(|&&span| self.kind(span) == head)
+            .count()
+    }
+    pub fn children<'s>(
+        &'s self,
+        head: &'s str,
+    ) -> impl Iterator<Item = Result<Node, ImportError>> + 's {
+        self.spans
+            .iter()
+            .filter(move |&&span| self.kind(span) == head)
+            .map(|&span| read(self.slice(span), self.context))
+    }
+    pub fn required(&self, head: &str) -> Result<Node, ImportError> {
+        let span = self
+            .spans
+            .iter()
+            .find(|&&span| self.kind(span) == head)
+            .ok_or_else(|| error(format!("kicad_pcb missing {head}")))?;
+        read(self.slice(*span), self.context)
+    }
+}
+
+pub(super) fn document<'a, 'c>(
+    bytes: &'a [u8],
+    context: &'c ImportContext<'c>,
+) -> Result<Document<'a, 'c>, ImportError> {
+    const MAX_EXPRESSIONS: usize = 16_000_000;
+    context.check_cancelled()?;
+    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+    let text = std::str::from_utf8(bytes).map_err(|_| error("Invalid UTF-8"))?;
+    if bytes.len() > u32::MAX as usize {
+        return Err(ImportError::ResourceLimit {
+            actual: bytes.len() as u64,
+            limit: u32::MAX as u64,
+        });
+    }
+    let mut result = Document {
+        text,
+        spans: Vec::new(),
+        context,
+    };
+    result
+        .spans
+        .try_reserve_exact((bytes.len() / 256).min(MAX_EXPRESSIONS))
+        .map_err(|_| error("Expression index allocation failed"))?;
+    let mut cursor = 0;
+    let mut next_cancel = 0;
+    let mut depth = 0;
+    let mut start = 0;
+    let mut root = false;
+    let mut closed = false;
+    while cursor < bytes.len() {
+        if cursor >= next_cancel {
+            context.check_cancelled()?;
+            next_cancel = cursor + 4096;
+        }
+        match bytes[cursor] {
+            b'(' => {
+                if depth == 0 {
+                    if root || closed {
+                        return Err(error("Multiple root expressions"));
+                    }
+                    root = true;
+                    let mut head_start = cursor + 1;
+                    while bytes.get(head_start).is_some_and(u8::is_ascii_whitespace) {
+                        head_start += 1;
+                    }
+                    let head_end = bytes[head_start..]
+                        .iter()
+                        .position(|b| b.is_ascii_whitespace() || *b == b'(' || *b == b')')
+                        .map(|i| head_start + i)
+                        .unwrap_or(bytes.len());
+                    if &bytes[head_start..head_end] != b"kicad_pcb" {
+                        return Err(error("Root is not kicad_pcb"));
+                    }
+                    cursor = head_end;
+                    depth = 1;
+                    continue;
+                }
+                if depth >= 256 {
+                    return Err(error("Expression depth exceeds 256"));
+                }
+                if depth == 1 {
+                    start = cursor;
+                }
+                depth += 1;
+                cursor += 1;
+            }
+            b')' => {
+                if depth == 0 {
+                    return Err(error("Unexpected closing parenthesis"));
+                }
+                depth -= 1;
+                cursor += 1;
+                if depth == 1 {
+                    if result.spans.len() >= MAX_EXPRESSIONS {
+                        return Err(ImportError::ResourceLimit {
+                            actual: result.spans.len() as u64 + 1,
+                            limit: MAX_EXPRESSIONS as u64,
+                        });
+                    }
+                    if result.spans.len() == result.spans.capacity() {
+                        let extra = result
+                            .spans
+                            .capacity()
+                            .max(1024)
+                            .min(MAX_EXPRESSIONS - result.spans.len());
+                        result
+                            .spans
+                            .try_reserve_exact(extra)
+                            .map_err(|_| error("Expression index allocation failed"))?;
+                    }
+                    result.spans.push([start as u32, cursor as u32]);
+                } else if depth == 0 {
+                    closed = true;
+                }
+            }
+            b'"' => {
+                if depth == 0 {
+                    return Err(error("Atom outside root"));
+                }
+                cursor += 1;
+                loop {
+                    if cursor >= next_cancel {
+                        context.check_cancelled()?;
+                        next_cancel = cursor + 4096;
+                    }
+                    match bytes.get(cursor) {
+                        Some(b'"') => {
+                            cursor += 1;
+                            break;
+                        }
+                        Some(b'\\') => {
+                            cursor += 2;
+                            if cursor > bytes.len() {
+                                return Err(error("Truncated escape"));
+                            }
+                        }
+                        Some(_) => cursor += 1,
+                        None => return Err(error("Unterminated string")),
+                    }
+                }
+            }
+            b if b.is_ascii_whitespace() => cursor += 1,
+            _ => {
+                if depth == 0 {
+                    return Err(error("Atom outside root"));
+                }
+                cursor += 1;
+            }
+        }
+    }
+    context.check_cancelled()?;
+    if !root {
+        return Err(error("Missing root"));
+    }
+    if depth != 0 || !closed {
+        return Err(error("Unterminated expression"));
+    }
+    Ok(result)
+}
 #[derive(Debug)]
 pub(super) enum Value {
     Atom(String),
@@ -67,9 +251,11 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Node, Im
     let mut stack = Vec::<Node>::new();
     let mut root = None;
     let mut count = 0usize;
+    let mut next_cancel = 0usize;
     while cursor < bytes.len() {
-        if cursor % 4096 == 0 || count.is_multiple_of(1024) {
+        if cursor >= next_cancel {
             context.check_cancelled()?;
+            next_cancel = cursor + 4096;
         }
         match bytes[cursor] {
             b' ' | b'\r' | b'\n' | b'\t' => {
@@ -99,6 +285,10 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Node, Im
                     let mut value = String::new();
                     let mut start = cursor;
                     loop {
+                        if cursor >= next_cancel {
+                            context.check_cancelled()?;
+                            next_cancel = cursor + 4096;
+                        }
                         let byte = *bytes
                             .get(cursor)
                             .ok_or_else(|| error("Unterminated string"))?;
@@ -120,7 +310,14 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Node, Im
                                 b'\\' => value.push('\\'),
                                 _ => {
                                     value.push('\\');
-                                    value.push(escaped as char);
+                                    let character = text[cursor..]
+                                        .chars()
+                                        .next()
+                                        .ok_or_else(|| error("Truncated escape"))?;
+                                    value.push(character);
+                                    cursor += character.len_utf8();
+                                    start = cursor;
+                                    continue;
                                 }
                             }
                             cursor += 1;
@@ -137,6 +334,10 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Node, Im
                         && bytes[cursor] != b'('
                         && bytes[cursor] != b')'
                     {
+                        if cursor >= next_cancel {
+                            context.check_cancelled()?;
+                            next_cancel = cursor + 4096;
+                        }
                         cursor += 1;
                     }
                     text[start..cursor].to_owned()
@@ -161,3 +362,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Node, Im
     }
     root.ok_or_else(|| error("Missing root"))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/sexpr_document.rs"]
+mod tests;

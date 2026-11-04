@@ -68,6 +68,11 @@ fn hardware_ansi_source_text_keeps_photoplot_width_and_pen_lifts() {
         PreparedTextInstances::build(&texts, &font, 1, 1024, 4 * 1024 * 1024, &token).unwrap(),
     );
     let mut frame = TraceFrame {
+        net_colors: None,
+        pattern: None,
+        object_filter: Default::default(),
+        brightness: 1.0,
+        object_colors: None,
         pass: crate::backend::OverlayPass::Base,
         filled: true,
         hover_selection: None,
@@ -183,6 +188,8 @@ fn hardware_ansi_source_text_keeps_photoplot_width_and_pen_lifts() {
         ..Default::default()
     };
     let mut board = crate::backend::BoardFrame {
+        placement_outlines: None,
+        placements: None,
         traces: tracks,
         copper: Arc::new(
             crate::copper::PreparedCopper::build(

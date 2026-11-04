@@ -5,32 +5,19 @@ use crate::actions::{
 };
 use crate::services::startup_error;
 use crate::services::{recent, startup};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use crate::viewport;
 use crate::workbench::Workbench;
 use crate::{i18n, theme};
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use crate::{native_gpu_demo, viewport};
-use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use pomelo_core::{
-    i18n::{Locale, MessageKey, text},
+    i18n::{Locale, MessageKey},
     model::Diagnostic,
 };
 use std::{cell::Cell, process::ExitCode, rc::Rc};
 
 pub fn run() -> ExitCode {
     let preferred_locale = startup_error::preferred_locale();
-    if std::env::args_os().any(|argument| argument == "--native-gpu-demo") {
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        return run_native_gpu_demo(preferred_locale);
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        {
-            startup_error::report(
-                preferred_locale,
-                &Diagnostic::error("APP_GPU_UNSUPPORTED", MessageKey::GpuFailed),
-            );
-            return ExitCode::FAILURE;
-        }
-    }
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     let diagnostic_locale = startup::Startup::diagnostic_locale(&arguments, preferred_locale);
     let startup = match startup::Startup::parse(arguments) {
@@ -46,7 +33,7 @@ pub fn run() -> ExitCode {
         theme::initialize(cx);
         recent::initialize(cx);
         cx.bind_keys([
-            KeyBinding::new("secondary-o", OpenFile, Some("Pomelo")),
+            KeyBinding::new(crate::shortcuts::keys::OPEN_FILE, OpenFile, Some("Pomelo")),
             KeyBinding::new("secondary-w", CloseDocument, Some("Pomelo")),
             KeyBinding::new("secondary-r", ReloadDocument, Some("Pomelo")),
             KeyBinding::new("escape", CancelImport, Some("Pomelo")),
@@ -54,18 +41,62 @@ pub fn run() -> ExitCode {
             KeyBinding::new("secondary-,", OpenSettings, Some("Pomelo")),
             KeyBinding::new("secondary-tab", NextDocument, Some("Pomelo")),
             KeyBinding::new("secondary-shift-tab", PreviousDocument, Some("Pomelo")),
-            KeyBinding::new("f2", FitActiveBoard, Some("Pomelo")),
-            KeyBinding::new("secondary-b", ToggleLeftPanel, Some("Pomelo")),
-            KeyBinding::new("secondary-shift-b", ToggleRightPanel, Some("Pomelo")),
+            KeyBinding::new(
+                crate::shortcuts::keys::FIT_ACTIVE_BOARD,
+                FitActiveBoard,
+                Some("Pomelo"),
+            ),
+            KeyBinding::new(
+                crate::shortcuts::keys::TOGGLE_LEFT_PANEL,
+                ToggleLeftPanel,
+                Some("Pomelo"),
+            ),
+            KeyBinding::new(
+                crate::shortcuts::keys::TOGGLE_RIGHT_PANEL,
+                ToggleRightPanel,
+                Some("Pomelo"),
+            ),
             KeyBinding::new("secondary-q", Quit, None),
         ]);
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         cx.bind_keys([
-            KeyBinding::new("secondary-k", viewport::FocusSearch, Some("Pomelo")),
+            KeyBinding::new(
+                crate::shortcuts::keys::FOCUS_SEARCH,
+                viewport::FocusSearch,
+                Some("Pomelo"),
+            ),
             KeyBinding::new("escape", viewport::LeaveSearch, Some("BoardWorkspace")),
-            KeyBinding::new("escape", viewport::ClearSelection, Some("BoardViewport")),
+            KeyBinding::new(
+                "escape",
+                viewport::CancelCanvasAction,
+                Some("BoardViewport"),
+            ),
+            KeyBinding::new("m", viewport::MeasureDistance, Some("BoardViewport")),
+            KeyBinding::new("p", viewport::MeasurePolyline, Some("BoardViewport")),
+            KeyBinding::new("c", viewport::MeasureClearance, Some("BoardViewport")),
+            KeyBinding::new("s", viewport::BoxSelect, Some("BoardViewport")),
+            KeyBinding::new("z", viewport::ZoomToArea, Some("BoardViewport")),
+            KeyBinding::new("enter", viewport::FinishMeasurement, Some("BoardViewport")),
+            KeyBinding::new(
+                "backspace",
+                viewport::RemoveLastPoint,
+                Some("BoardViewport"),
+            ),
+            KeyBinding::new(
+                crate::shortcuts::keys::NAVIGATE_BACK,
+                viewport::NavigateBack,
+                Some("BoardViewport"),
+            ),
+            KeyBinding::new(
+                crate::shortcuts::keys::NAVIGATE_FORWARD,
+                viewport::NavigateForward,
+                Some("BoardViewport"),
+            ),
             KeyBinding::new("f", viewport::FitBoard, Some("BoardViewport")),
+            KeyBinding::new("f11", viewport::ZoomIn, Some("BoardViewport")),
+            KeyBinding::new("f12", viewport::ZoomOut, Some("BoardViewport")),
             KeyBinding::new("b", viewport::FlipBoard, Some("BoardViewport")),
+            KeyBinding::new("g", viewport::ToggleGrid, Some("BoardViewport")),
             KeyBinding::new("n", viewport::NextCandidate, Some("BoardViewport")),
             KeyBinding::new("=", viewport::ZoomIn, Some("BoardViewport")),
             KeyBinding::new("shift-=", viewport::ZoomIn, Some("BoardViewport")),
@@ -82,6 +113,7 @@ pub fn run() -> ExitCode {
         })
         .detach();
         let result = open_window(crate::main_window::options(cx), cx, |window, cx| {
+            window.set_window_title("Pomelo");
             #[cfg(feature = "window-profiling")]
             crate::window_timing::install(window, cx);
             let workbench = cx.new(|cx| {
@@ -138,59 +170,4 @@ fn run_application(
         .with_assets(crate::assets::Assets)
         .run(move |cx| on_launch(cx, callback_failed));
     ExitCode::from(u8::from(failed.get()))
-}
-
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-fn run_native_gpu_demo(locale: Locale) -> ExitCode {
-    run_application(locale, |cx, failed| {
-        init(cx);
-        i18n::initialize(cx, None);
-        Theme::change(ThemeMode::Dark, None, cx);
-        cx.bind_keys([
-            KeyBinding::new("secondary-q", Quit, None),
-            KeyBinding::new("secondary-r", native_gpu_demo::RotateColors, None),
-            KeyBinding::new("secondary-c", native_gpu_demo::ToggleClip, None),
-            KeyBinding::new("secondary-o", native_gpu_demo::ShowOverlay, None),
-            KeyBinding::new("secondary-t", ToggleTheme, None),
-        ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-        let result = open_window(
-            WindowOptions {
-                titlebar: Some(TitlebarOptions {
-                    title: Some(text(i18n::current(cx), MessageKey::NativeGpuTitle).into()),
-                    ..Default::default()
-                }),
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    size(px(1100.0), px(780.0)),
-                    cx,
-                ))),
-                window_min_size: Some(size(px(720.0), px(560.0))),
-                ..Default::default()
-            },
-            cx,
-            |window, cx| {
-                let demo = cx.new(|cx| native_gpu_demo::NativeGpuDemo::new(window, cx));
-                window.focus(&demo.read(cx).focus_handle(cx), cx);
-                demo
-            },
-        );
-        if let Err(error) = result {
-            failed.set(true);
-            startup_error::report(
-                i18n::current(cx),
-                &Diagnostic::error("APP_WINDOW_FAILED", MessageKey::WindowFailed)
-                    .with_details(error.to_string()),
-            );
-            cx.quit();
-            return;
-        }
-        cx.activate(true);
-    })
 }

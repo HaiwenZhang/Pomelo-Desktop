@@ -7,7 +7,7 @@ mod theme;
 mod view_state;
 
 pub use language::LanguageStore;
-pub use panels::{PanelPreferences, PanelStore};
+pub use panels::{LEFT_PANEL_WIDTH, PanelPreferences, PanelStore, RIGHT_PANEL_WIDTH};
 pub use recent::{RECENT_LIMIT, RecentEntry, RecentPresentation, RecentStore, remember_relocated};
 pub use theme::{ThemePreference, ThemeStore};
 pub use view_state::{ViewEntry, ViewStore};

@@ -20,6 +20,7 @@ struct Frame {
     metal::uint4 batch;
     metal::float4 highlight;
     metal::float4 inherited;
+    metal::uint4 material_pattern[4];
 };
 struct type_3 {
     uint inner[203];
@@ -282,6 +283,11 @@ vertex vertex_mainOutput vertex_main(
     bool local_2 = {};
     uint _e6 = u.batch.x;
     Pad p_4 = pads[_e6 + iid];
+    float minimum = p_4.source.x == 0u ? u.inherited.z : u.inherited.w;
+    if (metal::min(p_4.shape.x,p_4.shape.y) * u.view.x / u.viewport.z < minimum) {
+        o.position = metal::float4(2.0,2.0,0.0,1.0);
+        return vertex_mainOutput {o.position,o.center,o.shape,o.rotation,o.kind,o.tint,o.source_flags};
+    }
     uint category = u.batch.z & 12u;
     if ((u.batch.w == 2u && p_4.ids.z != u.batch.y) ||
         (category == 4u && p_4.source.x != 0u) ||
@@ -363,6 +369,10 @@ struct fragment_mainInput {
 struct fragment_mainOutput {
     metal::float4 member_1 [[color(0)]];
 };
+float material_ink(metal::float2 p,constant Frame& u) {
+    metal::uint2 cell=metal::uint2(metal::max(metal::floor((p-u.canvas.xy)/u.viewport.z),metal::float2(0.0)))&metal::uint2(15u);
+    uint row=u.material_pattern[cell.y>>2u][cell.y&3u];return float((row>>cell.x)&1u);
+}
 fragment fragment_mainOutput fragment_main(
   fragment_mainInput varyings_1 [[stage_in]]
 , metal::float4 position_2 [[position]]
@@ -371,5 +381,5 @@ fragment fragment_mainOutput fragment_main(
     const Out i = { position_2, varyings_1.center, varyings_1.shape, varyings_1.rotation, varyings_1.kind, {}, varyings_1.tint, varyings_1.source_flags };
     metal::float4 _e1 = fragment_color(i, u);
     float _e7 = u.inherited.x;
-    return fragment_mainOutput { metal::float4(_e1.xyz, _e1.w * _e7) };
+    return fragment_mainOutput { metal::float4(_e1.xyz * u.inherited.y, _e1.w * _e7 * material_ink(position_2.xy,u)) };
 }

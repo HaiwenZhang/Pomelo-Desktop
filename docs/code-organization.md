@@ -5,10 +5,10 @@
 | `crates/pomelo-core` | 领域模型、几何、搜索、选择、显示状态与共享消息 |
 | `crates/pomelo-import` | 文件导入、场景转换与结构化诊断 |
 | `crates/pomelo-render` | 场景准备、文字布局、图形资源与平台渲染后端 |
+| `crates/pomelo-storage` | 临时文件、磁盘缓冲区与共享资源策略 |
 | `crates/pomelo` | 桌面窗口、文档会话、视口、面板、设置与偏好保存 |
 | `locales` | 五种语言的消息资源 |
 | `assets/fonts` | 字体资源、来源记录与许可证 |
-| `support/gpui-compat` | GPUI 包名适配 |
 | `scripts` | 资源及打包工具 |
 
 领域逻辑保持独立于界面和 GPU。文件读取、导入与场景准备在后台执行，界面模块负责展示和命令分发。平台后端消费共享场景，各自管理设备资源和着色器。
@@ -38,7 +38,7 @@ Allegro、Altium、ODB++、PADS、KiCad 与 HFSS 3D Layout 的原生 Rust 解析
 | 修改内容 | 入口 |
 | --- | --- |
 | 导入、渲染数据准备、索引构建与查看状态恢复 | `document/preparation.rs` |
-| 文档队列调度和准备结果发布 | `workbench/mod.rs` 的 `start_next_import` |
+| 文档队列调度和准备结果发布 | `workbench/imports.rs` 的 `start_next_import` |
 | 视口状态、初始化和生命周期 | `viewport/mod.rs` |
 | 工具栏、面板、画布和状态栏的组合 | `viewport/layout.rs` |
 | GPU 帧组装、上传状态和画布绘制 | `viewport/frame.rs` |
@@ -49,6 +49,8 @@ Allegro、Altium、ODB++、PADS、KiCad 与 HFSS 3D Layout 的原生 Rust 解析
 | 检查器选中对象详情及成员列表展示 | `panels/selection_details.rs` |
 | 面板展示接入视口状态和回调 | `viewport/layer_panel.rs`、`viewport/inspector_panel.rs`、`viewport/diagnostics_panel.rs` |
 | 比例尺文案 | `viewport/scale_label.rs` |
+| 测量、选择集、高亮和命名视图 | `viewport/review.rs`、`viewport/review_panel.rs` |
+| 审阅标注覆盖层和导出 | `viewport/review_overlay.rs`、`viewport/review_export.rs` |
 | 配置文件的限量读取、原子保存和损坏备份 | `services/preferences/json_file.rs` |
 | 语言、主题、面板、最近文件和查看状态的持久化规则 | `services/preferences/` 下的对应业务模块 |
 
