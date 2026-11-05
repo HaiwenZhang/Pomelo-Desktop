@@ -124,8 +124,10 @@ mod tests {
             diagnostics: vec![],
         };
         let colors = BTreeMap::from([(LayerId(0), [1.0, 0.0, 0.0, 1.0])]);
-        let mut display = BoardDisplay::default();
-        display.copper_opacity = 1.0;
+        let mut display = BoardDisplay {
+            copper_opacity: 1.0,
+            ..Default::default()
+        };
         for pattern in FillPattern::ALL {
             display
                 .appearance

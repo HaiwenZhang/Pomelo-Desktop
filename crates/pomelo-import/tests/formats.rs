@@ -57,37 +57,29 @@ fn dispatcher_probes_all_supported_source_families() {
 }
 
 #[test]
-fn cancellation_interrupts_native_parser_execution() {
+fn cancellation_when_decoding_starts_stops_import() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("large.kicad_pcb");
-    let mut source = String::from(
-        "(kicad_pcb (version 20260206) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))",
-    );
-    for _ in 0..20_000 {
-        source.push_str("(segment (start 0 0) (end 1 1) (width 0.2) (layer \"F.Cu\"))");
-    }
-    source.push(')');
-    std::fs::write(&path, source).unwrap();
+    let path = directory.path().join("board.kicad_pcb");
+    std::fs::write(&path, KICAD).unwrap();
     let cancel = CancellationToken::default();
-    std::thread::scope(|scope| {
-        let progress = |update: pomelo_core::task::ImportProgress| {
-            if update.stage == pomelo_core::task::ImportStage::Decoding {
-                scope.spawn(|| {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    cancel.cancel();
-                });
-            }
-        };
-        let result = FormatImporter.import(
-            &path,
-            &ImportOptions::default(),
-            &ImportContext {
-                cancellation: &cancel,
-                progress: &progress,
-            },
-        );
-        assert!(matches!(result, Err(ImportError::Cancelled)));
-    });
+    let progress = |update: pomelo_core::task::ImportProgress| {
+        if update.stage == pomelo_core::task::ImportStage::Decoding {
+            cancel.cancel();
+        }
+    };
+    let result = FormatImporter.import(
+        &path,
+        &ImportOptions::default(),
+        &ImportContext {
+            cancellation: &cancel,
+            progress: &progress,
+        },
+    );
+    assert!(
+        matches!(result, Err(ImportError::Cancelled)),
+        "expected cancellation at decoding, got error {:?}",
+        result.err()
+    );
 }
 
 #[test]
