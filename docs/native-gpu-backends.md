@@ -4,9 +4,9 @@
 
 | 平台 | 后端 | 着色器 |
 | --- | --- | --- |
-| Windows | D3D11 | HLSL |
-| macOS | Metal | MSL |
-| Linux | wgpu | WGSL |
+| Windows | D3D11 | WGSL 经 naga 转换为 HLSL |
+| macOS | Metal | WGSL 经 naga 转换为 MSL |
+| Linux | wgpu | 直接使用 WGSL |
 
 应用通过 GPUI 的 GPU 绘制入口接入当前设备和帧目标；业务几何、批次、缓存和着色器由渲染 crate 管理。构建按目标平台启用对应后端。
 
@@ -16,9 +16,17 @@
 
 ## 代码布局
 
-平台实现位于 `src/backend/d3d11/`、`metal/`、`wgpu/`。各目录的 `mod.rs` 负责适配入口，`driver.rs` 管理资源与命令，`shaders.rs` 管理着色器。公共批次及绘制策略位于 `backend/common/` 与共享 renderer 模块。
+平台实现位于 `src/backend/d3d11/`、`metal/`、`wgpu/`。各目录的 `mod.rs` 负责适配入口，`driver.rs` 管理资源与命令。公共批次及绘制策略位于 `backend/common/` 与共享 renderer 模块。
 
-HLSL、MSL、WGSL 位于各平台着色器目录，分别维护；运行时不依靠跨语言转换。平台接口通过 `backend::native` 提供给应用。
+只维护 `src/shaders/*.wgsl` 一套源码。`backend/wgsl.rs` 统一拼装调色板、材质和透明度，校验 WGSL 并在 Windows/macOS 创建管线时通过 naga 转换。Windows 保留 `d3d11/shaders.rs` 作为 FXC 编译边界，入口名称取自 naga 反射结果；Metal 使用生成的 MSL。平台接口通过 `backend::native` 提供给应用。
+
+统一绑定为 group 0：帧常量 binding 0、几何 binding 1、图集 binding 2、采样器 binding 3。D3D11 对应 b0、原始字节缓冲视图 t0、图集 t2 和采样器 s0；Metal 对应 buffer(0)、buffer(1)、texture(0)、sampler(0)，buffer(2) 提供几何运行时数组的字节长度。CPU 常量结构和实例 stride 由测试与 WGSL 布局核对。
+
+## 构建与安装包
+
+WGSL 通过 `include_str!` 嵌入程序，naga 是 Rust 库依赖；不需要额外的着色器文件、naga 命令行工具或外部转换步骤。现有 Windows、macOS 和 Linux 安装包脚本继续使用 Cargo 构建，无需改变签名、安装器或资源复制流程。Windows 仍使用原有 FXC，macOS 仍使用系统 Metal 编译器；升级时提交 Cargo 配置和锁文件即可。
+
+所有宿主平台的测试均生成 HLSL 和 MSL，Windows 测试还实际使用 FXC 编译全部顶点、片元及铜皮清除入口。Metal 编译及 GPU 像素测试仍需在对应平台运行。
 
 ## 绘制与资源
 

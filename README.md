@@ -25,7 +25,7 @@
 ## Your board, a clearer view
 
 - **Keep designs local.** Import and view board files on your computer without uploading them. Viewing does not modify the source board.
-- **Explore with native GPU rendering.** D3D11/HLSL, Metal/MSL, and wgpu/WGSL render traces, arcs, pads, vias, copper regions and holes, drawings, and MSDF board text.
+- **Explore with native GPU rendering.** Shared WGSL shaders render traces, arcs, pads, vias, copper regions and holes, drawings, and MSDF board text. naga translates them to HLSL for D3D11 and MSL for Metal; wgpu uses WGSL directly.
 - **Follow connections.** Search nets and components, navigate to results, and inspect selected objects.
 - **Control the view.** Manage layers, color by layer or net, and adjust copper opacity, pad fills, and labels.
 - **Work across boards.** Multiple documents, recent files, and saved view preferences make it easier to return to a design.

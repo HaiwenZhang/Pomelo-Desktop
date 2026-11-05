@@ -27,7 +27,7 @@
 | [`scene/`](../crates/pomelo-render/src/scene/mod.rs) | 图元准备、资源版本、曲线缓存和内存控制 | 新增实体网格、法线、边、实例、空间索引和三维 bounds |
 | [`backend/common/`](../crates/pomelo-render/src/backend/common/mod.rs) | NativeGpuRenderer、帧借用设备、平台资源封装 | 现有公共 Draw 以二维/模板覆盖为中心，需三维附件、深度和多遍接口 |
 | [`backend/d3d11/driver.rs`](../crates/pomelo-render/src/backend/d3d11/driver.rs) | GPU 缓冲、模板附件与绘制资源 | 当前对应绘制状态关闭深度测试/写入；有 DepthStencil 类型不代表已有实体遮挡 |
-| [`shaders/d3d11/trace.hlsl`](../crates/pomelo-render/src/shaders/d3d11/trace.hlsl) | 精确二维曲线与坐标补偿 | 当前顶点投影 z=0，不是三维实体顶点变换 |
+| [`shaders/trace.wgsl`](../crates/pomelo-render/src/shaders/trace.wgsl) | 精确二维曲线与坐标补偿；naga 转换为 HLSL/MSL | 当前顶点投影 z=0，不是三维实体顶点变换 |
 | [`viewport/`](../crates/pomelo/src/viewport/mod.rs) | BoardViewport 为状态所有者；帧、导航、拾取、显示面板已拆分 | 增加三维状态分支，避免把第二个独立会话塞入面板 |
 | [`view_state.rs`](../crates/pomelo-core/src/view_state.rs)、[`preferences/view_state.rs`](../crates/pomelo/src/services/preferences/view_state.rs) | schema=1、来源身份核对、严格反序列化与原子保存基础 | 三维相机和显示预设需要正式迁移，不能只加字段并期望旧文件自动兼容 |
 
@@ -179,7 +179,7 @@ Camera3d 包含 pivot、单位四元数 orientation、正交视域高度、有�
 
 首期使用可调基础色、环境项和方向漫反射，保证铜与介质可读；这是 Pomelo 的视觉设计选择。源层颜色和用户覆盖继续可用，视觉高光不改变工程材料。PBR、阴影、环境贴图不作为对标首期依赖。
 
-GPU 数据布局使用明确的顶点/实例/帧结构、对齐和布局断言；三个着色语言分别维护。D3D11/Metal 必要 unsafe 仅放平台模块既有允许边界。不要把 CPU 核心几何放进平台 driver。
+GPU 数据布局使用明确的顶点/实例/帧结构、对齐和布局断言；统一维护 WGSL，由 naga 生成 HLSL/MSL。D3D11/Metal 必要 unsafe 仅放平台模块既有允许边界。不要把 CPU 核心几何放进平台 driver。
 
 ### 7.4 资源与失效
 

@@ -2,7 +2,7 @@
 use super::super::Shader;
 use super::super::common::Rect;
 use super::super::common::driver::{Draw, StencilMode, StencilScope};
-use super::shaders;
+use super::super::wgsl as shaders;
 use anyhow::{Context as _, ensure};
 use metal::*;
 use std::{
@@ -119,12 +119,12 @@ impl<'a> Device<'a> {
         })
     }
     pub fn pipeline(&self, shader: Shader) -> anyhow::Result<Pipeline> {
-        let source = shaders::source(shader);
+        let source = shaders::msl(shader)?;
         let options = CompileOptions::new();
         options.set_fast_math_enabled(false);
         let library = self
             .raw
-            .new_library_with_source(source, &options)
+            .new_library_with_source(&source, &options)
             .map_err(|e| anyhow::anyhow!("Metal {shader:?}: {e}"))?;
         let function = |entry: &str| -> anyhow::Result<Function> {
             library

@@ -50,7 +50,7 @@ fn wgpu_pipelines_and_staged_upload_preserve_clip_and_opacity() {
     }
     let bounds = Bounds::new(point(ScaledPixels(0.0), ScaledPixels(0.0)), size_fn());
     {
-        let mut context = gpui_wgpu::WgpuPaintContext {
+        let mut context = gpui::WgpuPaintContext {
             target: GpuPaintTarget {
                 size: [128, 128],
                 bounds,
@@ -100,6 +100,9 @@ fn wgpu_pipelines_and_staged_upload_preserve_clip_and_opacity() {
                 &pipeline,
                 Draw {
                     uniforms: bytemuck::cast_slice(&uniforms),
+                    brightness: 1.0,
+                    pixel_filter: [0.0; 2],
+                    pattern_mask: [0xffff; 16],
                     vertices: &buffer,
                     indices: None,
                     start: 0,
@@ -151,7 +154,7 @@ fn wgpu_pipelines_and_staged_upload_preserve_clip_and_opacity() {
     })
     .unwrap();
     receive.recv().unwrap().unwrap();
-    let pixels = output.slice(..).get_mapped_range();
+    let pixels = output.slice(..).get_mapped_range().unwrap();
     let sample =
         |x: usize, y: usize| -> [u8; 4] { pixels[(y * 128 + x) * 4..][..4].try_into().unwrap() };
     let middle = sample(64, 64);

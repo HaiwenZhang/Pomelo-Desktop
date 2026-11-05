@@ -18,16 +18,16 @@ use windows::{
         Graphics::{
             Direct3D::{
                 D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
-                D3D11_SRV_DIMENSION_BUFFER,
+                D3D11_SRV_DIMENSION_BUFFEREX,
             },
             Direct3D11::*,
             Dxgi::Common::{
-                DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R32_UINT,
-                DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+                DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R8G8B8A8_UNORM,
+                DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R32_UINT, DXGI_SAMPLE_DESC,
             },
         },
     },
-    core::{Interface, s},
+    core::{Interface, PCSTR, s},
 };
 
 pub(crate) struct Buffer {
@@ -172,9 +172,8 @@ impl<'a> Device<'a> {
                     MiscFlags: if index {
                         0
                     } else {
-                        D3D11_RESOURCE_MISC_BUFFER_STRUCTURED.0 as u32
+                        D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS.0 as u32
                     },
-                    StructureByteStride: if index { 0 } else { stride as u32 },
                     ..Default::default()
                 },
                 initial.as_ref().map(|value| value as *const _),
@@ -185,14 +184,13 @@ impl<'a> Device<'a> {
                 self.raw.CreateShaderResourceView(
                     &raw,
                     Some(&D3D11_SHADER_RESOURCE_VIEW_DESC {
-                        Format: DXGI_FORMAT_UNKNOWN,
-                        ViewDimension: D3D11_SRV_DIMENSION_BUFFER,
+                        Format: DXGI_FORMAT_R32_TYPELESS,
+                        ViewDimension: D3D11_SRV_DIMENSION_BUFFEREX,
                         Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
-                            Buffer: D3D11_BUFFER_SRV {
-                                Anonymous1: D3D11_BUFFER_SRV_0 { FirstElement: 0 },
-                                Anonymous2: D3D11_BUFFER_SRV_1 {
-                                    NumElements: (size / stride) as u32,
-                                },
+                            BufferEx: D3D11_BUFFEREX_SRV {
+                                FirstElement: 0,
+                                NumElements: (size / 4) as u32,
+                                Flags: D3D11_BUFFEREX_SRV_FLAG_RAW.0 as u32,
                             },
                         },
                     }),
@@ -285,10 +283,21 @@ impl<'a> Device<'a> {
         })
     }
     pub fn pipeline(&self, shader: Shader) -> anyhow::Result<Pipeline> {
-        let (source, vertex_entry, fragment_entry) = source(shader);
-        let vertex_blob = compile_shader(&source, s!("pomelo-render"), vertex_entry, s!("vs_5_0"))?;
-        let fragment_blob =
-            compile_shader(&source, s!("pomelo-render"), fragment_entry, s!("ps_5_0"))?;
+        let source = source(shader)?;
+        let entry = |name: &str| std::ffi::CString::new(name).context("GPU_SHADER_ENTRY");
+        let (vertex_entry, fragment_entry) = (entry(&source.vertex)?, entry(&source.fragment)?);
+        let vertex_blob = compile_shader(
+            &source.text,
+            s!("pomelo-render"),
+            PCSTR(vertex_entry.as_ptr().cast()),
+            s!("vs_5_0"),
+        )?;
+        let fragment_blob = compile_shader(
+            &source.text,
+            s!("pomelo-render"),
+            PCSTR(fragment_entry.as_ptr().cast()),
+            s!("ps_5_0"),
+        )?;
         let (
             mut vertex,
             mut fragment,
@@ -322,8 +331,13 @@ impl<'a> Device<'a> {
                 Some(&mut fragment),
             )?;
             if shader == Shader::Copper {
-                let blob =
-                    compile_shader(&source, s!("copper.hlsl"), s!("clear_vertex"), s!("vs_5_0"))?;
+                let clear = entry(source.clear.as_deref().context("GPU_COPPER_CLEAR_ENTRY")?)?;
+                let blob = compile_shader(
+                    &source.text,
+                    s!("pomelo-render"),
+                    PCSTR(clear.as_ptr().cast()),
+                    s!("vs_5_0"),
+                )?;
                 self.raw.CreateVertexShader(
                     std::slice::from_raw_parts(
                         blob.GetBufferPointer().cast(),
@@ -524,7 +538,7 @@ impl<'a> Device<'a> {
         // SAFETY: retained COM resources remain alive through restoration, including error unwinding.
         unsafe {
             self.context.VSSetShaderResources(0, Some(&[None]));
-            self.context.PSSetShaderResources(0, Some(&[None]));
+            self.context.PSSetShaderResources(2, Some(&[None]));
             self.context
                 .OMSetRenderTargets(Some(&output.targets), output.depth.as_ref());
             self.context
@@ -654,7 +668,7 @@ impl<'a> Device<'a> {
                 self.context
                     .PSSetConstantBuffers(0, Some(&[Some(pipeline.uniforms.clone())]));
                 self.context
-                    .PSSetShaderResources(0, Some(&[draw.atlas.map(|atlas| atlas.view.clone())]));
+                    .PSSetShaderResources(2, Some(&[draw.atlas.map(|atlas| atlas.view.clone())]));
                 self.context
                     .PSSetSamplers(0, Some(&[draw.atlas.map(|atlas| atlas.sampler.clone())]));
             }

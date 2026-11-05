@@ -105,8 +105,8 @@ fn paint_context<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     view: &'a wgpu::TextureView,
     bounds: GpuBounds<ScaledPixels>,
-) -> gpui_wgpu::WgpuPaintContext<'a> {
-    gpui_wgpu::WgpuPaintContext {
+) -> gpui::WgpuPaintContext<'a> {
+    gpui::WgpuPaintContext {
         target: GpuPaintTarget {
             size: [64, 64],
             bounds,
@@ -341,7 +341,7 @@ fn render(
     })
     .unwrap();
     receive.recv().unwrap().unwrap();
-    output.slice(..).get_mapped_range().to_vec()
+    output.slice(..).get_mapped_range().unwrap().to_vec()
 }
 
 #[test]

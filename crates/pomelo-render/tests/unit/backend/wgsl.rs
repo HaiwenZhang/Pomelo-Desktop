@@ -1,6 +1,6 @@
 use super::*;
 #[test]
-fn all_wgpu_shaders_validate() {
+fn all_shared_wgsl_shaders_validate() {
     for shader in [
         Shader::Trace,
         Shader::Pad,
@@ -11,6 +11,60 @@ fn all_wgpu_shaders_validate() {
     ] {
         validated(shader).unwrap_or_else(|e| panic!("WGSL {shader:?}: {e:#}"));
     }
+}
+
+const ALL: [Shader; 6] = [
+    Shader::Trace,
+    Shader::Pad,
+    Shader::Text,
+    Shader::Label,
+    Shader::Copper,
+    Shader::Probe,
+];
+
+#[test]
+fn every_shader_translates_to_metal_with_driver_bindings() {
+    for shader in ALL {
+        let source = msl(shader).unwrap_or_else(|error| panic!("{shader:?}: {error:#}"));
+        assert!(source.contains("[[buffer(0)]]"), "{shader:?}: uniforms");
+        if shader != Shader::Probe {
+            assert!(source.contains("[[buffer(1)]]"), "{shader:?}: geometry");
+        }
+        assert!(!source.contains("fake"), "{shader:?}: unresolved binding");
+    }
+    let label = msl(Shader::Label).unwrap();
+    assert!(label.contains("[[texture(0)]]"));
+    assert!(label.contains("[[sampler(0)]]"));
+}
+
+#[test]
+fn every_shader_translates_to_d3d11_with_driver_bindings() {
+    for shader in ALL {
+        let source = hlsl(shader).unwrap_or_else(|error| panic!("{shader:?}: {error:#}"));
+        assert!(source.text.contains("register(b0)"), "{shader:?}: uniforms");
+        if shader != Shader::Probe {
+            assert!(
+                source.text.contains("ByteAddressBuffer") && source.text.contains("register(t0)"),
+                "{shader:?}: geometry"
+            );
+        }
+        assert!(
+            !source.text.contains(", space"),
+            "{shader:?}: unsupported register space"
+        );
+        assert!(!source.text.contains("nagaSamplerHeap"));
+        assert_eq!(source.vertex, "vertex_main");
+        assert_eq!(source.fragment, "fragment_main");
+        assert_eq!(source.clear.is_some(), shader == Shader::Copper);
+    }
+    let label = hlsl(Shader::Label).unwrap();
+    assert!(label.text.contains("register(t2)"));
+    assert!(label.text.contains("register(s0)"));
+}
+
+#[test]
+fn d3d11_rejects_unconverted_register_spaces() {
+    assert!(bind_d3d11_samplers("Texture2D image : register(t0, space1);\n").is_err());
 }
 
 #[test]

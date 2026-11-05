@@ -1,4 +1,4 @@
-use super::*;
+use crate::backend::{Shader, wgsl};
 #[test]
 #[ignore = "requires a macOS Metal device"]
 fn all_metal_shader_sources_compile() {
@@ -14,7 +14,7 @@ fn all_metal_shader_sources_compile() {
         Shader::Probe,
     ] {
         device
-            .new_library_with_source(source(shader), &options)
+            .new_library_with_source(&wgsl::msl(shader).unwrap(), &options)
             .unwrap_or_else(|e| panic!("MSL {shader:?}: {e}"));
     }
 }

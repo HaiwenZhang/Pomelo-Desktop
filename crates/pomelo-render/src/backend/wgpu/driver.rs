@@ -2,7 +2,7 @@
 use super::super::Shader;
 use super::super::common::Rect;
 use super::super::common::driver::{Draw, StencilMode, StencilScope};
-use super::shaders;
+use super::super::wgsl as shaders;
 use anyhow::{Context as _, ensure};
 use gpui_wgpu::wgpu::*;
 use std::{
@@ -100,7 +100,7 @@ impl<'a> Device<'a> {
             },
             mapped_at_creation: true,
         });
-        raw.slice(..).get_mapped_range_mut().copy_from_slice(data);
+        raw.slice(..).get_mapped_range_mut()?.copy_from_slice(data);
         raw.unmap();
         Ok(Buffer {
             raw,
@@ -124,7 +124,7 @@ impl<'a> Device<'a> {
         });
         staging
             .slice(..)
-            .get_mapped_range_mut()
+            .get_mapped_range_mut()?
             .copy_from_slice(data);
         staging.unmap();
         self.encoder.borrow_mut().copy_buffer_to_buffer(
@@ -172,7 +172,7 @@ impl<'a> Device<'a> {
         });
         staging
             .slice(..)
-            .get_mapped_range_mut()
+            .get_mapped_range_mut()?
             .copy_from_slice(&padded);
         staging.unmap();
         self.encoder.borrow_mut().copy_buffer_to_texture(
@@ -404,7 +404,7 @@ impl<'a> Device<'a> {
         });
         uniforms
             .slice(..)
-            .get_mapped_range_mut()
+            .get_mapped_range_mut()?
             .copy_from_slice(&bytes);
         uniforms.unmap();
         let mut entries = vec![

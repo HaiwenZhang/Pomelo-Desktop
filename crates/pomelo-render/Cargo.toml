@@ -14,6 +14,7 @@ native-gpu = [
     "dep:gpui-wgpu",
     "dep:gpui-windows",
     "dep:metal",
+    "dep:naga",
     "dep:windows",
 ]
 
@@ -31,10 +32,12 @@ gpui = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui-windows = { workspace = true, optional = true }
+naga = { workspace = true, optional = true, features = ["hlsl-out"] }
 windows = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui-apple = { workspace = true, optional = true, features = ["runtime_shaders"] }
+naga = { workspace = true, optional = true, features = ["msl-out"] }
 metal = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -45,7 +48,7 @@ futures.workspace = true
 
 [dev-dependencies]
 resvg.workspace = true
-naga.workspace = true
+naga = { workspace = true, features = ["msl-out", "hlsl-out"] }
 sha2.workspace = true
 hex.workspace = true
 pomelo-import.workspace = true

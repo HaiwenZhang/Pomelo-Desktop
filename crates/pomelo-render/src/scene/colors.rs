@@ -56,27 +56,8 @@ pub fn copper_color(mode: ColorMode, layer: [f32; 4], net: NetId) -> [f32; 4] {
     }
 }
 
-/// Inject the same integer palette into Shader Model 5, avoiding a second color table.
-#[cfg(all(target_os = "windows", feature = "native-gpu"))]
-pub(crate) fn hlsl_library() -> String {
-    use std::fmt::Write as _;
-    let mut source = format!(
-        "static const uint pcb_net_colors[{}] = {{",
-        NET_COLORS.len()
-    );
-    for color in NET_COLORS {
-        // Writing to String cannot fail.
-        let _ = write!(source, "0x{color:08x}u,");
-    }
-    source.push_str(&format!(
-        "}};\nfloat3 pcb_net_color(uint net) {{\nuint rgb = pcb_net_colors[net % {}u];\nreturn float3((rgb >> 16u) & 255u, (rgb >> 8u) & 255u, rgb & 255u) / 255.0;\n}}\n",
-        NET_COLORS.len()
-    ));
-    source
-}
-
-/// Palette generated from the same source used by the CPU and D3D11.
-#[cfg(all(feature = "native-gpu", any(target_os = "linux", test)))]
+/// Palette generated from the same source for every GPU backend and the CPU.
+#[cfg(feature = "native-gpu")]
 pub(crate) fn wgsl_library() -> String {
     use std::fmt::Write as _;
     let mut source = format!("const pcb_net_colors = array<u32, {}>(", NET_COLORS.len());

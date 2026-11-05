@@ -75,7 +75,7 @@ fn trace_draws(draw_count: usize, zone_mode: Option<u32>) {
     let command = queue.new_command_buffer();
     let color = target(&raw);
     clear(command, &color);
-    let mut paint = gpui_apple::MetalPaintContext {
+    let mut paint = gpui::MetalPaintContext {
         target: gpu_target(0.5),
         device: &raw,
         command_buffer: command,
@@ -112,6 +112,9 @@ fn trace_draws(draw_count: usize, zone_mode: Option<u32>) {
                 &pipeline,
                 Draw {
                     uniforms: bytemuck::cast_slice(&uniforms),
+                    brightness: 1.0,
+                    pixel_filter: [0.0; 2],
+                    pattern_mask: [0xffff; 16],
                     vertices: &buffer,
                     indices: None,
                     start: 0,
@@ -151,7 +154,7 @@ fn metal_copper_subtracts_holes_and_preserves_background() {
     let command = queue.new_command_buffer();
     let color = target(&raw);
     clear(command, &color);
-    let paint = gpui_apple::MetalPaintContext {
+    let paint = gpui::MetalPaintContext {
         target: gpu_target(1.0),
         device: &raw,
         command_buffer: command,
@@ -200,6 +203,9 @@ fn metal_copper_subtracts_holes_and_preserves_background() {
                 &pipeline,
                 Draw {
                     uniforms: bytemuck::cast_slice(&uniforms),
+                    brightness: 1.0,
+                    pixel_filter: [0.0; 2],
+                    pattern_mask: [0xffff; 16],
                     vertices: &vertices,
                     indices: index,
                     start,
@@ -239,7 +245,7 @@ fn metal_empty_curve_override_preserves_background_without_missing_buffers() {
     let command = queue.new_command_buffer();
     let color = target(&raw);
     clear(command, &color);
-    let paint = gpui_apple::MetalPaintContext {
+    let paint = gpui::MetalPaintContext {
         target: gpu_target(1.0),
         device: &raw,
         command_buffer: command,

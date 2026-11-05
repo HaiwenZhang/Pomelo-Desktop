@@ -96,7 +96,7 @@ impl NativeGpuRenderer for PcbProbeRenderer {
     }
 }
 
-/// Explicit constant-buffer layout, paired with `pcb.hlsl`.
+/// Explicit constant-buffer layout, paired with `probe.wgsl`.
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub(crate) struct Uniforms {

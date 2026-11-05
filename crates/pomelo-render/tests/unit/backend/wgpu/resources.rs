@@ -50,7 +50,7 @@ impl GpuFixture {
             point(ScaledPixels(0.0), ScaledPixels(0.0)),
             size(ScaledPixels(16.0), ScaledPixels(16.0)),
         );
-        let mut context = gpui_wgpu::WgpuPaintContext {
+        let mut context = gpui::WgpuPaintContext {
             target: GpuPaintTarget {
                 size: [16, 16],
                 bounds,
@@ -88,7 +88,7 @@ impl GpuFixture {
         });
         self.wait();
         receive.recv().unwrap().unwrap();
-        let bytes = buffer.slice(..).get_mapped_range().to_vec();
+        let bytes = buffer.slice(..).get_mapped_range().unwrap().to_vec();
         buffer.unmap();
         bytes
     }
@@ -386,6 +386,9 @@ fn draws_reject_empty_or_negative_scissors_before_encoding() {
                     &pipeline,
                     Draw {
                         uniforms: &[],
+                        brightness: 1.0,
+                        pixel_filter: [0.0; 2],
+                        pattern_mask: [0xffff; 16],
                         vertices: &vertices,
                         indices: None,
                         start: 0,
