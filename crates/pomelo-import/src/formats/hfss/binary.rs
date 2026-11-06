@@ -330,3 +330,52 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Archive,
         version,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pomelo_core::task::CancellationToken;
+
+    fn archive(version: &str, encrypted: bool) -> Vec<u8> {
+        let header =
+            format!("$begin 'Hdr'\n\tVersion='{version}'\n\tEncrypted={encrypted}\n$end 'Hdr'\n");
+        let mut bytes = vec![0];
+        bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(header.as_bytes());
+        // Root fields are described by IDs, including a nullable child object.
+        for value in [-1i32, 1, 0, 2, 0, 4, 2, 5, -1, 1, 0, 0, -1, -1] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn imports_compatible_edb_archive_versions() {
+        let cancel = CancellationToken::default();
+        let context = ImportContext {
+            cancellation: &cancel,
+            progress: &|_| {},
+        };
+        for version in ["7.3", "8.6", "9.0", "9.5", "10.6", "12.1", "99.0"] {
+            let archive = read(&archive(version, false), &context)
+                .unwrap_or_else(|error| panic!("EDB {version} must decode: {error}"));
+            assert_eq!(archive.version, version);
+            assert_eq!(archive.root.schema, 0);
+        }
+    }
+
+    #[test]
+    fn rejects_encrypted_and_truncated_archives() {
+        let cancel = CancellationToken::default();
+        let context = ImportContext {
+            cancellation: &cancel,
+            progress: &|_| {},
+        };
+        for version in ["7.3", "8.6", "10.6", "12.1"] {
+            assert!(read(&archive(version, true), &context).is_err());
+            let mut bytes = archive(version, false);
+            bytes.pop();
+            assert!(read(&bytes, &context).is_err());
+        }
+    }
+}

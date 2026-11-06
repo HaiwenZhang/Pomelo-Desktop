@@ -23,6 +23,8 @@ The source layouts were ported from the local Pomelo reference implementation. I
 
 Current coverage limits remain visible through diagnostics: PADS ordinary graphics/text, KiCad text and filled graphic presentation, and opaque ODB++ description properties are omitted. Unsupported HFSS extensions and geometry fail explicitly. Altium imports saved region copper and reports polygons without a saved fill. Source-format compatibility beyond the supplied cases needs further fixtures.
 
+HFSS version coverage is verified against AMD LP5X and Intel Haswell EDB cases saved by 2021R1, 2022R2, 2025R1 and 2026R1. Run `POMELO_AEDB_CASES=/path/to/aedb_testcase cargo test -p pomelo-import --test native_cases hfss_versions -- --ignored` to check those local files; proprietary board data is not included in the repository.
+
 The local retired TS files are archived in the ignored `.cache/retired-format-import` directory for recovery only. They are outside the active source tree and have no build or runtime entry point.
 
 See [the validation guide](../../../../docs/validation-guide.md) for validation commands and [the code organization guide](../../../../docs/code-organization.md) for module responsibilities.
