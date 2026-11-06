@@ -7,6 +7,56 @@ use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::Format
 use std::{collections::HashSet, path::PathBuf};
 
 #[test]
+#[ignore = "requires POMELO_AEDB_CASES pointing at the local aedb_testcase directory"]
+fn hfss_versions_preserve_board_counts_and_source_version() {
+    let root = PathBuf::from(std::env::var_os("POMELO_AEDB_CASES").expect("set POMELO_AEDB_CASES"));
+    let cancel = CancellationToken::default();
+    for (folder, version) in [
+        ("AMD_LP5X_2021R1.aedb", "7.3"),
+        ("AMD_LP5X1_2022R2.aedb", "8.6"),
+        ("AMD_LP5X3_2025R1.aedb", "10.6"),
+        ("AMD_LP5X2_2026R1.aedb", "12.1"),
+        ("Intel_HASWELL_LGA2011_2021R1.aedb", "7.3"),
+        ("Intel_HASWELL_LGA2011_2022R2.aedb", "8.6"),
+        ("Intel_HASWELL_LGA2011_2025R1.aedb", "10.6"),
+        ("Intel_HASWELL_LGA2011_2026R1.aedb", "12.1"),
+    ] {
+        let board = FormatImporter
+            .import(
+                &root.join(folder).join("edb.def"),
+                &ImportOptions::default(),
+                &ImportContext {
+                    cancellation: &cancel,
+                    progress: &|_| {},
+                },
+            )
+            .unwrap_or_else(|error| panic!("{folder}: {error}"));
+        assert_eq!(board.source.writer_version, version, "{folder}");
+        let s = &board.scene;
+        assert!(s.bounds.is_valid(), "{folder}");
+        assert!(s.diagnostics.is_empty(), "{folder}: {:?}", s.diagnostics);
+        let expected = if folder.starts_with("AMD") {
+            [12, 4561, 116737, 24349, 7262, 16155, 1441]
+        } else {
+            [8, 5905, 307322, 27744, 5095, 16880, 1221]
+        };
+        assert_eq!(
+            [
+                s.layers.len(),
+                s.nets.len(),
+                s.segments.len(),
+                s.pins.len(),
+                s.components.len(),
+                s.vias.len(),
+                s.zones.len(),
+            ],
+            expected,
+            "{folder}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires POMELO_NATIVE_CASES pointing at the local pomelo_cases directory"]
 fn native_readers_preserve_case_counts_connectivity_and_finite_geometry() {
     let root =

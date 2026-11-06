@@ -1,4 +1,4 @@
-//! EDB 12.1 typed DEF archive. Unknown schemas and encodings fail at source offsets.
+//! EDB typed DEF archive. Unknown schemas and encodings fail at source offsets.
 use super::error;
 use crate::{ImportContext, ImportError};
 use std::collections::{HashMap, HashSet};
@@ -181,7 +181,10 @@ impl Reader<'_, '_> {
         })
     }
 }
-pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Object, ImportError> {
+pub(super) fn read(
+    bytes: &[u8],
+    context: &ImportContext<'_>,
+) -> Result<(String, Object), ImportError> {
     let mut r = Reader {
         bytes,
         at: 0,
@@ -193,11 +196,16 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Object, 
         return Err(error("Invalid DEF header"));
     }
     let header = r.string()?;
+    let version = header
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Version='")?.strip_suffix('\''));
     if !header.starts_with("$begin 'Hdr'")
-        || !header.lines().any(|l| l.trim() == "Version='12.1'")
+        || !matches!(version, Some("7.3" | "8.6" | "10.6" | "12.1"))
         || !header.lines().any(|l| l.trim() == "Encrypted=false")
     {
-        return Err(error("Only unencrypted EDB 12.1 DEF is supported"));
+        return Err(error(
+            "Only unencrypted EDB 7.3, 8.6, 10.6 and 12.1 DEF is supported",
+        ));
     }
     if r.i32()? != -1 {
         return Err(error("Invalid schema marker"));
@@ -238,5 +246,55 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Object, 
     if root.schema != 0 {
         return Err(error("Invalid DEF root schema"));
     }
-    Ok(*root)
+    Ok((version.unwrap().to_owned(), *root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pomelo_core::task::CancellationToken;
+
+    fn archive(version: &str, encrypted: bool) -> Vec<u8> {
+        let header =
+            format!("$begin 'Hdr'\n\tVersion='{version}'\n\tEncrypted={encrypted}\n$end 'Hdr'\n");
+        let mut bytes = vec![0];
+        bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(header.as_bytes());
+        // One empty schema and one root object, followed by the archive terminator.
+        for value in [-1i32, 1, 0, 0, -1, 1, 0, -1] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn imports_supported_edb_archive_versions() {
+        let cancel = CancellationToken::default();
+        let context = ImportContext {
+            cancellation: &cancel,
+            progress: &|_| {},
+        };
+        for version in ["7.3", "8.6", "10.6", "12.1"] {
+            let (actual, root) = read(&archive(version, false), &context)
+                .unwrap_or_else(|error| panic!("EDB {version} must import: {error}"));
+            assert_eq!(actual, version);
+            assert_eq!(root.schema, 0);
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_encrypted_and_truncated_archives() {
+        let cancel = CancellationToken::default();
+        let context = ImportContext {
+            cancellation: &cancel,
+            progress: &|_| {},
+        };
+        assert!(read(&archive("99.0", false), &context).is_err());
+        for version in ["7.3", "8.6", "10.6", "12.1"] {
+            assert!(read(&archive(version, true), &context).is_err());
+            let mut bytes = archive(version, false);
+            bytes.pop();
+            assert!(read(&bytes, &context).is_err());
+        }
+    }
 }

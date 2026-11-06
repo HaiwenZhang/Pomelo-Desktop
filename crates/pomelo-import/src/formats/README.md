@@ -9,7 +9,7 @@ All active parsers are Rust implementations inside `pomelo-import`. `FormatImpor
 | `odb/` | Bounded TAR/gzip, matrix/step/layer features, cached standard/custom symbols, EDA network ownership, component toeprints, pads, drill spans and profile |
 | `pads/` | Checked binary SDB sections, padstack/footprint definitions, pin and junction network ownership, routing graph, placed pins/vias, saved copper and board outline |
 | `kicad.rs`, `sexpr.rs` | Byte-span board index with one bounded S-expression object decoded at a time; layer/network tables, tracks/arcs, footprints, custom/per-layer pads, vias, saved filled polygons and board drawings |
-| `hfss/` | Unencrypted EDB 12.1 typed DEF archive, AEDT property grammar, layer/net/component tables, analytic primitives, saved voids, pad definitions and placed instances |
+| `hfss/` | Unencrypted EDB 7.3, 8.6, 10.6 and 12.1 typed DEF archives, AEDT property grammar, layer/net/component tables, analytic primitives, saved voids, pad definitions and placed instances |
 
 Allegro 18.0 and 18.1 use the `0x00150000` and `0x00150200` layout families. Both support 92-byte paired-net records and header-defined chain sentinels; their writer metadata, coordinate units and divisor remain at version-specific header offsets. Synthetic coverage is in `tests/allegro_181.rs`. Release labels and directory names do not identify the on-disk layout.
 
@@ -18,6 +18,8 @@ PADS binary version tags accepted by the source reader are 2011, 2017, 2019, 202
 The source layouts were ported from the local Pomelo reference implementation. Its MIT notice is preserved in `../../REFERENCE-LICENSE`. Saved fills are consumed without repouring. Curve flattening and PADS rounded offsets use a **0.001 mm chord tolerance**; analytic arcs are retained for tracks, outlines and custom pad boundaries. This intentionally reduces geometry relative to the reference's finer tessellation. Copper offsets and boolean operations use `clipper2-rust`.
 
 Current coverage limits remain visible through diagnostics: PADS ordinary graphics/text, KiCad text and filled graphic presentation, and opaque ODB++ description properties are omitted. Unsupported HFSS extensions and geometry fail explicitly. Altium imports saved region copper and reports polygons without a saved fill. Source-format compatibility beyond the supplied cases needs further fixtures.
+
+HFSS version coverage is verified against AMD LP5X and Intel Haswell EDB cases saved by 2021R1, 2022R2, 2025R1 and 2026R1. Run `POMELO_AEDB_CASES=/path/to/aedb_testcase cargo test -p pomelo-import --test native_cases hfss_versions -- --ignored` to check those local files; proprietary board data is not included in the repository.
 
 The local retired TS files are archived in the ignored `.cache/retired-format-import` directory for recovery only. They are outside the active source tree and have no build or runtime entry point.
 

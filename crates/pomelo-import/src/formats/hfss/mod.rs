@@ -1,4 +1,4 @@
-//! Native HFSS 3D Layout / EDB 12.1 DEF import.
+//! Native HFSS 3D Layout / EDB DEF import.
 mod binary;
 mod geometry;
 mod pads;
@@ -52,7 +52,7 @@ fn net(raw: i32, ids: &HashMap<i32, NetId>) -> Result<NetId, ImportError> {
     }
 }
 pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
-    let root = binary::read(bytes, context)?;
+    let (version, root) = binary::read(bytes, context)?;
     let groups = root.field(2)?.object(Some(1))?.field(0)?.array()?;
     let mut cells = Vec::new();
     for group in groups {
@@ -73,7 +73,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     let mut layers = Vec::new();
     let mut layer_ids = HashMap::new();
     let mut source_ids = HashSet::new();
-    let mut output = scene_builder::new_parsed_board("12.1");
+    let mut output = scene_builder::new_parsed_board(version);
     let colors = [
         "#58b5ed", "#83ce94", "#edb963", "#ba8bec", "#eb819d", "#54c7bd", "#a5b8df", "#e18d61",
     ];
