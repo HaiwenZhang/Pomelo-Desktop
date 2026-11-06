@@ -35,3 +35,6 @@ workspace = true
 [build-dependencies]
 embed-resource.workspace = true
 resvg.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

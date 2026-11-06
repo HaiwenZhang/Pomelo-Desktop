@@ -161,7 +161,12 @@ impl BoardViewport {
                 }
                 match result {
                     Ok((Some(bounds), selection))
-                        if !move_camera || this.locate_with_history(bounds) =>
+                        if !move_camera
+                            || if this.view3d.active {
+                                this.locate_3d(selection.target(), bounds)
+                            } else {
+                                this.locate_with_history(bounds)
+                            } =>
                     {
                         this.invalidate_hover();
                         let target = selection.target();

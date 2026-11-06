@@ -66,6 +66,9 @@ impl BoardViewport {
         locale: pomelo_core::i18n::Locale,
         cx: &App,
     ) -> Vec<AnyElement> {
+        if self.view3d.active {
+            return vec![];
+        }
         let camera = self.navigation.camera();
         let size = self.navigation.size();
         let review = &self.review;
@@ -324,6 +327,9 @@ impl BoardViewport {
         locale: pomelo_core::i18n::Locale,
         cx: &mut Context<Self>,
     ) -> (Vec<AnyElement>, Vec<AnyElement>) {
+        if self.view3d.active {
+            return (vec![], vec![]);
+        }
         let tools = [
             (
                 "canvas-measure",

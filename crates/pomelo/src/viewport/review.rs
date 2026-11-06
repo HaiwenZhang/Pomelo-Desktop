@@ -205,6 +205,9 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            return;
+        }
         let review = &mut self.review;
         // Selecting the active tool again turns it off.
         let tool = if review.tool == tool { None } else { tool };
@@ -1000,6 +1003,9 @@ impl BoardViewport {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            return;
+        }
         self.wheel_history_at = None;
         let current = self.navigation.camera();
         if let Some(camera) = self.review.history.back(current)
@@ -1017,6 +1023,9 @@ impl BoardViewport {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            return;
+        }
         self.wheel_history_at = None;
         let current = self.navigation.camera();
         if let Some(camera) = self.review.history.forward(current)

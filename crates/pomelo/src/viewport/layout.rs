@@ -48,7 +48,7 @@ impl Render for BoardViewport {
             );
         let (layer_panel, layer_order) = self.render_layer_panel(left_panel_width, window, cx);
         let inspector = self.render_inspector_panel(right_panel_width, window, cx);
-        let pointer_coordinates =
+        let mut pointer_coordinates =
             self.pointer_position
                 .zip(self.bounds)
                 .and_then(|(position, bounds)| {
@@ -78,10 +78,17 @@ impl Render for BoardViewport {
                         )
                     })
                 });
-        let scale_bar = self.navigation.camera().scale_bar_in_unit(
-            (self.navigation.size().x - 32.0).min(120.0),
-            self.display.length_unit,
-        );
+        if self.view3d.active {
+            pointer_coordinates = None;
+        }
+        let scale_bar = self
+            .navigation
+            .camera()
+            .scale_bar_in_unit(
+                (self.navigation.size().x - 32.0).min(120.0),
+                self.display.length_unit,
+            )
+            .filter(|_| !self.view3d.active);
         let frame::CanvasPresentation {
             viewport,
             ready,
@@ -153,6 +160,7 @@ impl Render for BoardViewport {
             .flex_col()
             .child(toolbar::render(
                 toolbar::State {
+                    view3d: self.view3d.active,
                     locale,
                     pan_tool: self.pan_tool,
                     color_mode: self.display.color_mode,
@@ -163,6 +171,11 @@ impl Render for BoardViewport {
                     search: &self.search_input,
                 },
                 toolbar::Commands {
+                    view3d: Box::new(cx.listener(|this, active: &bool, window, cx| {
+                        if this.view3d.active != *active {
+                            this.toggle_3d(window, cx);
+                        }
+                    })),
                     tool: Box::new(cx.listener(|this, pan: &bool, window, cx| {
                         this.pan_tool = *pan;
                         this.review.tool = None;
@@ -331,21 +344,25 @@ impl Render for BoardViewport {
                                                         .child(canvas_breadcrumb),
                                                 ),
                                         )
-                                        .child(axes_indicator(locale))
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .top_3()
-                                                .left_4()
-                                                .right_4()
-                                                .flex()
-                                                .justify_end()
-                                                .child(
-                                                    canvas_bar(review_tools)
-                                                        .flex_wrap()
-                                                        .max_w_full(),
-                                                ),
-                                        )
+                                        .when(!self.view3d.active, |canvas| {
+                                            canvas.child(axes_indicator(locale))
+                                        })
+                                        .when(!self.view3d.active, |canvas| {
+                                            canvas.child(
+                                                div()
+                                                    .absolute()
+                                                    .top_3()
+                                                    .left_4()
+                                                    .right_4()
+                                                    .flex()
+                                                    .justify_end()
+                                                    .child(
+                                                        canvas_bar(review_tools)
+                                                            .flex_wrap()
+                                                            .max_w_full(),
+                                                    ),
+                                            )
+                                        })
                                         .child(
                                             div()
                                                 .absolute()
@@ -354,7 +371,11 @@ impl Render for BoardViewport {
                                                 .right_0()
                                                 .flex()
                                                 .justify_center()
-                                                .child(canvas_bar(canvas_view_controls)),
+                                                .child(
+                                                    canvas_bar(canvas_view_controls)
+                                                        .flex_wrap()
+                                                        .max_w_full(),
+                                                ),
                                         )
                                         .when_some(scale_bar, |canvas, scale| {
                                             canvas.child(
@@ -459,7 +480,14 @@ impl Render for BoardViewport {
                     .px_3()
                     .py_2()
                     .text_color(theme.danger)
-                    .child(div().child(text(locale, Key::GpuFailed)))
+                    .child(div().child(text(
+                        locale,
+                        if self.view3d.active {
+                            Key::Preview3dFailed
+                        } else {
+                            Key::GpuFailed
+                        },
+                    )))
                     .child(div().text_sm().child(text(locale, Key::TechnicalDetails)))
                     .child(div().text_sm().child(details)),
             );
@@ -476,6 +504,9 @@ impl BoardViewport {
         locale: pomelo_core::i18n::Locale,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        if self.view3d.active {
+            return self.render_3d_navigation(locale, cx);
+        }
         let button = |id: &'static str, icon: IconName, key: Key, cx: &App| {
             Button::new(id)
                 .custom(crate::theme::canvas_toolbar_button(cx))
@@ -606,7 +637,7 @@ impl BoardViewport {
 
 /// Command surface floating over the board. Its pointer events must not also
 /// pick, pan or zoom the geometry underneath.
-fn canvas_bar(children: Vec<AnyElement>) -> Div {
+pub(super) fn canvas_bar(children: Vec<AnyElement>) -> Div {
     div()
         .flex()
         .items_center()

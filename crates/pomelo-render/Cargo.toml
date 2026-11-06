@@ -46,6 +46,9 @@ gpui-wgpu = { workspace = true, optional = true }
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 futures.workspace = true
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc = "=0.2.7"
+
 [dev-dependencies]
 resvg.workspace = true
 naga = { workspace = true, features = ["msl-out", "hlsl-out"] }

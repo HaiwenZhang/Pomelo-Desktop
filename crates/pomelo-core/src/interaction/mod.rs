@@ -1,4 +1,5 @@
 //! Board camera uses viewport-local logical pixels. DPI belongs to the host.
+pub mod camera3d;
 pub mod component_reference;
 pub mod membership;
 pub mod picking;

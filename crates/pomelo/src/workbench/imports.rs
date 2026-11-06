@@ -177,6 +177,7 @@ impl Workbench {
                                 prepared,
                                 source_name,
                                 this.panel_layout.clone(),
+                                this.preparation_budget.clone(),
                                 window,
                                 cx,
                             )

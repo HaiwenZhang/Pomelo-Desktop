@@ -32,6 +32,7 @@ gpui-wgpu = { package = "gpui_wgpu", git = "https://github.com/HaiwenZhang/gpui-
 gpui-windows = { package = "gpui_windows", git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu", default-features = false }
 
 # Geometry and collation
+clipper2-rust = "=1.2.0"
 earcut = "=0.4.11"
 icu_collator = { version = "=2.3.1", default-features = false, features = [
   "serde",

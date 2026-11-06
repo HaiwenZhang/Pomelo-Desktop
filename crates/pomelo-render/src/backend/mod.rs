@@ -79,6 +79,8 @@ mod metal;
 #[cfg(all(target_os = "linux", feature = "native-gpu"))]
 mod wgpu;
 
+#[cfg(all(feature = "native-gpu", any(target_os = "macos", test)))]
+mod solid_cache;
 #[cfg(feature = "native-gpu")]
 mod wgsl;
 #[cfg(feature = "native-gpu")]
@@ -104,3 +106,7 @@ pub(crate) enum Shader {
 
 #[cfg(feature = "native-gpu")]
 mod probe;
+#[cfg(feature = "native-gpu")]
+mod solid_renderer;
+#[cfg(feature = "native-gpu")]
+pub use solid_renderer::{SolidFrame, SolidRenderer, SolidTelemetry, display_bounds};

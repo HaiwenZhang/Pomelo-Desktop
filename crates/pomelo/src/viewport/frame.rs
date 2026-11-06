@@ -17,6 +17,9 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> CanvasPresentation {
+        if self.view3d.active {
+            return self.render_canvas_3d(window, cx);
+        }
         let locale = i18n::current(cx);
         let theme = cx.theme();
         let stats = self.telemetry.traces.snapshot();

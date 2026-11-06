@@ -3,6 +3,7 @@
 pub mod appearance;
 pub mod display;
 pub mod geometry;
+pub mod geometry3d;
 pub mod i18n;
 pub mod interaction;
 pub mod memory;

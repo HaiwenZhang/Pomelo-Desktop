@@ -27,6 +27,7 @@ use crate::{panels::picking, tooltips::ButtonTooltipExt, workbench::panel_layout
 pub(super) struct State<'a> {
     pub locale: Locale,
     pub pan_tool: bool,
+    pub view3d: bool,
     pub color_mode: ColorMode,
     pub selection_mode: SelectionMode,
     pub pick_filter: PickFilter,
@@ -36,13 +37,14 @@ pub(super) struct State<'a> {
 }
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-/// Receives `true` for the pan tool and `false` for the select tool.
+/// Receives the requested state: 3D/2D or pan/select.
 type ToolHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
 type ColorHandler = Box<dyn Fn(&ColorMode, &mut Window, &mut App)>;
 type ModeHandler = Box<dyn Fn(&SelectionMode, &mut Window, &mut App)>;
 type CategoryHandler = Box<dyn Fn(&(PickCategory, bool), &mut Window, &mut App)>;
 
 pub(super) struct Commands {
+    pub view3d: ToolHandler,
     pub tool: ToolHandler,
     pub colors: ColorHandler,
     pub fit: ClickHandler,
@@ -70,6 +72,7 @@ pub(super) fn render(state: State<'_>, commands: Commands, cx: &App) -> AnyEleme
             .child(crate::shortcuts::shortcut_label(keystroke))
     };
     let pan_tool = state.pan_tool;
+    let view3d = state.view3d;
     div()
         .flex()
         .items_center()
@@ -93,6 +96,27 @@ pub(super) fn render(state: State<'_>, commands: Commands, cx: &App) -> AnyEleme
                 ))
                 .on_click(|_, window, cx| {
                     window.dispatch_action(Box::new(crate::actions::OpenFile), cx)
+                }),
+        )
+        .child(separator())
+        .child(
+            TabBar::new("board-view-mode")
+                .segmented()
+                .small()
+                .flex_shrink_0()
+                .selected_index(usize::from(view3d))
+                .child(Tab::new().label(text(locale, Key::View2d)))
+                .child(
+                    Tab::new()
+                        .label(text(locale, Key::View3d))
+                        .aria_label(text(locale, Key::View3dPreview))
+                        .disabled(!pomelo_render::backend::native::SolidRenderer::supported())
+                        .native_tooltip(text(locale, Key::Preview3dHint)),
+                )
+                .on_click(move |index, window, cx| {
+                    if (*index == 1) != view3d {
+                        (commands.view3d)(&(*index == 1), window, cx);
+                    }
                 }),
         )
         .child(separator())

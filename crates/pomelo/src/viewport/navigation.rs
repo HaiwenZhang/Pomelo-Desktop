@@ -3,6 +3,12 @@ use super::*;
 
 impl BoardViewport {
     pub(crate) fn fit_board(&mut self, _: &FitBoard, _: &mut Window, cx: &mut Context<Self>) {
+        if self.view3d.active {
+            if self.fit_3d() {
+                cx.notify();
+            }
+            return;
+        }
         self.wheel_history_at = None;
         let previous = self.navigation.camera();
         if self.navigation.fit(self.scene.bounds) {
@@ -16,6 +22,11 @@ impl BoardViewport {
     }
 
     pub(super) fn flip_board(&mut self, _: &FlipBoard, _: &mut Window, cx: &mut Context<Self>) {
+        if self.view3d.active {
+            self.view3d.camera.orbit(0.0, std::f64::consts::PI);
+            cx.notify();
+            return;
+        }
         self.wheel_history_at = None;
         let previous = self.navigation.camera();
         self.invalidate_hover();
@@ -28,6 +39,14 @@ impl BoardViewport {
     }
 
     pub(super) fn zoom(&mut self, factor: f64, cx: &mut Context<Self>) {
+        if self.view3d.active {
+            let size = self.view3d.size;
+            self.view3d
+                .camera
+                .zoom_at([size[0] * 0.5, size[1] * 0.5], size, factor);
+            cx.notify();
+            return;
+        }
         self.wheel_history_at = None;
         let previous = self.navigation.camera();
         let size = self.navigation.size();
@@ -45,6 +64,14 @@ impl BoardViewport {
     }
 
     pub(super) fn pan(&mut self, x: f64, y: f64, cx: &mut Context<Self>) {
+        if self.view3d.active {
+            let size = self.view3d.size;
+            self.view3d
+                .camera
+                .pan([x * size[0] * 0.1, y * size[1] * 0.1], size);
+            cx.notify();
+            return;
+        }
         self.wheel_history_at = None;
         let previous = self.navigation.camera();
         let size = self.navigation.size();
@@ -80,6 +107,16 @@ impl BoardViewport {
             return;
         }
         let anchor = event.position - bounds.origin;
+        if self.view3d.active {
+            self.view3d.camera.zoom_at(
+                [f64::from(anchor.x), f64::from(anchor.y)],
+                self.view3d.size,
+                1.2_f64.powf(steps.clamp(-10.0, 10.0)),
+            );
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let previous = self.navigation.camera();
         if self.navigation.zoom_at(
             pomelo_core::model::Point::new(
@@ -112,6 +149,10 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            self.start_3d_drag(event, window, cx);
+            return;
+        }
         if self.pointer_gesture.is_some() {
             return;
         }
@@ -139,6 +180,10 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            self.move_3d_drag(event, cx);
+            return;
+        }
         self.review.free_measure = event.modifiers.alt;
         self.review.orthogonal_measure = event.modifiers.shift;
         if self.pointer_position != Some(event.position) {
@@ -176,6 +221,10 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            self.stop_3d_drag(event, window, cx);
+            return;
+        }
         if event.button == MouseButton::Left && self.finish_review_drag(event, window, cx) {
             cx.stop_propagation();
             return;

@@ -55,6 +55,45 @@ fn adaptive_limit(used: usize, total: u64, available: u64) -> usize {
 }
 
 impl PreparationMemory {
+    pub fn prepare_board3d(
+        &mut self,
+        board: &pomelo_core::model::BoardScene,
+        preview: super::board3d::PreviewStackup,
+        cancel: &pomelo_core::task::CancellationToken,
+    ) -> Result<super::board3d::PreparedBoard3d, super::solid::SolidPrepareError> {
+        use super::{board3d::PreparedBoard3d, solid::SolidPrepareError};
+        use pomelo_core::geometry3d::solid::{SolidError, SolidLimits};
+        self.system.refresh_memory();
+        self.budget.set_limit(adaptive_limit(
+            self.budget.used(),
+            self.system.total_memory(),
+            self.system.available_memory(),
+        ));
+        let allowance = self.budget.available();
+        let error = |e: pomelo_core::memory::MemoryLimit| {
+            SolidPrepareError::Scene(SolidError::Limit {
+                resource: "shared preparation bytes",
+                actual: e.actual,
+                limit: e.limit,
+            })
+        };
+        let mut reservation = self.budget.reserve(allowance).map_err(error)?;
+        let mut scene = PreparedBoard3d::preview(
+            board,
+            preview,
+            SolidLimits {
+                max_allocation_bytes: allowance,
+                ..Default::default()
+            },
+            cancel,
+        )?;
+        reservation
+            .resize(scene.allocation_bytes())
+            .map_err(error)?;
+        scene.memory_reservation = Some(reservation);
+        Ok(scene)
+    }
+
     pub fn prepare_tracks(
         &mut self,
         build: impl FnOnce(

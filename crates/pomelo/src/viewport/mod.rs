@@ -29,6 +29,7 @@ mod search;
 mod selection;
 mod telemetry;
 mod toolbar;
+mod view3d;
 
 pub use crate::actions::FocusSearch;
 use crate::i18n;
@@ -93,6 +94,8 @@ actions!(
 );
 
 pub struct BoardViewport {
+    view3d: view3d::View3d,
+    preparation_budget: pomelo_core::memory::MemoryBudget,
     hover_selection: Option<(
         pomelo_core::selection::SelectionTarget,
         Arc<BTreeSet<pomelo_core::selection::SelectedObject>>,
@@ -371,6 +374,7 @@ impl BoardViewport {
         prepared: &crate::document::PreparedDocument,
         source_name: String,
         panel_layout: Entity<crate::workbench::panel_layout::PanelLayout>,
+        preparation_budget: pomelo_core::memory::MemoryBudget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -578,6 +582,8 @@ impl BoardViewport {
         })
         .detach();
         let mut viewport = Self {
+            view3d: view3d::View3d::default(),
+            preparation_budget,
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),
             diagnostics_navigation: crate::panels::diagnostics::NavigationFocus::new(cx),
@@ -702,6 +708,9 @@ impl BoardViewport {
                     cx,
                 );
             }
+        }
+        if std::env::var_os("POMELO_3D_PREVIEW").is_some() {
+            viewport.toggle_3d(window, cx);
         }
         viewport
     }

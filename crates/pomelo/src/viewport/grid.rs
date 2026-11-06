@@ -2,6 +2,9 @@
 use super::*;
 impl BoardViewport {
     pub(super) fn render_grid(&self) -> Option<AnyElement> {
+        if self.view3d.active {
+            return None;
+        }
         let camera = self.navigation.camera();
         let size = self.navigation.size();
         let points = self.display.grid.points(camera, size);

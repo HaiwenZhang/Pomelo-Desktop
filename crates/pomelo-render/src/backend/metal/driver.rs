@@ -1,10 +1,13 @@
 //! Metal resources and command encoders on GPUI's borrowed command buffer.
+mod solid;
 use super::super::Shader;
 use super::super::common::Rect;
 use super::super::common::driver::{Draw, StencilMode, StencilScope};
 use super::super::wgsl as shaders;
 use anyhow::{Context as _, ensure};
+use metal::objc::{msg_send, sel, sel_impl};
 use metal::*;
+pub(crate) use solid::SolidPipeline;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -12,6 +15,13 @@ use std::{
 pub(crate) struct Buffer {
     raw: metal::Buffer,
     size: usize,
+}
+// ptr must be nil or a +1-owned resource of the requested Metal type.
+unsafe fn owned_gpu_resource<T: metal::foreign_types::ForeignType>(
+    ptr: *mut T::CType,
+) -> anyhow::Result<T> {
+    ensure!(!ptr.is_null(), "METAL_RESOURCE_ALLOCATION_FAILED");
+    Ok(unsafe { T::from_ptr(ptr) })
 }
 pub(crate) struct Atlas {
     texture: Texture,
@@ -48,14 +58,17 @@ impl<'a> Device<'a> {
     pub fn structured_buffer(&self, data: &[u8], _: usize) -> anyhow::Result<Buffer> {
         self.buffer(data, false)
     }
+    #[allow(
+        unexpected_cfgs,
+        reason = "objc 0.2 selector macros contain a legacy cargo-clippy cfg"
+    )]
     pub fn buffer(&self, data: &[u8], _: bool) -> anyhow::Result<Buffer> {
         ensure!(!data.is_empty(), "GPU_BUFFER_EMPTY");
+        let raw: *mut metal::MTLBuffer = unsafe {
+            msg_send![self.raw,newBufferWithBytes:data.as_ptr().cast::<std::ffi::c_void>() length:data.len() as u64 options:MTLResourceOptions::StorageModeShared]
+        };
         Ok(Buffer {
-            raw: self.raw.new_buffer_with_data(
-                data.as_ptr().cast(),
-                data.len() as u64,
-                MTLResourceOptions::StorageModeShared,
-            ),
+            raw: unsafe { owned_gpu_resource(raw) }?,
             size: data.len(),
         })
     }
