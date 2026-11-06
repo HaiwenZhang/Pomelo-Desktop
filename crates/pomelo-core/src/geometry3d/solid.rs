@@ -112,6 +112,17 @@ impl SolidMesh {
         Self::extrude_rings(rings, &[], z, limits, cancel, true)
     }
 
+    /// Source exterior-minus-holes coverage with independent physical drill cuts.
+    pub fn extrude_coverage_minus(
+        rings: &[Vec<Point>],
+        cutouts: &[Vec<Point>],
+        z: [f64; 2],
+        limits: SolidLimits,
+        cancel: &CancellationToken,
+    ) -> Result<Self, SolidError> {
+        Self::extrude_rings(rings, cutouts, z, limits, cancel, true)
+    }
+
     /// Custom pad contours use parity across all rings, including nested islands.
     pub fn extrude_even_odd(
         rings: &[Vec<Point>],
@@ -140,6 +151,24 @@ impl SolidMesh {
         closed: bool,
         z: [f64; 2],
         tolerance_mm: f64,
+        limits: SolidLimits,
+        cancel: &CancellationToken,
+    ) -> Result<Self, SolidError> {
+        Self::extrude_stroke_minus(points, width, closed, z, tolerance_mm, &[], limits, cancel)
+    }
+
+    /// Round-ended stroke with independently stored physical drill cuts.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Stroke ABI plus a borrowed physical cutout collection"
+    )]
+    pub fn extrude_stroke_minus(
+        points: &[Point],
+        width: f64,
+        closed: bool,
+        z: [f64; 2],
+        tolerance_mm: f64,
+        cutouts: &[Vec<Point>],
         limits: SolidLimits,
         cancel: &CancellationToken,
     ) -> Result<Self, SolidError> {
@@ -205,6 +234,21 @@ impl SolidMesh {
         let count = paths.iter().fold(0_usize, |n, p| n.saturating_add(p.len()));
         limit("stroke_points", count, limits.max_points)?;
         limit("rings", paths.len(), limits.max_rings)?;
+        if !cutouts.is_empty() {
+            let mut rings = reserve(paths.len())?;
+            for path in &paths {
+                let mut ring = reserve(path.len())?;
+                for p in path {
+                    ring.push(Point::new(p.x + origin.x, p.y + origin.y));
+                }
+                rings.push(ring);
+            }
+            let remaining = SolidLimits {
+                max_allocation_bytes: limits.max_allocation_bytes.saturating_sub(scratch),
+                ..limits
+            };
+            return Self::extrude_even_odd_minus(&rings, cutouts, z, remaining, cancel);
+        }
         let mut tree = PolyTreeD::new();
         boolean_op_tree_d(
             ClipType::Union,

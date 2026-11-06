@@ -91,6 +91,40 @@ impl SpatialIndex3d {
         }
         Ok(node)
     }
+    pub fn visit_xy(
+        &self,
+        bounds: pomelo_core::model::Bounds,
+        mut visit: impl FnMut(usize) -> Result<(), SolidError>,
+    ) -> Result<(), SolidError> {
+        if !self.nodes.is_empty() {
+            self.xy_node(0, bounds, &mut visit)?;
+        }
+        Ok(())
+    }
+    fn xy_node(
+        &self,
+        node: usize,
+        bounds: pomelo_core::model::Bounds,
+        visit: &mut impl FnMut(usize) -> Result<(), SolidError>,
+    ) -> Result<(), SolidError> {
+        let node = &self.nodes[node];
+        if node.bounds.min[0] > bounds.max.x
+            || node.bounds.max[0] < bounds.min.x
+            || node.bounds.min[1] > bounds.max.y
+            || node.bounds.max[1] < bounds.min.y
+        {
+            return Ok(());
+        }
+        if let Some([left, right]) = node.children {
+            self.xy_node(left, bounds, visit)?;
+            self.xy_node(right, bounds, visit)?;
+        } else {
+            for &id in &self.ids[node.range.clone()] {
+                visit(id)?;
+            }
+        }
+        Ok(())
+    }
     pub fn visit_ray(
         &self,
         ray: PickRay3d,

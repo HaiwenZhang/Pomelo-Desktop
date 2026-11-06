@@ -278,6 +278,7 @@ impl<'a> PadDecoder<'a> {
             std::mem::swap(&mut width, &mut height);
         }
         let drill = DrillShape {
+            rectangular: false,
             width: f64::from(width) * self.scale,
             height: f64::from(height) * self.scale,
             plated: stack.plated,

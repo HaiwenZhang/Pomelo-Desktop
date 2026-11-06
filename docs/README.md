@@ -12,6 +12,7 @@ Pomelo Desktop 是基于 Rust、GPUI 和 GPUI Kit 的本地 PCB 查看器。本�
 ## 工程设计
 
 - [代码组织](code-organization.md)：crate 边界和应用模块职责。
+- [EDB 格式兼容](edb-format-compatibility.md)：内部版本、字段表演进规律和兼容边界。
 - [构建依赖](gpui-dependencies.md)：依赖来源、锁文件和构建方式。
 - [GPU 设计](cad-gpu-painter-design.md)与[原生后端](native-gpu-backends.md)：数据流、帧目标和资源生命周期。
 - [渲染决策](adr/0001-native-gpu-rendering.md)：为何复用 GPUI 原生设备。

@@ -340,6 +340,7 @@ pub(super) fn build(
                 mirrored: part.bottom,
                 drill,
                 drill_shape: DrillShape {
+                    rectangular: false,
                     width: if has_hole && stack.slot > 0.0 {
                         stack.slot
                     } else {
@@ -427,6 +428,7 @@ pub(super) fn build(
                 at: Point::new(r.length(at)?, r.length(at + 4)?),
                 drill: stack.drill,
                 drill_shape: DrillShape {
+                    rectangular: false,
                     width: if stack.slot > 0.0 {
                         stack.slot
                     } else {

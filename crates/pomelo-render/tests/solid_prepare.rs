@@ -269,6 +269,7 @@ fn pad_drill_stays_at_the_owner_when_copper_is_offset_and_rotated() {
                 mirrored: false,
             },
             drill: Some(DrillShape {
+                rectangular: false,
                 width: 1.0,
                 height: 1.0,
                 plated: true,
@@ -359,6 +360,7 @@ fn a_drill_inside_a_donut_opening_does_not_restore_copper() {
             pad: &pad,
             placement: PadPlacement::default(),
             drill: Some(DrillShape {
+                rectangular: false,
                 width: 1.0,
                 height: 1.0,
                 plated: true,
@@ -381,6 +383,7 @@ fn via() -> pomelo_core::model::Via {
         at: Point::new(10.0, 20.0),
         drill: 1.0,
         drill_shape: DrillShape {
+            rectangular: false,
             width: 1.0,
             height: 1.0,
             plated: true,

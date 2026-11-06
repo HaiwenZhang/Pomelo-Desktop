@@ -68,6 +68,7 @@ fn source(paths: bool) -> Arc<BoardScene> {
             mirrored: false,
             drill: 0.0,
             drill_shape: DrillShape {
+                rectangular: false,
                 width: 0.0,
                 height: 0.0,
                 plated: false,

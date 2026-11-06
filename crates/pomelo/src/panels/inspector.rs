@@ -538,6 +538,7 @@ mod unit_tests {
                 mirrored: false,
                 drill: 0.3,
                 drill_shape: DrillShape {
+                    rectangular: false,
                     width: 0.3,
                     height: 0.3,
                     plated: true,

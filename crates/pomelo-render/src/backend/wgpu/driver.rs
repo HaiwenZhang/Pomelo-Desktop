@@ -1,10 +1,12 @@
 //! wgpu command encoding on GPUI's device; uploads use staging copies without a queue.
+mod solid;
 use super::super::Shader;
 use super::super::common::Rect;
 use super::super::common::driver::{Draw, StencilMode, StencilScope};
 use super::super::wgsl as shaders;
 use anyhow::{Context as _, ensure};
 use gpui_wgpu::wgpu::*;
+pub(crate) use solid::SolidDriver;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -492,3 +494,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/backend/wgpu/resources.rs"]
 mod resource_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/backend/wgpu/solid_pixels.rs"]
+mod solid_tests;

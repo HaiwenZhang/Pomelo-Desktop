@@ -9,7 +9,7 @@ use windows::{
     core::PCSTR,
 };
 
-pub(super) fn compile_shader(
+pub(crate) fn compile_shader(
     source: &str,
     name: PCSTR,
     entry: PCSTR,

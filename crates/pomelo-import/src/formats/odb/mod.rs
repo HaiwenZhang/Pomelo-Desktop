@@ -260,6 +260,7 @@ fn owner(
         subnet,
         pads: Vec::new(),
         drill: DrillShape {
+            rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: true,
@@ -346,6 +347,7 @@ fn drill(
         attach(target, &pad, at, old_angle, old_mirror, layer, context)?;
     }
     target.drill = DrillShape {
+        rectangular: false,
         width,
         height,
         plated,

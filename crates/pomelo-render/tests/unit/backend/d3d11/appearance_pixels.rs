@@ -102,6 +102,7 @@ fn hardware_category_colors_cover_analytic_custom_copper_text_and_drills_without
             }));
         }
         let drill_shape = DrillShape {
+            rectangular: false,
             width: 0.8,
             height: 0.8,
             plated: true,

@@ -1,4 +1,4 @@
-//! EDB 12.1 typed DEF archive. Unknown schemas and encodings fail at source offsets.
+//! Self-describing EDB typed DEF archives; compatibility follows fields, not release numbers.
 use super::error;
 use crate::{ImportContext, ImportError};
 use std::collections::{HashMap, HashSet};
@@ -13,6 +13,92 @@ pub(super) enum Value {
 pub(super) struct Object {
     pub schema: i32,
     pub fields: Vec<Value>,
+}
+pub(super) struct Archive {
+    pub root: Object,
+    pub version: String,
+}
+
+// Across observed 7.3, 8.6, 10.6 and 12.1 archives, these consumed field IDs and
+// encodings are stable. Later fields are decoded using the archive's own table.
+fn required_fields(schema: i32) -> &'static [(usize, u32)] {
+    match schema {
+        0 => &[(0, 4), (2, 5)],
+        1 => &[(0, 6)],
+        2 => &[(1, 6)],
+        3 => &[(0, 4), (2, 4), (3, 6), (4, 5)],
+        4 => &[(1, 6), (4, 6), (5, 6), (6, 6)],
+        5 => &[(0, 1)],
+        6 => &[(0, 1), (1, 4)],
+        7 => &[(0, 5), (1, 4)],
+        10 => &[(0, 5), (1, 1), (2, 1)],
+        11 => &[(0, 5), (1, 1), (4, 1)],
+        12 => &[
+            (0, 5),
+            (1, 1),
+            (2, 3),
+            (3, 3),
+            (4, 3),
+            (5, 3),
+            (6, 3),
+            (7, 3),
+        ],
+        13 => &[(0, 5), (1, 3), (2, 3), (3, 3)],
+        14 => &[(0, 5), (1, 1), (2, 1), (3, 1), (4, 3), (6, 5)],
+        15 => &[(0, 5), (1, 5)],
+        16 => &[(0, 5), (1, 4), (3, 4)],
+        19 => &[
+            (0, 5),
+            (1, 1),
+            (2, 3),
+            (3, 3),
+            (4, 3),
+            (6, 4),
+            (8, 4),
+            (9, 0),
+            (10, 0),
+            (11, 6),
+            (12, 4),
+        ],
+        21 => &[(0, 5), (1, 4), (2, 4)],
+        22 => &[(0, 5)],
+        36 => &[(0, 0), (2, 6)],
+        _ => &[],
+    }
+}
+
+fn validate_schema(schema: i32, fields: &[(usize, u32)]) -> Result<(), ImportError> {
+    for &(field, expected) in required_fields(schema) {
+        let actual = fields.iter().find(|f| f.0 == field).map(|f| f.1);
+        if actual != Some(expected) {
+            return Err(error(format!(
+                "Incompatible DEF schema {schema} field {field}: expected encoding {expected}, got {actual:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn header_version(header: &str) -> Result<String, ImportError> {
+    let header = super::text::read(header)?;
+    if header.name != "Hdr" || !matches!(header.prop("Encrypted")?, super::text::Value::Bool(false))
+    {
+        return Err(error(
+            "Only unencrypted EDB typed DEF archives are supported",
+        ));
+    }
+    let version = header.prop("Version")?.text()?;
+    let parts = version.split('.').collect::<Vec<_>>();
+    if parts.len() != 2
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()))
+        || parts[0].parse::<u32>().ok().is_none_or(|major| major == 0)
+        || parts[1].parse::<u32>().is_err()
+    {
+        return Err(error("Invalid EDB archive version"));
+    }
+    Ok(version.to_owned())
 }
 impl Value {
     pub fn object(&self, schema: Option<i32>) -> Result<&Object, ImportError> {
@@ -75,6 +161,7 @@ struct Reader<'a, 'b> {
     bytes: &'a [u8],
     at: usize,
     schemas: HashMap<i32, Vec<(usize, u32)>>,
+    validated_schemas: HashSet<i32>,
     values: usize,
     context: &'b ImportContext<'b>,
 }
@@ -145,6 +232,10 @@ impl Reader<'_, '_> {
                     .get(&schema)
                     .cloned()
                     .ok_or_else(|| error(format!("Undefined schema {schema}")))?;
+                if self.validated_schemas.insert(schema) {
+                    validate_schema(schema, &schema_fields)
+                        .map_err(|e| error(format!("{e} @{}", self.at - 4)))?;
+                }
                 let len = schema_fields.iter().map(|f| f.0 + 1).max().unwrap_or(0);
                 let mut fields = (0..len).map(|_| Value::Null).collect::<Vec<_>>();
                 for (id, kind) in schema_fields {
@@ -181,11 +272,12 @@ impl Reader<'_, '_> {
         })
     }
 }
-pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Object, ImportError> {
+pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Archive, ImportError> {
     let mut r = Reader {
         bytes,
         at: 0,
         schemas: HashMap::new(),
+        validated_schemas: HashSet::new(),
         values: 0,
         context,
     };
@@ -193,12 +285,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Object, 
         return Err(error("Invalid DEF header"));
     }
     let header = r.string()?;
-    if !header.starts_with("$begin 'Hdr'")
-        || !header.lines().any(|l| l.trim() == "Version='12.1'")
-        || !header.lines().any(|l| l.trim() == "Encrypted=false")
-    {
-        return Err(error("Only unencrypted EDB 12.1 DEF is supported"));
-    }
+    let version = header_version(&header)?;
     if r.i32()? != -1 {
         return Err(error("Invalid schema marker"));
     }
@@ -218,7 +305,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Object, 
         for _ in 0..count {
             let id = r.u32()? as usize;
             let kind = r.u32()?;
-            if id > 255 || kind > 8 || !seen.insert(id) {
+            if id > 255 || !seen.insert(id) {
                 return Err(error("Invalid schema field"));
             }
             fields.push((id, kind));
@@ -238,5 +325,8 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<Object, 
     if root.schema != 0 {
         return Err(error("Invalid DEF root schema"));
     }
-    Ok(*root)
+    Ok(Archive {
+        root: *root,
+        version,
+    })
 }

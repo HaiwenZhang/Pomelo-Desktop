@@ -252,6 +252,7 @@ pub(super) fn routes(
         let net = net(v.u16(3)?, output)?;
         let at = v.point(13)?;
         let drill_shape = DrillShape {
+            rectangular: false,
             width: drill,
             height: drill,
             plated: true,
@@ -444,6 +445,7 @@ pub(super) fn pads(
         let drill = v.length(45)?;
         let plated = v.u8(60)? != 0;
         let mut drill_shape = DrillShape {
+            rectangular: false,
             width: drill,
             height: drill,
             plated,

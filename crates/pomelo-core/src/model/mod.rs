@@ -256,6 +256,9 @@ pub struct DrillShape {
     pub width: f64,
     pub height: f64,
     pub plated: bool,
+    /// A sharp-cornered rectangle; otherwise the hole is circular or a round-ended slot.
+    #[serde(default)]
+    pub rectangular: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

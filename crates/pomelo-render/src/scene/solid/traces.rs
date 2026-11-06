@@ -13,6 +13,16 @@ impl PreparedSolid {
         segment: &Segment,
         z: [f64; 2],
         tolerance_mm: f64,
+        limits: SolidLimits,
+        cancel: &CancellationToken,
+    ) -> Result<Self, SolidPrepareError> {
+        Self::prepare_trace_with_cutouts(segment, z, tolerance_mm, &[], limits, cancel)
+    }
+    pub(crate) fn prepare_trace_with_cutouts(
+        segment: &Segment,
+        z: [f64; 2],
+        tolerance_mm: f64,
+        cutouts: &[Vec<Point>],
         mut limits: SolidLimits,
         cancel: &CancellationToken,
     ) -> Result<Self, SolidPrepareError> {
@@ -54,7 +64,7 @@ impl PreparedSolid {
                 .max_allocation_bytes
                 .saturating_sub(ring_bytes(&rings))
                 .saturating_sub(path.capacity().saturating_mul(size_of::<Point>()));
-            SolidMesh::extrude_coverage(&rings, z, limits, cancel).map_err(error)?
+            SolidMesh::extrude_coverage_minus(&rings, cutouts, z, limits, cancel).map_err(error)?
         } else {
             limits.max_allocation_bytes = limits
                 .max_allocation_bytes
@@ -63,12 +73,13 @@ impl PreparedSolid {
                 .arc
                 .is_some_and(|a| a.sweep.abs() >= std::f64::consts::TAU - 1e-12)
                 && segment.a.distance(segment.b) <= tolerance_mm * 0.5;
-            SolidMesh::extrude_stroke(
+            SolidMesh::extrude_stroke_minus(
                 &path,
                 segment.width,
                 closed,
                 z,
                 tolerance_mm * 0.5,
+                cutouts,
                 limits,
                 cancel,
             )

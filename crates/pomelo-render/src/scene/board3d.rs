@@ -1,4 +1,5 @@
 //! Immutable, GPU-ready conductor geometry. Preview heights are explicit assumptions.
+mod holes;
 mod paging;
 mod spatial;
 use super::solid::{PadSolidSource, PreparedSolid, SolidPrepareError, ViaWallSpan};
@@ -106,7 +107,7 @@ impl PreparedBoard3d {
     pub fn preview(
         board: &BoardScene,
         preview: PreviewStackup,
-        limits: SolidLimits,
+        mut limits: SolidLimits,
         cancel: &CancellationToken,
     ) -> Result<Self, SolidPrepareError> {
         let fail = SolidPrepareError::Scene;
@@ -144,6 +145,18 @@ impl PreparedBoard3d {
                 (id, [top - preview.copper_mm, top])
             })
             .collect();
+        let count = holes::count(board);
+        let index_bytes = spatial::SpatialIndex3d::estimate_bytes(count);
+        let hole_limits = SolidLimits {
+            max_allocation_bytes: limits.max_allocation_bytes.saturating_sub(index_bytes),
+            ..limits
+        };
+        let holes = holes::build(board, hole_limits, cancel).map_err(fail)?;
+        let hole_index =
+            spatial::SpatialIndex3d::build(holes.len(), |id| holes::bounds(&holes[id]), cancel)?;
+        limits.max_allocation_bytes = limits.max_allocation_bytes.saturating_sub(
+            holes.capacity() * size_of::<holes::Hole>() + hole_index.allocation_bytes(),
+        );
         let mut builder = Builder {
             origin: board.bounds.center(),
             groups: vec![],
@@ -165,15 +178,67 @@ impl PreparedBoard3d {
         for segment in &board.segments {
             cancel.check().map_err(|e| fail(e.into()))?;
             if let Some(&z) = heights.get(&segment.layer) {
-                builder.add_trace(segment, z, preview.chord_mm)?;
+                let remaining = builder.remaining()?;
+                let cuts = holes::cutouts(
+                    &holes,
+                    &hole_index,
+                    segment.layer,
+                    segment.bounds(),
+                    preview.chord_mm,
+                    remaining,
+                    cancel,
+                )
+                .map_err(fail)?;
+                if cuts.is_empty() {
+                    builder.add_trace(segment, z, preview.chord_mm)?;
+                } else {
+                    let remaining = SolidLimits {
+                        max_allocation_bytes: remaining
+                            .max_allocation_bytes
+                            .saturating_sub(super::solid::ring_bytes(&cuts)),
+                        ..remaining
+                    };
+                    let prepared = PreparedSolid::prepare_trace_with_cutouts(
+                        segment,
+                        z,
+                        preview.chord_mm,
+                        &cuts,
+                        remaining,
+                        cancel,
+                    );
+                    builder.add_static(prepared, segment.layer)?;
+                }
             }
         }
         for zone in &board.zones {
             cancel.check().map_err(|e| fail(e.into()))?;
             if let Some(&z) = heights.get(&zone.layer) {
                 let remaining = builder.remaining()?;
-                let prepared =
-                    PreparedSolid::prepare_zone(zone, z, preview.chord_mm, remaining, cancel);
+                let bounds = zone.mesh.ring_bounds.first().copied();
+                let cuts = holes::cutouts(
+                    &holes,
+                    &hole_index,
+                    zone.layer,
+                    bounds,
+                    preview.chord_mm,
+                    remaining,
+                    cancel,
+                )
+                .map_err(fail)?;
+                let remaining = SolidLimits {
+                    max_allocation_bytes: remaining
+                        .max_allocation_bytes
+                        .saturating_sub(super::solid::ring_bytes(&cuts)),
+                    ..remaining
+                };
+                let prepared = PreparedSolid::prepare_zone_with_cutouts(
+                    zone,
+                    z,
+                    preview.chord_mm,
+                    &cuts,
+                    remaining,
+                    cancel,
+                );
                 builder.add_static(prepared, zone.layer)?;
             }
         }
@@ -232,13 +297,14 @@ impl PreparedBoard3d {
                 if let Some((a, b, za, zb)) = span.filter(|_| via.backdrill.is_none()) {
                     let z = [za[0].min(zb[0]), za[1].max(zb[1])];
                     let mut key = [0_u64; 16];
-                    key[..6].copy_from_slice(&[
+                    key[..7].copy_from_slice(&[
                         2,
                         via.drill_shape.width.to_bits(),
                         via.drill_shape.height.to_bits(),
                         preview.plating_mm.to_bits(),
                         z[0].to_bits(),
                         z[1].to_bits(),
+                        u64::from(via.drill_shape.rectangular),
                     ]);
                     let meta = Identity {
                         object: SelectedObject::Via(via.id),
@@ -648,6 +714,7 @@ impl Builder<'_> {
     ) -> Result<(), SolidPrepareError> {
         let p = source.pad;
         let d = source.drill.unwrap_or(DrillShape {
+            rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: false,
@@ -678,7 +745,7 @@ impl Builder<'_> {
             },
             z[0].to_bits(),
             z[1].to_bits(),
-            0,
+            u64::from(d.rectangular),
             0,
         ];
         let meta = Identity {

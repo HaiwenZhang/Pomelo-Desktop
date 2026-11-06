@@ -22,6 +22,14 @@
 
 统一绑定为 group 0：帧常量 binding 0、几何 binding 1、图集 binding 2、采样器 binding 3。D3D11 对应 b0、原始字节缓冲视图 t0、图集 t2 和采样器 s0；Metal 对应 buffer(0)、buffer(1)、texture(0)、sampler(0)，buffer(2) 提供几何运行时数组的字节长度。CPU 常量结构和实例 stride 由测试与 WGSL 布局核对。
 
+## 三维实体
+
+`solid.wgsl` 定义实体、不透明/透明片元及合成入口。Metal 使用原有实体管线；Windows 的 D3D11 与 Linux 的 wgpu 通过 `solid_pipeline.rs` 共用可见页筛选、渐进上传和缓存回收策略。帧常量为 binding 0，材质为 binding 3，离屏颜色、透明累积和透射率纹理为 binding 4–6。
+
+三个后端均分为不透明深度写入、透明深度只读及最终合成。透明 pass 使用加权顺序无关透明，最终以预乘 alpha 混合回 GPUI 帧目标。仅转换 WGSL 不能替代这些附件、混合状态与绘制命令。
+
+Windows 的五个 HLSL 入口已通过 FXC 编译，WARP 和硬件适配器均通过合成像素检查，覆盖深度、孔洞、透明顺序、内容裁剪、窗口透明度、缓存回收和重建。Linux 实现与相同像素测试已加入，尚未执行 Linux 验证；不能据 Windows 结果宣称 Linux 画面验收通过。
+
 ## 构建与安装包
 
 WGSL 通过 `include_str!` 嵌入程序，naga 是 Rust 库依赖；不需要额外的着色器文件、naga 命令行工具或外部转换步骤。现有 Windows、macOS 和 Linux 安装包脚本继续使用 Cargo 构建，无需改变签名、安装器或资源复制流程。Windows 仍使用原有 FXC，macOS 仍使用系统 Metal 编译器；升级时提交 Cargo 配置和锁文件即可。

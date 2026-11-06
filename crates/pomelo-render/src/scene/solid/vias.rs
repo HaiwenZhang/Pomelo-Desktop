@@ -117,6 +117,7 @@ impl PreparedSolid {
             .pad()
             .ok_or_else(|| error(SolidError::Invalid("DRILL")))?;
         let outer = DrillShape {
+            rectangular: via.drill_shape.rectangular,
             width: via.drill_shape.width + 2.0 * span.plating_thickness_mm,
             height: via.drill_shape.height + 2.0 * span.plating_thickness_mm,
             plated: true,

@@ -17,6 +17,7 @@ pub(crate) fn backdrilled_via() -> Via {
         at: Point::new(10.0, 20.0),
         drill: 2.0,
         drill_shape: DrillShape {
+            rectangular: false,
             width: 2.0,
             height: 2.0,
             plated: true,
@@ -149,6 +150,7 @@ fn pin(width: f64, height: f64) -> Pin {
         mirrored: false,
         drill: width,
         drill_shape: DrillShape {
+            rectangular: false,
             width,
             height,
             plated: true,

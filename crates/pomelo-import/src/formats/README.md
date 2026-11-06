@@ -9,9 +9,13 @@ All active parsers are Rust implementations inside `pomelo-import`. `FormatImpor
 | `odb/` | Bounded TAR/gzip, matrix/step/layer features, cached standard/custom symbols, EDA network ownership, component toeprints, pads, drill spans and profile |
 | `pads/` | Checked binary SDB sections, padstack/footprint definitions, pin and junction network ownership, routing graph, placed pins/vias, saved copper and board outline |
 | `kicad.rs`, `sexpr.rs` | Byte-span board index with one bounded S-expression object decoded at a time; layer/network tables, tracks/arcs, footprints, custom/per-layer pads, vias, saved filled polygons and board drawings |
-| `hfss/` | Unencrypted EDB 12.1 typed DEF archive, AEDT property grammar, layer/net/component tables, analytic primitives, saved voids, pad definitions and placed instances |
+| `hfss/` | Self-describing unencrypted EDB typed DEF archives, AEDT property grammar, layer/net/component tables, analytic primitives, saved voids, pad definitions and placed instances |
 
 Allegro 18.0 and 18.1 use the `0x00150000` and `0x00150200` layout families. Both support 92-byte paired-net records and header-defined chain sentinels; their writer metadata, coordinate units and divisor remain at version-specific header offsets. Synthetic coverage is in `tests/allegro_181.rs`. Release labels and directory names do not identify the on-disk layout.
+
+EDB compatibility uses the archive's field IDs and type table, rather than a version allowlist. Local archives with headers 7.3, 8.6, 10.6 and 12.1 share the consumed geometry schema; additional fields and object types are decoded from their own declarations. The actual archive version is retained in source metadata. Structurally compatible unseen versions are accepted, while changed core field encodings and encountered unknown wire types fail explicitly. See [EDB compatibility](../../../../docs/edb-format-compatibility.md) for evidence and limits.
+
+The 9.0 case also covers component-local pin coordinates with translation/rotation, rectangular drill cutouts, reversed rectangle corners, and silkscreen/solder-mask boundaries. Numeric text in plating metadata is parsed explicitly; unresolved out-of-range ratios are reported. Non-copper filled graphics currently render as boundaries. Component scale/mirror transformations remain unsupported.
 
 PADS binary version tags accepted by the source reader are 2011, 2017, 2019, 2020, 2021, 2022 and 2024–2027. This is a version-layout allowlist, not a claim that every tool release has been tested. PADS ASCII is unsupported. ODB++ imports a single selected board step; HFSS imports a single board cell and explicit physical quantities. Unsupported geometry, inconsistent references and truncated data return format errors rather than a partial board.
 

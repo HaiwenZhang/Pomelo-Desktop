@@ -50,7 +50,7 @@ pub enum SolidPrepareError {
     },
 }
 
-fn outline_rings(
+pub(super) fn outline_rings(
     outline: PadOutline,
     tolerance: f64,
     limits: SolidLimits,
@@ -174,7 +174,7 @@ fn check_ring_budget(rings: &Vec<Vec<Point>>, limits: SolidLimits) -> Result<(),
     Ok(())
 }
 
-fn ring_bytes(rings: &Vec<Vec<Point>>) -> usize {
+pub(super) fn ring_bytes(rings: &Vec<Vec<Point>>) -> usize {
     rings.iter().fold(
         rings.capacity().saturating_mul(size_of::<Vec<Point>>()),
         |n, r| n.saturating_add(r.capacity().saturating_mul(size_of::<Point>())),
@@ -232,6 +232,16 @@ impl PreparedSolid {
         zone: &Zone,
         z: [f64; 2],
         chord_tolerance_mm: f64,
+        limits: SolidLimits,
+        cancel: &CancellationToken,
+    ) -> Result<Self, SolidPrepareError> {
+        Self::prepare_zone_with_cutouts(zone, z, chord_tolerance_mm, &[], limits, cancel)
+    }
+    pub(crate) fn prepare_zone_with_cutouts(
+        zone: &Zone,
+        z: [f64; 2],
+        chord_tolerance_mm: f64,
+        cutouts: &[Vec<Point>],
         mut limits: SolidLimits,
         cancel: &CancellationToken,
     ) -> Result<Self, SolidPrepareError> {
@@ -339,7 +349,8 @@ impl PreparedSolid {
             }));
         }
         limits.max_allocation_bytes -= allocation;
-        let mesh = SolidMesh::extrude_coverage(&rings, z, limits, cancel).map_err(geometry)?;
+        let mesh = SolidMesh::extrude_coverage_minus(&rings, cutouts, z, limits, cancel)
+            .map_err(geometry)?;
         Ok(Self {
             object: SelectedObject::Zone(zone.id),
             layers: MemberLayers::Single(zone.layer),

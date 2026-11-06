@@ -146,8 +146,8 @@ pub(super) fn primitive(p: &Object) -> Result<Vec<Segment>, ImportError> {
             let y1 = p.field(5)?.quantity()? * 1000.0;
             let corner = p.field(6)?.quantity()? * 1000.0;
             let angle = p.field(7)?.quantity()?;
-            let width = x1 - x0;
-            let height = y1 - y0;
+            let width = (x1 - x0).abs();
+            let height = (y1 - y0).abs();
             if width <= 0.0 || height <= 0.0 || corner < 0.0 || corner > width.min(height) * 0.5 {
                 return Err(error("Invalid rectangle dimensions"));
             }
@@ -325,6 +325,7 @@ pub(super) fn pad(
     Ok(Some(pad))
 }
 pub(super) struct Drill {
+    pub rectangular: bool,
     pub width: f64,
     pub height: f64,
     pub angle: f64,
@@ -340,6 +341,13 @@ pub(super) fn drill(call: &Call, context: &ImportContext<'_>) -> Result<Drill, I
                 return Err(error("Invalid oval drill radius"));
             }
             (w, h, s.angle)
+        } else if s.shape == "Rct" || s.shape == "Sq" {
+            let w = s.sizes[0];
+            let h = s.sizes.get(1).copied().unwrap_or(w);
+            if w <= 0.0 || h <= 0.0 {
+                return Err(error("Invalid rectangular drill dimensions"));
+            }
+            (w, h, s.angle)
         } else if s.shape == "No" || s.shape == "Cir" {
             let d = s.sizes.first().copied().unwrap_or(0.0);
             (d, d, 0.0)
@@ -347,6 +355,7 @@ pub(super) fn drill(call: &Call, context: &ImportContext<'_>) -> Result<Drill, I
             return Err(error("Unsupported drill shape"));
         };
         return Ok(Drill {
+            rectangular: matches!(s.shape.as_str(), "Rct" | "Sq"),
             width,
             height,
             angle,
@@ -387,6 +396,7 @@ pub(super) fn drill(call: &Call, context: &ImportContext<'_>) -> Result<Drill, I
         return Err(error("Invalid polygon slot geometry"));
     }
     Ok(Drill {
+        rectangular: false,
         width: length + 2.0 * a.radius,
         height: 2.0 * a.radius,
         angle: dy.atan2(dx),
@@ -401,6 +411,52 @@ pub(super) fn drill(call: &Call, context: &ImportContext<'_>) -> Result<Drill, I
 mod tests {
     use super::*;
     use pomelo_core::task::CancellationToken;
+
+    #[test]
+    fn rectangular_drills_keep_sharp_corners_dimensions_and_rotation() {
+        let value = super::super::text::statement(
+            "hle(shp='Rct', Szs('2mm','1mm'), X='0.1mm', Y='0.2mm', R='90deg')",
+        )
+        .unwrap()
+        .1;
+        let cancel = CancellationToken::default();
+        let hole = drill(
+            value.call().unwrap(),
+            &ImportContext {
+                cancellation: &cancel,
+                progress: &|_| {},
+            },
+        )
+        .unwrap();
+        assert!(hole.rectangular);
+        assert_eq!([hole.width, hole.height], [2.0, 1.0]);
+        assert_eq!(hole.offset, Point::new(0.1, 0.2));
+        assert!((hole.angle - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rectangle_corner_order_does_not_change_coverage() {
+        use super::super::binary::Value as B;
+        for (x0, y0, x1, y1) in [(0.021, 0.0, 0.027, -0.003), (0.027, -0.003, 0.021, 0.0)] {
+            let rectangle = Object {
+                schema: 12,
+                fields: vec![
+                    B::Null,
+                    B::Number(2.0),
+                    B::Quantity(x0),
+                    B::Quantity(y0),
+                    B::Quantity(x1),
+                    B::Quantity(y1),
+                    B::Quantity(0.0),
+                    B::Quantity(0.0),
+                ],
+            };
+            let path = primitive(&rectangle).unwrap();
+            let bounds = pomelo_core::geometry::path_bounds(&path).unwrap();
+            assert_eq!(bounds.min, Point::new(21.0, -3.0));
+            assert_eq!(bounds.max, Point::new(27.0, 0.0));
+        }
+    }
 
     #[test]
     fn explicit_quantities_convert_units_and_reject_expressions() {

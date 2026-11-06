@@ -11,12 +11,12 @@ pub(super) mod probe;
 pub(super) mod trace;
 use super::Shader;
 #[cfg(target_os = "windows")]
-use super::d3d11::Device;
+pub(super) use super::d3d11::Device;
 pub(super) mod driver;
 #[cfg(target_os = "macos")]
 use super::metal::Device;
 #[cfg(target_os = "linux")]
-use super::wgpu::Device;
+pub(super) use super::wgpu::Device;
 use gpui::{Bounds, ContentMask, ScaledPixels};
 #[derive(Clone, Copy)]
 pub(crate) struct Rect {

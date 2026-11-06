@@ -125,6 +125,7 @@ fn pin(id: u32, at: Point, pads: Vec<Pad>) -> Pin {
         mirrored: false,
         drill: 0.0,
         drill_shape: DrillShape {
+            rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: true,
@@ -262,6 +263,7 @@ fn physical_drills_clear_pad_copper_and_donut_openings_remain_independent() {
     let a = pin(1, Point::new(2.0, 5.0), vec![donut]);
     let mut b = pin(2, Point::new(7.0, 5.0), vec![Pad::circle(LayerId(1), 2.0)]);
     b.drill_shape = DrillShape {
+        rectangular: false,
         width: 0.8,
         height: 0.8,
         plated: true,

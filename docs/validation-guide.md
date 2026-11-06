@@ -32,6 +32,24 @@ POMELO_ALLEGRO_261_CASES=/path/to/local/cases cargo test -p pomelo-import --lock
 
 该检查只验证 CPU 导入，不代表 GPU 显示验证。
 
+EDB 12.1 的本地十二层样例回归检查对象数量、网络和元件引脚引用、有限几何、铜区网格及搜索索引。输入文件保留在仓库外，通过环境变量指定：
+
+```sh
+POMELO_HFSS_12_LAYER_CASE=/path/to/local/edb.def cargo test -p pomelo-import --locked --test hfss_case -- --ignored
+```
+
+该样例使用现有 HFSS 原生读取器；通过 CPU 导入检查不代表完成画布显示或完整三维数据验收。
+
+多版本 EDB 样例可设置 `POMELO_EDB_CASES` 后运行 `hfss_case` 中的 `edb_archive_versions` 测试；字段表规律和未见版本的兼容边界见 [EDB 格式兼容](edb-format-compatibility.md)。
+
+带非零元件变换、矩形钻孔和辅助图形层的本地 DEF 可设置 `POMELO_HFSS_T40_CASE`，运行 `hfss_case` 中的 `transformed_components` 测试。三维孔壁检查使用 `POMELO_HFSS_3D_CASE` 指向 DEF，然后运行：
+
+```sh
+cargo test -p pomelo-render --test board3d imported_hfss_plated --locked -- --ignored --nocapture
+```
+
+该检查核对每个可解析的镀层过孔都有全跨度且材质可见的孔壁。常规 `board3d` 回归另检查独立钻孔能贯穿实心铜区和走线、矩形孔角点及盲孔层范围；Windows 的实体像素回归检查孔心能露出背景。
+
 几何检查覆盖直线、圆弧、退化路径、凹轮廓、孔洞、重复点和极端坐标。相机检查覆盖坐标往返、光标锚点缩放、适应整板及最小可见范围。
 
 搜索与拾取检查覆盖排序、对象分组、类别过滤、隐藏图层、组成员边界及定位范围。合成数据应有可独立计算的预期结果，不能仅复述实现。

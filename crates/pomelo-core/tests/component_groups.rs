@@ -23,6 +23,7 @@ fn pin(id: u32, owner: u32, reference: &str, x: f64) -> Pin {
         mirrored: false,
         drill: 0.0,
         drill_shape: DrillShape {
+            rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: true,
@@ -39,6 +40,7 @@ fn finger(id: u32, reference: &str, x: f64) -> Via {
         at: Point::new(x, 0.0),
         drill: 0.0,
         drill_shape: DrillShape {
+            rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: true,

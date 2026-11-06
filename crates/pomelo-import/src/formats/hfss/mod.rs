@@ -1,9 +1,12 @@
-//! Native HFSS 3D Layout / EDB 12.1 DEF import.
+//! Native HFSS 3D Layout / self-describing EDB DEF import.
 mod binary;
 mod geometry;
 mod pads;
 mod text;
-use super::{ParsedBoard, SourceSpecialLayer, SourceZone, geometry as shared, scene_builder};
+use super::{
+    ParsedBoard, SourceDrawingLayer, SourceSpecialLayer, SourceZone, geometry as shared,
+    scene_builder,
+};
 use crate::{ImportContext, ImportError};
 use binary::Object;
 use pomelo_core::model::*;
@@ -25,6 +28,40 @@ struct Info {
     component: i32,
     layer: i32,
     parent: i32,
+}
+struct Component {
+    reference: String,
+    at: Point,
+    angle: f64,
+}
+impl Component {
+    fn read(group: &Object) -> Result<Self, ImportError> {
+        let transform = text::statement(group.field(2)?.text()?)?.1;
+        let t = transform.call()?;
+        if t.name != "f"
+            || geometry::quantity(t.arg("s")?, false)? != 1.0
+            || !matches!(t.arg("m")?, text::Value::Bool(false))
+        {
+            return Err(error("Unsupported component scale or mirror transform"));
+        }
+        let at = Point::new(
+            geometry::quantity(t.arg("x")?, false)? * 1000.0,
+            geometry::quantity(t.arg("y")?, false)? * 1000.0,
+        );
+        let angle = geometry::quantity(t.arg("r")?, true)?;
+        if !at.is_finite() || !angle.is_finite() {
+            return Err(error("Invalid component transform"));
+        }
+        Ok(Self {
+            reference: group.field(1)?.text()?.to_owned(),
+            at,
+            angle,
+        })
+    }
+    fn place(&self, local: Point) -> Point {
+        let p = local.rotate(self.angle);
+        Point::new(self.at.x + p.x, self.at.y + p.y)
+    }
 }
 fn info(p: &Object) -> Result<Info, ImportError> {
     let p = if p.schema == 16 {
@@ -52,7 +89,8 @@ fn net(raw: i32, ids: &HashMap<i32, NetId>) -> Result<NetId, ImportError> {
     }
 }
 pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBoard, ImportError> {
-    let root = binary::read(bytes, context)?;
+    let archive = binary::read(bytes, context)?;
+    let root = archive.root;
     let groups = root.field(2)?.object(Some(1))?.field(0)?.array()?;
     let mut cells = Vec::new();
     for group in groups {
@@ -73,7 +111,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     let mut layers = Vec::new();
     let mut layer_ids = HashMap::new();
     let mut source_ids = HashSet::new();
-    let mut output = scene_builder::new_parsed_board("12.1");
+    let mut output = scene_builder::new_parsed_board(archive.version);
     let colors = [
         "#58b5ed", "#83ce94", "#edb963", "#ba8bec", "#eb819d", "#54c7bd", "#a5b8df", "#e18d61",
     ];
@@ -136,21 +174,15 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         let c = value.object(Some(22))?;
         let group = c.field(0)?.object(Some(21))?;
         let base = group.field(0)?.object(Some(10))?;
-        let transform = text::statement(group.field(2)?.text()?)?.1;
-        let t = transform.call()?;
-        if t.name != "f"
-            || geometry::quantity(t.arg("x")?, false)? != 0.0
-            || geometry::quantity(t.arg("y")?, false)? != 0.0
-            || geometry::quantity(t.arg("r")?, true)? != 0.0
-            || geometry::quantity(t.arg("s")?, false)? != 1.0
-            || !matches!(t.arg("m")?, text::Value::Bool(false))
+        if components
+            .insert(
+                base.field(0)?.object(Some(5))?.field(0)?.integer()?,
+                Component::read(group)?,
+            )
+            .is_some()
         {
-            return Err(error("Unsupported component transform"));
+            return Err(error("Duplicate component"));
         }
-        components.insert(
-            base.field(0)?.object(Some(5))?.field(0)?.integer()?,
-            group.field(1)?.text()?.to_owned(),
-        );
     }
     let mut primitives = Vec::new();
     let mut primitive_ids = HashMap::new();
@@ -180,7 +212,11 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             .get(&parent)
             .ok_or_else(|| error("Missing void parent"))?;
         let i = &primitives[parent].1;
-        if i.parent != -1 || children.iter().any(|&c| primitives[c].1.layer != i.layer) {
+        if i.parent != -1
+            || children.iter().any(|&c| {
+                primitives[c].1.layer != i.layer || primitives[c].1.component != i.component
+            })
+        {
             return Err(error("Nested void or mismatched void layer"));
         }
     }
@@ -190,6 +226,23 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         if i.parent != -1 {
             continue;
         }
+        let component = if i.component == -1 {
+            None
+        } else {
+            Some(
+                components
+                    .get(&i.component)
+                    .ok_or_else(|| error("Primitive references missing component"))?,
+            )
+        };
+        let place = |mut path: Vec<Segment>| {
+            if let Some(component) = component {
+                for edge in &mut path {
+                    *edge = shared::transform(edge, component.at, component.angle, false);
+                }
+            }
+            path
+        };
         let source = layers
             .iter()
             .find(|l| l.id == i.layer)
@@ -218,7 +271,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             }
             let track = ObjectId(next);
             next += 1;
-            for mut edge in geometry::polygon_object(path.field(6)?.object(Some(36))?)? {
+            for mut edge in place(geometry::polygon_object(path.field(6)?.object(Some(36))?)?) {
                 edge.id = ObjectId(next);
                 next += 1;
                 edge.track_id = track;
@@ -230,21 +283,24 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                     material: Some(p.field(3)?.text()?.into()),
                     source_pin: ObjectId(u32::MAX),
                     finger: ObjectId(u32::MAX),
-                    reference: components.get(&i.component).cloned().unwrap_or_default(),
+                    reference: component.map(|c| c.reference.clone()).unwrap_or_default(),
                     pin_name: String::new(),
                 });
                 output.scene.segments.push(edge);
             }
             continue;
         }
-        if source.kind == "outline" {
+        if matches!(
+            source.kind.as_str(),
+            "outline" | "silkscreen" | "soldermask"
+        ) {
             let mut paths = Vec::new();
             if p.schema == 14 {
                 let width = p.field(4)?.quantity()? * 1000.0;
                 if width < 0.0 {
                     return Err(error("Invalid outline width"));
                 }
-                let path = geometry::polygon_object(p.field(6)?.object(Some(36))?)?
+                let path = place(geometry::polygon_object(p.field(6)?.object(Some(36))?)?)
                     .into_iter()
                     .map(|mut s| {
                         s.width = width;
@@ -253,19 +309,61 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                     .collect();
                 paths.push(path);
             } else {
-                paths.push(geometry::primitive(p)?);
+                paths.push(place(geometry::primitive(p)?));
                 for &hole in voids.get(&i.id).map(Vec::as_slice).unwrap_or_default() {
-                    paths.push(geometry::primitive(primitives[hole].0)?);
+                    paths.push(place(geometry::primitive(primitives[hole].0)?));
                 }
             }
-            for path in paths {
-                for mut s in path {
+            if source.kind == "outline" {
+                for mut s in paths.into_iter().flatten() {
                     s.id = ObjectId(next);
                     next += 1;
                     s.track_id = s.id;
                     s.layer = LayerId::UNASSIGNED;
                     s.net = NetId(0);
                     output.scene.outline.push(s);
+                }
+            } else {
+                let source_index = layers
+                    .iter()
+                    .position(|l| l.id == source.id)
+                    .ok_or_else(|| error("Missing graphic layer"))?;
+                let layer = LayerId::special(2 + source_index as u32);
+                if !output.drawing_layers.iter().any(|l| l.id == layer) {
+                    output.drawing_layers.push(SourceDrawingLayer {
+                        id: layer,
+                        name: source.name.clone(),
+                        color: "#d8d8b0".into(),
+                        default_visible: source.kind == "silkscreen",
+                    });
+                }
+                let id = ObjectId(next);
+                next += 1;
+                let segments = paths
+                    .into_iter()
+                    .flatten()
+                    .map(|mut edge| {
+                        edge.id = ObjectId(next);
+                        next += 1;
+                        edge.track_id = id;
+                        edge.layer = layer;
+                        edge.net = net;
+                        edge
+                    })
+                    .collect();
+                output.scene.drawings.push(BoardDrawing {
+                    id,
+                    owner_id: None,
+                    layer,
+                    net,
+                    graphic_ids: vec![id],
+                    segments,
+                    text_ids: vec![],
+                });
+                if p.schema != 14 && output.diagnostics.is_empty() {
+                    output
+                        .diagnostics
+                        .push("HFSS non-copper filled graphics are rendered as boundaries".into());
                 }
             }
             continue;
@@ -291,7 +389,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             }
             let track = ObjectId(next);
             next += 1;
-            for mut s in geometry::polygon_object(p.field(6)?.object(Some(36))?)? {
+            for mut s in place(geometry::polygon_object(p.field(6)?.object(Some(36))?)?) {
                 s.id = ObjectId(next);
                 next += 1;
                 s.track_id = track;
@@ -301,9 +399,9 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                 output.scene.segments.push(s);
             }
         } else {
-            let mut paths = vec![geometry::primitive(p)?];
+            let mut paths = vec![place(geometry::primitive(p)?)];
             for &hole in voids.get(&i.id).map(Vec::as_slice).unwrap_or_default() {
-                paths.push(geometry::primitive(primitives[hole].0)?);
+                paths.push(place(geometry::primitive(primitives[hole].0)?));
             }
             if paths[0].is_empty() {
                 return Err(error("Empty copper area"));
@@ -343,3 +441,6 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     scene_builder::update_scene_bounds(&mut output);
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests;

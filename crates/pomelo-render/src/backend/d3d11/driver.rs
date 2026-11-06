@@ -1,4 +1,5 @@
 //! Direct3D resources and commands. PCB batching and rendering policy live in common.
+mod solid;
 use super::super::{
     Shader,
     common::{
@@ -8,6 +9,7 @@ use super::super::{
 };
 use super::shaders::{compile_shader, source};
 use anyhow::{Context as _, ensure};
+pub(crate) use solid::SolidDriver;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,

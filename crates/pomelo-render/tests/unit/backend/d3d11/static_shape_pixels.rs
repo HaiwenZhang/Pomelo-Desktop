@@ -74,6 +74,7 @@ pub(super) fn prepared_frame() -> BoardFrame {
         mirrored: false,
         drill: 0.0,
         drill_shape: DrillShape {
+            rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: true,

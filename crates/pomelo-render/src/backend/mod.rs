@@ -79,8 +79,13 @@ mod metal;
 #[cfg(all(target_os = "linux", feature = "native-gpu"))]
 mod wgpu;
 
-#[cfg(all(feature = "native-gpu", any(target_os = "macos", test)))]
+#[cfg(feature = "native-gpu")]
 mod solid_cache;
+#[cfg(all(
+    feature = "native-gpu",
+    any(target_os = "windows", target_os = "linux")
+))]
+mod solid_pipeline;
 #[cfg(feature = "native-gpu")]
 mod wgsl;
 #[cfg(feature = "native-gpu")]

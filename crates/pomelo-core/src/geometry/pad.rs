@@ -394,7 +394,9 @@ impl DrillShape {
         }
         let mut pad = Pad::circle(LayerId::UNASSIGNED, self.width);
         pad.height = self.height;
-        if self.width != self.height {
+        if self.rectangular {
+            pad.kind = PadKind(5);
+        } else if self.width != self.height {
             pad.kind = PadKind(11);
         }
         Some(pad)

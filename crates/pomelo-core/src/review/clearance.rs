@@ -699,6 +699,7 @@ mod tests {
             mirrored: false,
             drill: 0.0,
             drill_shape: crate::model::DrillShape {
+                rectangular: false,
                 width: 0.0,
                 height: 0.0,
                 plated: false,
@@ -729,6 +730,7 @@ mod tests {
             at: Point::new(0.0, 0.0),
             drill: 0.0,
             drill_shape: crate::model::DrillShape {
+                rectangular: false,
                 width: 0.0,
                 height: 0.0,
                 plated: false,

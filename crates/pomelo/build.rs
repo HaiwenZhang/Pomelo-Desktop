@@ -46,10 +46,42 @@ fn main() -> Result<(), Box<dyn Error>> {
         fs::copy(&icon_path, package_icon)?;
     }
     let resource = output.join("pomelo.rc");
+    let version = env::var("CARGO_PKG_VERSION")?;
+    let numeric_version = format!(
+        "{},{},{},0",
+        env::var("CARGO_PKG_VERSION_MAJOR")?,
+        env::var("CARGO_PKG_VERSION_MINOR")?,
+        env::var("CARGO_PKG_VERSION_PATCH")?,
+    );
     fs::write(
         &resource,
         format!(
-            "1 ICON \"{}\"\n",
+            r#"1 ICON "{}"
+1 VERSIONINFO
+FILEVERSION {numeric_version}
+PRODUCTVERSION {numeric_version}
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Pomelo\0"
+            VALUE "FileVersion", "{version}\0"
+            VALUE "ProductName", "Pomelo\0"
+            VALUE "ProductVersion", "{version}\0"
+            VALUE "OriginalFilename", "pomelo.exe\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
+"#,
             icon_path.display().to_string().replace('\\', "/")
         ),
     )?;

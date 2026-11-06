@@ -138,6 +138,7 @@ fn hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache() {
         paths: vec![],
     }));
     let drill = DrillShape {
+        rectangular: false,
         width: 0.0,
         height: 0.0,
         plated: false,
@@ -1469,6 +1470,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         mirrored: false,
         drill: 0.0,
         drill_shape: DrillShape {
+            rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: false,
@@ -1481,6 +1483,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     drill_pin.at = Point::new(15.0, 15.0);
     drill_pin.angle = std::f64::consts::FRAC_PI_2;
     drill_pin.drill_shape = DrillShape {
+        rectangular: false,
         width: 2.0,
         height: 1.0,
         plated: true,
@@ -3332,3 +3335,6 @@ impl crate::text::StrokeGlyphs for SyntheticStrokeFont {
         }
     }
 }
+
+#[path = "solid_pixels.rs"]
+mod solid_pixels;

@@ -12,6 +12,114 @@ use pomelo_core::{
 use pomelo_render::scene::board3d::{PreparedBoard3d, PreviewStackup};
 
 #[test]
+#[ignore = "requires POMELO_HFSS_3D_CASE pointing at a local edb.def"]
+fn imported_hfss_plated_vias_produce_visible_full_depth_barrels() {
+    use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::FormatImporter};
+    use std::{collections::BTreeSet, path::PathBuf};
+    let path =
+        PathBuf::from(std::env::var_os("POMELO_HFSS_3D_CASE").expect("set POMELO_HFSS_3D_CASE"));
+    let cancel = CancellationToken::default();
+    let imported = FormatImporter
+        .import(
+            &path,
+            &ImportOptions::default(),
+            &ImportContext {
+                cancellation: &cancel,
+                progress: &|_| {},
+            },
+        )
+        .unwrap();
+    let expected: BTreeSet<_> = imported
+        .scene
+        .vias
+        .iter()
+        .filter(|via| {
+            via.drill_shape.plated
+                && via.drill_shape.pad().is_some()
+                && via.start_layer.zip(via.end_layer).is_some()
+                && via.backdrill.is_none()
+        })
+        .map(|via| SelectedObject::Via(via.id))
+        .collect();
+    assert!(expected.len() > 2000);
+    let solid = PreparedBoard3d::preview(
+        &imported.scene,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    let materials = solid.materials(&imported.scene, &BoardDisplay::default(), false, None, None);
+    let mut actual = BTreeSet::new();
+    for (index, source) in solid.sources.iter().enumerate() {
+        if matches!(source.object, SelectedObject::Via(_))
+            && matches!(
+                source.layers,
+                pomelo_core::interaction::selection::MemberLayers::Span(_, _)
+            )
+        {
+            assert!(source.bounds.max[2] - source.bounds.min[2] > 0.0);
+            assert!(!source.parts.is_empty());
+            assert!(materials[index + 1][3] > 0.0);
+            actual.insert(source.object);
+        }
+    }
+    assert_eq!(
+        actual, expected,
+        "every imported plated via needs a 3D barrel"
+    );
+    println!(
+        "plated_vias={} barrels={} preparation_warnings={}",
+        expected.len(),
+        actual.len(),
+        solid.warning_count
+    );
+    let mut warning_types = std::collections::BTreeMap::new();
+    for warning in &solid.warnings {
+        let code = match warning {
+            pomelo_render::scene::solid::SolidPrepareError::Geometry { source, .. } => {
+                source.to_string()
+            }
+            other => other.to_string(),
+        };
+        *warning_types.entry(code).or_insert(0usize) += 1;
+    }
+    println!("preparation_warning_types={warning_types:?}");
+}
+
+#[test]
+fn rectangular_and_round_holes_do_not_share_incompatible_gpu_meshes() {
+    let mut input = source();
+    input.segments.clear();
+    input.pins.clear();
+    input.vias.truncate(2);
+    input.vias[1].drill_shape.rectangular = true;
+    let solid = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    let meshes = |id| {
+        solid
+            .sources
+            .iter()
+            .filter(|s| s.object == SelectedObject::Via(id))
+            .map(|s| solid.parts[s.parts.start].mesh)
+            .collect::<Vec<_>>()
+    };
+    let round = meshes(input.vias[0].id);
+    let rectangular = meshes(input.vias[1].id);
+    assert_eq!(round.len(), 3);
+    assert_eq!(rectangular.len(), 3);
+    assert!(
+        round.iter().all(|mesh| !rectangular.contains(mesh)),
+        "pad cutouts and barrels must include hole shape in their cache key"
+    );
+}
+
+#[test]
 fn board_preparation_keeps_its_shared_memory_reservation_until_the_last_owner_drops() {
     let budget = pomelo_core::memory::MemoryBudget::new(0);
     let mut memory = pomelo_render::preparation_memory::PreparationMemory::new(budget.clone());
@@ -87,6 +195,7 @@ fn source() -> BoardScene {
             mirrored: false,
             drill: 0.0,
             drill_shape: DrillShape {
+                rectangular: false,
                 width: 0.0,
                 height: 0.0,
                 plated: false,
@@ -105,6 +214,7 @@ fn source() -> BoardScene {
             at: Point::new(i as f64, 5.0),
             drill: 0.2,
             drill_shape: DrillShape {
+                rectangular: false,
                 width: 0.2,
                 height: 0.2,
                 plated: true,
@@ -178,6 +288,82 @@ fn square_zone(id: u32, x: f64, size: f64, hole: bool) -> pomelo_core::model::Zo
             &CancellationToken::default(),
         )
         .unwrap(),
+    }
+}
+
+#[test]
+fn independently_stored_drills_cut_zones_and_traces_without_saved_voids() {
+    for rectangular in [false, true] {
+        let mut input = source();
+        input.pins.clear();
+        input.vias.truncate(1);
+        input.vias[0].at = Point::new(1.5, 1.5);
+        input.vias[0].drill_shape = DrillShape {
+            width: 0.4,
+            height: 0.4,
+            plated: true,
+            rectangular,
+        };
+        input.segments[0].a = Point::new(0.0, 1.5);
+        input.segments[0].b = Point::new(3.0, 1.5);
+        input.zones = vec![
+            square_zone(501, 0.0, 3.0, false),
+            square_zone(502, 0.0, 3.0, false),
+        ];
+        input.zones[1].layer = LayerId(1);
+        let solid = PreparedBoard3d::preview(
+            &input,
+            PreviewStackup::default(),
+            SolidLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        let materials = solid.materials(&input, &BoardDisplay::default(), false, None, None);
+        let ray = |x, y| PickRay3d {
+            origin: [x, y, 10.0],
+            direction: [0.0, 0.0, -1.0],
+            length: 20.0,
+        };
+        assert!(
+            solid
+                .pick(ray(1.5, 1.5), &materials, Default::default())
+                .is_none(),
+            "copper sealed the drill center"
+        );
+        assert_eq!(
+            solid.pick(
+                PickRay3d {
+                    origin: [2.0, 1.5, 0.0],
+                    direction: [-1.0, 0.0, 0.0],
+                    length: 1.0
+                },
+                &materials,
+                Default::default()
+            ),
+            Some(SelectedObject::Via(input.vias[0].id))
+        );
+        if rectangular {
+            assert!(
+                solid
+                    .pick(ray(1.68, 1.68), &materials, Default::default())
+                    .is_none(),
+                "rectangular hole corner was rounded"
+            );
+        }
+        input.vias[0].end_layer = Some(LayerId(0));
+        let blind = PreparedBoard3d::preview(
+            &input,
+            PreviewStackup::default(),
+            SolidLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap();
+        let materials = blind.materials(&input, &BoardDisplay::default(), false, None, None);
+        assert_eq!(
+            blind.pick(ray(1.5, 1.5), &materials, Default::default()),
+            Some(SelectedObject::Zone(ObjectId(502))),
+            "blind via cut copper outside its span"
+        );
     }
 }
 

@@ -1,7 +1,7 @@
 //! Pad definitions and bindings are decoded once and shared by placed instances.
 use super::super::{ParsedBoard, SourceSpecialLayer, geometry as shared};
 use super::{
-    Layer,
+    Component, Layer,
     binary::Object,
     error, geometry,
     text::{self, Block, Call, Value},
@@ -49,6 +49,21 @@ fn rotate(p: Point, angle: f64) -> Point {
     Point::new(p.x * c - p.y * s, p.x * s + p.y * c)
 }
 
+fn plating_ratio(value: &Value) -> Result<f64, ImportError> {
+    let ratio = match value {
+        Value::Number(n) => *n,
+        Value::Text(s) => s
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| error("Invalid hole plating ratio"))?,
+        _ => return Err(error("Invalid hole plating ratio")),
+    };
+    if !ratio.is_finite() {
+        return Err(error("Invalid hole plating ratio"));
+    }
+    Ok(ratio)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Source tables and scene are shared across layout readers"
@@ -60,11 +75,26 @@ pub(super) fn build(
     layers: &[Layer],
     layer_ids: &HashMap<i32, LayerId>,
     net_ids: &HashMap<i32, NetId>,
-    components: &HashMap<i32, String>,
+    components: &HashMap<i32, Component>,
     output: &mut ParsedBoard,
     next: &mut u32,
     context: &ImportContext<'_>,
 ) -> Result<(), ImportError> {
+    let mut used_bindings = HashSet::new();
+    for instance in layout.field(5)?.array()? {
+        context.check_cancelled()?;
+        used_bindings.insert(instance.object(Some(19))?.field(1)?.integer()?);
+    }
+    let mut used_definitions = HashSet::new();
+    for binding in cell.field(3)?.array()? {
+        context.check_cancelled()?;
+        let binding = binding.object(Some(6))?;
+        if used_bindings.contains(&binding.field(0)?.integer()?) {
+            used_definitions.insert(integer(
+                text::read(binding.field(1)?.text()?)?.prop("def")?,
+            )?);
+        }
+    }
     let metadata = text::read(root.field(0)?.text()?)?;
     let mut definitions = HashMap::new();
     if let Some(pds) = metadata.children.iter().find(|c| c.name == "pds") {
@@ -74,6 +104,9 @@ pub(super) fn build(
                 return Err(error("Unknown padstack definition"));
             }
             let id = integer(record.prop("id")?)?;
+            if !used_definitions.contains(&id) {
+                continue;
+            }
             let source = record.require_child("psd")?;
             let mut pads = HashMap::new();
             if let Some(pds) = source.children.iter().find(|c| c.name == "pds") {
@@ -89,11 +122,13 @@ pub(super) fn build(
                 }
             }
             let hole = geometry::drill(call(source, "hle")?, context)?;
-            let plated = source
-                .properties
-                .get("plt")
-                .and_then(|v| v.number().ok())
-                .is_some_and(|n| n > 0.0);
+            let ratio = plating_ratio(source.prop("plt")?)?;
+            let plated = if (0.0..=100.0).contains(&ratio) {
+                ratio > 0.0
+            } else {
+                output.diagnostics.push(format!("HFSS padstack {id} has invalid hole plating ratio {ratio}; plating is unresolved"));
+                false
+            };
             let definition = Definition {
                 id,
                 name: source.prop("nam")?.text()?.into(),
@@ -112,6 +147,9 @@ pub(super) fn build(
         context.check_cancelled()?;
         let record = value.object(Some(6))?;
         let id = record.field(0)?.integer()?;
+        if !used_bindings.contains(&id) {
+            continue;
+        }
         let source = text::read(record.field(1)?.text()?)?;
         let definition = integer(source.prop("def")?)?;
         let def = definitions
@@ -232,14 +270,16 @@ pub(super) fn build(
         }
         let base = p.field(0)?.object(Some(10))?;
         let component = base.field(2)?.integer()?;
-        let reference = if component == -1 {
-            String::new()
+        let component = if component == -1 {
+            None
         } else {
-            components
-                .get(&component)
-                .cloned()
-                .ok_or_else(|| error("Pad references missing component"))?
+            Some(
+                components
+                    .get(&component)
+                    .ok_or_else(|| error("Pad references missing component"))?,
+            )
         };
+        let reference = component.map(|c| c.reference.clone()).unwrap_or_default();
         let binding_id = p.field(1)?.integer()?;
         let binding = bindings
             .get(&binding_id)
@@ -248,15 +288,19 @@ pub(super) fn build(
         let rotation = p.field(4)?.numeric()?;
         let hole = &def.hole;
         let offset = rotate(hole.offset, rotation);
-        let at = Point::new(
+        let local_at = Point::new(
             p.field(2)?.numeric()? * 1000.0 + offset.x,
             p.field(3)?.numeric()? * 1000.0 + offset.y,
         );
-        let angle = rotation + hole.angle;
+        let at = component.map_or(local_at, |c| c.place(local_at));
+        let angle = rotation + hole.angle + component.map_or(0.0, |c| c.angle);
         let mut pads = binding.templates.clone();
         for pad in &mut pads {
             let origin = rotate(pad.offset, rotation);
-            pad.offset = Point::new(origin.x - offset.x, origin.y - offset.y);
+            pad.offset = rotate(
+                Point::new(origin.x - offset.x, origin.y - offset.y),
+                component.map_or(0.0, |c| c.angle),
+            );
             if hole.angle != 0.0 && pad.kind != PadKind::CIRCLE {
                 let paths = shared::pad_paths(pad)
                     .into_iter()
@@ -276,6 +320,7 @@ pub(super) fn build(
         *next += 1;
         let net = super::net(base.field(1)?.integer()?, net_ids)?;
         let drill_shape = DrillShape {
+            rectangular: hole.rectangular,
             width: hole.width,
             height: hole.height,
             plated: def.plated,
@@ -294,10 +339,11 @@ pub(super) fn build(
                     kind: SpecialLayerKind::DiePad,
                 });
             }
-            let owner_id = if component == -1 {
+            let source_component = base.field(2)?.integer()?;
+            let owner_id = if source_component == -1 {
                 ObjectId(0)
             } else {
-                let index = if let Some(&index) = owners.get(&component) {
+                let index = if let Some(&index) = owners.get(&source_component) {
                     index
                 } else {
                     let index = output.scene.components.len();
@@ -306,14 +352,14 @@ pub(super) fn build(
                     output.scene.components.push(ComponentPlacement {
                         body: None,
                         id: owner,
-                        source_reference: u32::try_from(component).ok().map(ObjectId),
+                        source_reference: u32::try_from(source_component).ok().map(ObjectId),
                         reference: reference.clone(),
                         at,
                         angle,
                         mirrored: false,
                         pins: Vec::new(),
                     });
-                    owners.insert(component, index);
+                    owners.insert(source_component, index);
                     index
                 };
                 output.scene.components[index].pins.push(id);
@@ -364,4 +410,124 @@ pub(super) fn build(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn component_rotation_places_pad_offsets_and_drill_offsets_in_world_coordinates() {
+        use super::super::binary::Value as B;
+        let object = |schema, fields| B::Object(Box::new(Object { schema, fields }));
+        let root = Object {schema:0,fields:vec![B::Text("$begin 'EDB'\n$begin 'pds'\n$begin 'pd'\nid=1\n$begin 'psd'\nnam='test'\nplt='20'\n$begin 'pds'\n$begin 'lgm'\nid=0\nlay='Top'\npad(shp='Rct',Szs('1mm','2mm'),X='1mm',Y='2mm',R='0deg')\n$end 'lgm'\n$end 'pds'\nhle(shp='Cir',Szs('0.2mm'),X='0.2mm',Y='0.3mm',R='0deg')\n$end 'psd'\n$end 'pd'\n$end 'pds'\n$end 'EDB'".into())]};
+        let binding = object(6,vec![B::Number(10.0),B::Text("$begin 'binding'\ndef=1\nfl=0\ntl=1\nflp=false\npum='0:1:'\n$begin 'lm'\nforward[2:0,-1]\n$end 'lm'\n$end 'binding'".into())]);
+        let cell = Object {
+            schema: 3,
+            fields: vec![B::Null, B::Null, B::Null, B::Array(vec![binding])],
+        };
+        let instance = object(
+            19,
+            vec![
+                object(
+                    10,
+                    vec![
+                        object(5, vec![B::Number(1.0)]),
+                        B::Number(-1.0),
+                        B::Number(1.0),
+                    ],
+                ),
+                B::Number(10.0),
+                B::Quantity(0.003),
+                B::Quantity(0.004),
+                B::Quantity(std::f64::consts::FRAC_PI_2),
+                B::Quantity(0.0001),
+                B::Text("1".into()),
+                B::Number(0.0),
+                B::Text(String::new()),
+                B::Number(0.0),
+                B::Number(1.0),
+                B::Array(vec![]),
+                B::Text(String::new()),
+            ],
+        );
+        let layout = Object {
+            schema: 4,
+            fields: vec![
+                B::Null,
+                B::Null,
+                B::Null,
+                B::Null,
+                B::Null,
+                B::Array(vec![instance]),
+            ],
+        };
+        let layers = vec![
+            Layer {
+                id: 0,
+                name: "Top".into(),
+                kind: "signal".into(),
+            },
+            Layer {
+                id: 1,
+                name: "Bottom".into(),
+                kind: "signal".into(),
+            },
+        ];
+        let components = HashMap::from([(
+            1,
+            Component {
+                reference: "U1".into(),
+                at: Point::new(10.0, 20.0),
+                angle: std::f64::consts::FRAC_PI_2,
+            },
+        )]);
+        let cancel = pomelo_core::task::CancellationToken::default();
+        let mut output = super::super::scene_builder::new_parsed_board("9.0");
+        build(
+            &root,
+            &cell,
+            &layout,
+            &layers,
+            &HashMap::from([(0, LayerId(0)), (1, LayerId(1))]),
+            &HashMap::new(),
+            &components,
+            &mut output,
+            &mut 1,
+            &ImportContext {
+                cancellation: &cancel,
+                progress: &|_| {},
+            },
+        )
+        .unwrap();
+        let pin = &output.scene.pins[0];
+        assert!((pin.at.x - 5.8).abs() < 1e-10 && (pin.at.y - 22.7).abs() < 1e-10);
+        assert!((pin.angle - std::f64::consts::PI).abs() < 1e-12);
+        let center = pin.pads[0]
+            .bounds(pomelo_core::pad::PadPlacement {
+                at: pin.at,
+                angle: pin.angle,
+                mirrored: false,
+            })
+            .unwrap()
+            .center();
+        assert!(
+            (center.x - 5.0).abs() < 1e-10 && (center.y - 21.0).abs() < 1e-10,
+            "{center:?}"
+        );
+        assert!(pin.drill_shape.plated);
+    }
+    #[test]
+    fn plating_ratio_accepts_quoted_and_numeric_values_without_defaulting_to_unplated() {
+        for ratio in ["100", "20", "0.5"] {
+            assert!(plating_ratio(&Value::Text(ratio.into())).unwrap() > 0.0);
+            assert!(plating_ratio(&Value::Number(ratio.parse().unwrap())).unwrap() > 0.0);
+        }
+        assert_eq!(plating_ratio(&Value::Text("0".into())).unwrap(), 0.0);
+        for ratio in ["", "material", "NaN", "inf", "20mm"] {
+            assert!(
+                plating_ratio(&Value::Text(ratio.into())).is_err(),
+                "{ratio}"
+            );
+        }
+    }
 }
