@@ -1,10 +1,14 @@
 name: commit
 on:
   push:
+    branches-ignore: ["v**", "V**"]
+    tags-ignore: ["v**", "V**"]
   pull_request:
+    branches-ignore: ["v**", "V**"]
 
 jobs:
   core:
+    if: ${{ !startsWith(github.head_ref, 'v') && !startsWith(github.head_ref, 'V') }}
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
@@ -20,6 +24,7 @@ jobs:
       - run: cargo test -p pomelo-core -p pomelo-import --locked
       - run: cargo clippy -p pomelo-core -p pomelo-import --all-targets --locked -- -D warnings
   windows-app:
+    if: ${{ !startsWith(github.head_ref, 'v') && !startsWith(github.head_ref, 'V') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -32,6 +37,7 @@ jobs:
       - run: cargo test --workspace --locked
       - run: cargo build -p pomelo --locked
   macos-app:
+    if: ${{ !startsWith(github.head_ref, 'v') && !startsWith(github.head_ref, 'V') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,6 +48,7 @@ jobs:
       - run: cargo check -p pomelo --all-targets --locked
 
   linux-app:
+    if: ${{ !startsWith(github.head_ref, 'v') && !startsWith(github.head_ref, 'V') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

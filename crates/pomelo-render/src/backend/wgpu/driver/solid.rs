@@ -138,16 +138,16 @@ impl SolidDriver {
             },
         ];
         let buffers = [
-            VertexBufferLayout {
+            Some(VertexBufferLayout {
                 array_stride: 48,
                 step_mode: VertexStepMode::Vertex,
                 attributes: &vertices,
-            },
-            VertexBufferLayout {
+            }),
+            Some(VertexBufferLayout {
                 array_stride: 32,
                 step_mode: VertexStepMode::Instance,
                 attributes: &instances,
-            },
+            }),
         ];
         let additive = BlendComponent {
             src_factor: BlendFactor::One,

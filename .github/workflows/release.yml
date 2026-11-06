@@ -2,6 +2,7 @@ name: Release packages
 
 on:
   push:
+    branches: ["v**", "V**"]
     tags: ["v*", "V*"]
   workflow_dispatch:
 
@@ -28,8 +29,8 @@ jobs:
         run: |
           source scripts/packaging-common.sh
           packaging_init
-          if [[ "$RELEASE_REF" == refs/tags/* && "$RELEASE_TAG" != "v$VERSION" ]]; then
-            die "Tag $RELEASE_TAG must match Cargo.toml version v$VERSION"
+          if [[ "$RELEASE_REF" == refs/tags/* && "$RELEASE_TAG" != "v$VERSION" && "$RELEASE_TAG" != "V$VERSION" ]]; then
+            die "Tag $RELEASE_TAG must match Cargo.toml version v$VERSION or V$VERSION"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -176,7 +177,7 @@ jobs:
           if ldd /usr/bin/pomelo | grep -q 'not found'; then exit 1; fi
 
   publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V'))
     needs: [version, windows, macos, ubuntu, ubuntu-newer]
     runs-on: ubuntu-24.04
     permissions:

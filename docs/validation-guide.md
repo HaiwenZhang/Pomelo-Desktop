@@ -6,6 +6,8 @@
 
 ## 常规检查
 
+以 `v` 或 `V` 开头的分支用于 release 打包：推送仅触发发布打包工作流，普通 CI 跳过；PR 的来源或目标是这类分支时，普通 CI 检查也跳过。对应版本标签（如 `v0.3.0` 或 `V0.3.0`）推送后执行打包并发布 GitHub Release，标签版本须与 `Cargo.toml` 一致。发布流程内部仍保留原有构建和包验证。
+
 ```sh
 cargo fmt --all -- --check
 cargo test --workspace --locked
