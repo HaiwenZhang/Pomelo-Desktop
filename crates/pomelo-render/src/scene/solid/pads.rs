@@ -173,6 +173,7 @@ impl PreparedSolid {
                 .outline(
                     PadPlacement {
                         at: center,
+                        mirrored: source.placement.mirrored,
                         ..Default::default()
                     },
                     tolerance_mm,

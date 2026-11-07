@@ -96,7 +96,11 @@ pub fn rasterize(
         pads += raster.meshes(mesh, palette.pads, 1.0, limits)?;
     }
     raster.reset_budget(limits);
-    let drills = raster.analytic_pads(source.drills, palette.background, limits)?;
+    let mut drills = raster.analytic_pads(source.drills, palette.background, limits)?;
+    raster.reset_budget(limits);
+    if let Some(mesh) = &source.drills.custom_mesh {
+        drills += raster.meshes(mesh, palette.background, 1.0, limits)?;
+    }
     raster.reset_budget(limits);
     let outlines = raster.traces(source.tracks, true, palette.outline, limits)?;
     check_cancelled(cancel)?;

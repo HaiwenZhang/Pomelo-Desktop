@@ -67,6 +67,7 @@ pub(super) fn fixture() -> BoardFrame {
         mirrored: false,
         drill: 0.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.0,
             height: 0.0,
@@ -82,6 +83,7 @@ pub(super) fn fixture() -> BoardFrame {
         at: pin.at,
         drill: 0.4,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.4,
             height: 0.4,

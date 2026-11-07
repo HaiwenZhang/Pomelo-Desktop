@@ -358,6 +358,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             at,
             drill,
             drill_shape: DrillShape {
+                custom: None,
                 rectangular: false,
                 width: drill,
                 height: drill,
@@ -443,6 +444,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                 }
             }
             let mut drill_shape = DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 0.0,
                 height: 0.0,

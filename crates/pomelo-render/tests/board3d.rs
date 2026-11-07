@@ -12,6 +12,51 @@ use pomelo_core::{
 use pomelo_render::scene::board3d::{PreparedBoard3d, PreviewStackup};
 
 #[test]
+#[ignore = "requires POMELO_HFSS_TEDB pointing at the local PyEDB TEDB corpus"]
+fn imported_polygon_vias_prepare_solid_bodies_without_warnings() {
+    use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::FormatImporter};
+    let root = std::path::PathBuf::from(
+        std::env::var_os("POMELO_HFSS_TEDB").expect("set POMELO_HFSS_TEDB"),
+    );
+    let cancel = CancellationToken::default();
+    let board = FormatImporter
+        .import(
+            &root.join("padstacks.aedb/edb.def"),
+            &ImportOptions::default(),
+            &ImportContext {
+                cancellation: &cancel,
+                progress: &|_| {},
+            },
+        )
+        .unwrap();
+    let solid = PreparedBoard3d::preview(
+        &board.scene,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(solid.warning_count, 0, "{:?}", solid.warnings);
+    let polygon = board
+        .scene
+        .vias
+        .iter()
+        .find(|v| v.padstack_name == "MyVia_poly")
+        .unwrap();
+    assert!(polygon.drill_shape.custom.is_some());
+    let barrels: Vec<_> = solid
+        .sources
+        .iter()
+        .filter(|s| {
+            s.object == SelectedObject::Via(polygon.id)
+                && matches!(s.layers, pomelo_core::selection::MemberLayers::Span(_, _))
+        })
+        .collect();
+    assert_eq!(barrels.len(), 1);
+    assert!(!barrels[0].parts.is_empty());
+}
+
+#[test]
 #[ignore = "requires POMELO_HFSS_3D_CASE pointing at a local edb.def"]
 fn imported_hfss_plated_vias_produce_visible_full_depth_barrels() {
     use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::FormatImporter};
@@ -88,7 +133,7 @@ fn imported_hfss_plated_vias_produce_visible_full_depth_barrels() {
 }
 
 #[test]
-fn rectangular_and_round_holes_do_not_share_incompatible_gpu_meshes() {
+fn solid_via_pads_share_meshes_while_their_body_profiles_remain_distinct() {
     let mut input = source();
     input.segments.clear();
     input.pins.clear();
@@ -113,9 +158,14 @@ fn rectangular_and_round_holes_do_not_share_incompatible_gpu_meshes() {
     let rectangular = meshes(input.vias[1].id);
     assert_eq!(round.len(), 3);
     assert_eq!(rectangular.len(), 3);
-    assert!(
-        round.iter().all(|mesh| !rectangular.contains(mesh)),
-        "pad cutouts and barrels must include hole shape in their cache key"
+    assert_eq!(
+        &round[..2],
+        &rectangular[..2],
+        "via pads no longer contain drill cutouts"
+    );
+    assert_ne!(
+        round[2], rectangular[2],
+        "solid bodies retain their source profile"
     );
 }
 
@@ -195,6 +245,7 @@ fn source() -> BoardScene {
             mirrored: false,
             drill: 0.0,
             drill_shape: DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 0.0,
                 height: 0.0,
@@ -214,6 +265,7 @@ fn source() -> BoardScene {
             at: Point::new(i as f64, 5.0),
             drill: 0.2,
             drill_shape: DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 0.2,
                 height: 0.2,
@@ -292,18 +344,36 @@ fn square_zone(id: u32, x: f64, size: f64, hole: bool) -> pomelo_core::model::Zo
 }
 
 #[test]
-fn independently_stored_drills_cut_zones_and_traces_without_saved_voids() {
-    for rectangular in [false, true] {
+fn all_via_profiles_are_solid_and_do_not_cut_zones_or_traces() {
+    for profile in 0..4 {
+        let rectangular = profile == 1;
         let mut input = source();
         input.pins.clear();
         input.vias.truncate(1);
         input.vias[0].at = Point::new(1.5, 1.5);
         input.vias[0].drill_shape = DrillShape {
+            custom: None,
             width: 0.4,
-            height: 0.4,
+            height: if profile == 2 { 0.2 } else { 0.4 },
             plated: true,
             rectangular,
         };
+        if profile == 3 {
+            input.vias[0].drill_shape.custom =
+                Some(std::sync::Arc::new(pomelo_core::model::CustomPadGeometry {
+                    contours: vec![vec![
+                        Point::new(-0.1, 0.2),
+                        Point::new(0.1, 0.2),
+                        Point::new(0.2, 0.1),
+                        Point::new(0.2, -0.1),
+                        Point::new(0.1, -0.2),
+                        Point::new(-0.1, -0.2),
+                        Point::new(-0.2, -0.1),
+                        Point::new(-0.2, 0.1),
+                    ]],
+                    paths: vec![],
+                }));
+        }
         input.segments[0].a = Point::new(0.0, 1.5);
         input.segments[0].b = Point::new(3.0, 1.5);
         input.zones = vec![
@@ -324,11 +394,32 @@ fn independently_stored_drills_cut_zones_and_traces_without_saved_voids() {
             direction: [0.0, 0.0, -1.0],
             length: 20.0,
         };
+        let mut zones_only = materials.clone();
+        let mut traces_only = materials.clone();
+        for (i, source) in solid.sources.iter().enumerate() {
+            if !matches!(source.object, SelectedObject::Zone(_)) {
+                zones_only[i + 1][3] = 0.0;
+            }
+            if !matches!(source.object, SelectedObject::Segment(_)) {
+                traces_only[i + 1][3] = 0.0;
+            }
+        }
+        assert!(
+            solid
+                .pick(ray(1.5, 1.5), &zones_only, Default::default())
+                .is_some(),
+            "via holes must not cut copper zones"
+        );
+        assert_eq!(
+            solid.pick(ray(1.5, 1.5), &traces_only, Default::default()),
+            Some(SelectedObject::Segment(ObjectId(1))),
+            "via holes must not cut traces"
+        );
         assert!(
             solid
                 .pick(ray(1.5, 1.5), &materials, Default::default())
-                .is_none(),
-            "copper sealed the drill center"
+                .is_some(),
+            "every via must have a solid center in the preview"
         );
         assert_eq!(
             solid.pick(
@@ -346,8 +437,8 @@ fn independently_stored_drills_cut_zones_and_traces_without_saved_voids() {
             assert!(
                 solid
                     .pick(ray(1.68, 1.68), &materials, Default::default())
-                    .is_none(),
-                "rectangular hole corner was rounded"
+                    .is_some(),
+                "rectangular vias must also have a solid center"
             );
         }
         input.vias[0].end_layer = Some(LayerId(0));
@@ -361,10 +452,44 @@ fn independently_stored_drills_cut_zones_and_traces_without_saved_voids() {
         let materials = blind.materials(&input, &BoardDisplay::default(), false, None, None);
         assert_eq!(
             blind.pick(ray(1.5, 1.5), &materials, Default::default()),
-            Some(SelectedObject::Zone(ObjectId(502))),
-            "blind via cut copper outside its span"
+            Some(SelectedObject::Segment(ObjectId(1))),
+            "blind vias must also leave the trace intact"
         );
     }
+}
+
+#[test]
+fn pin_holes_remain_cut_out_of_the_3d_preview() {
+    let mut input = source();
+    input.vias.clear();
+    input.pins.truncate(1);
+    input.pins[0].at = Point::new(1.5, 1.5);
+    input.pins[0].pads.clear();
+    input.pins[0].drill_shape.width = 0.4;
+    input.pins[0].drill_shape.height = 0.4;
+    input.segments.clear();
+    input.zones = vec![square_zone(501, 0.0, 3.0, false)];
+    let solid = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    let materials = solid.materials(&input, &BoardDisplay::default(), false, None, None);
+    assert!(
+        solid
+            .pick(
+                PickRay3d {
+                    origin: [1.5, 1.5, 10.0],
+                    direction: [0.0, 0.0, -1.0],
+                    length: 20.0
+                },
+                &materials,
+                Default::default()
+            )
+            .is_none()
+    );
 }
 
 #[test]

@@ -381,6 +381,7 @@ pub struct BoardRenderer {
     custom_pads: CopperRenderer,
     custom_outlines: TraceRenderer,
     drills: super::PadRenderer,
+    custom_drills: CopperRenderer,
 }
 impl BoardRenderer {
     // Only sampled by the opt-in profiler. Labels, custom pads and outlines have
@@ -428,6 +429,7 @@ impl BoardRenderer {
             custom_pads: CopperRenderer::new(custom_pads),
             custom_outlines: TraceRenderer::new(Arc::new(TraceTelemetry::default())),
             drills: super::PadRenderer::new(drills),
+            custom_drills: CopperRenderer::new(Arc::new(CopperTelemetry::default())),
         }
     }
     pub fn with_source_stroke_telemetry(mut self, telemetry: Arc<TraceTelemetry>) -> Self {
@@ -476,6 +478,11 @@ impl BoardRenderer {
                 .drills
                 .as_ref()
                 .is_none_or(|source| self.drills.is_uploaded(source))
+            && frame
+                .drills
+                .as_ref()
+                .and_then(|s| s.custom_mesh.as_ref())
+                .is_none_or(|source| self.custom_drills.is_uploaded(source))
             && frame
                 .zone_outlines
                 .as_ref()
@@ -527,7 +534,12 @@ impl NativeGpuRenderer for BoardRenderer {
             && frame
                 .drills
                 .as_ref()
-                .is_none_or(|source| self.drills.is_uploaded(source));
+                .is_none_or(|source| self.drills.is_uploaded(source))
+            && frame
+                .drills
+                .as_ref()
+                .and_then(|s| s.custom_mesh.as_ref())
+                .is_none_or(|source| self.custom_drills.is_uploaded(source));
         let outline_frame = frame.zone_outlines.as_ref().map(|tracks| {
             let mut traces = frame.traces.clone();
             traces.tracks = Arc::clone(tracks);
@@ -633,6 +645,18 @@ impl NativeGpuRenderer for BoardRenderer {
             self.drills
                 .prepare_with_budget(context, drills, &mut upload_budget)?;
         }
+        let custom_drill_ready =
+            if let Some(source) = frame.drills.as_ref().and_then(|s| s.custom_mesh.as_ref()) {
+                self.custom_drills.prepare_with_budget(
+                    context,
+                    source,
+                    allow_drill_upload,
+                    &mut upload_budget,
+                )?
+            } else {
+                self.custom_drills.reset();
+                false
+            };
         if allow_outline_upload && let Some(outline_frame) = &outline_frame {
             self.zone_outlines
                 .prepare_with_budget(context, outline_frame, &mut upload_budget)?;
@@ -1122,6 +1146,43 @@ impl NativeGpuRenderer for BoardRenderer {
                                 super::pad_pipeline::Visibility::Drills(&frame.display),
                             )?;
                         }
+                        if custom_drill_ready
+                            && frame.display.show_drills
+                            && let Some(source) = &frame.drills
+                        {
+                            let visible = |batch: &crate::copper::CopperBatch| {
+                                source
+                                    .custom
+                                    .get(batch.source_index as usize)
+                                    .is_some_and(|hole| {
+                                        let scope = (hole.source[0] != 0).then(|| {
+                                            source
+                                                .drill_scopes
+                                                .as_ref()
+                                                .and_then(|scopes| {
+                                                    scopes.get(hole.source[1] as usize)
+                                                })
+                                                .map_or(&[][..], Vec::as_slice)
+                                        });
+                                        frame.display.drill_visible(scope)
+                                    })
+                            };
+                            let mut drill_frame = traces.clone();
+                            drill_frame.net_colors = None;
+                            drill_frame.color_mode = pomelo_core::display::ColorMode::Layer;
+                            drill_frame.material_override =
+                                Some(traces.material_override.unwrap_or(frame.drill_color));
+                            drill_frame.filled = true;
+                            drill_frame.pattern = None;
+                            drill_frame.object_filter = Default::default();
+                            self.custom_drills.draw_filtered(
+                                context,
+                                &drill_frame,
+                                1.0,
+                                None,
+                                Some(&visible),
+                            )?;
+                        }
                         if pass == OverlayPass::Base
                             && let Some(label) = &label_frame
                             && self.labels.is_uploaded(&label.tracks)
@@ -1219,5 +1280,6 @@ impl NativeGpuRenderer for BoardRenderer {
         self.custom_pads.reset();
         self.custom_outlines.clear_if_cached();
         self.drills.reset();
+        self.custom_drills.reset();
     }
 }

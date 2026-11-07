@@ -73,6 +73,7 @@ fn hardware_die_pads_follow_etch_visibility_and_priority_without_reupload() {
             mirrored: false,
             drill: 0.0,
             drill_shape: DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 0.0,
                 height: 0.0,

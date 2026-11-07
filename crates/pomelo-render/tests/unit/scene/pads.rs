@@ -17,6 +17,7 @@ fn pin() -> Pin {
         mirrored: true,
         drill: 0.5,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.5,
             height: 0.5,

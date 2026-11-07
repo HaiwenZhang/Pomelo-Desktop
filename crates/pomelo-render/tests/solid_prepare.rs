@@ -269,6 +269,7 @@ fn pad_drill_stays_at_the_owner_when_copper_is_offset_and_rotated() {
                 mirrored: false,
             },
             drill: Some(DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 1.0,
                 height: 1.0,
@@ -360,6 +361,7 @@ fn a_drill_inside_a_donut_opening_does_not_restore_copper() {
             pad: &pad,
             placement: PadPlacement::default(),
             drill: Some(DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 1.0,
                 height: 1.0,
@@ -383,6 +385,7 @@ fn via() -> pomelo_core::model::Via {
         at: Point::new(10.0, 20.0),
         drill: 1.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 1.0,
             height: 1.0,
@@ -399,6 +402,94 @@ fn via() -> pomelo_core::model::Via {
         mirrored: false,
         finger: None,
     }
+}
+
+#[test]
+fn polygon_drills_cut_the_exact_area_and_plate_their_own_boundary() {
+    use pomelo_core::{
+        model::{CustomPadGeometry, DrillShape, Pad},
+        pad::PadPlacement,
+    };
+    let cancel = CancellationToken::default();
+    let ring = vec![
+        Point::new(-0.2, 0.3),
+        Point::new(0.2, 0.3),
+        Point::new(0.3, 0.2),
+        Point::new(0.3, -0.2),
+        Point::new(0.2, -0.3),
+        Point::new(-0.2, -0.3),
+        Point::new(-0.3, -0.2),
+        Point::new(-0.3, 0.2),
+    ];
+    let drill = DrillShape {
+        width: 0.6,
+        height: 0.6,
+        plated: true,
+        rectangular: false,
+        custom: Some(std::sync::Arc::new(CustomPadGeometry {
+            contours: vec![ring],
+            paths: vec![],
+        })),
+    };
+    let mut pad = Pad::circle(LayerId(0), 2.0);
+    pad.kind = pomelo_core::model::PadKind(5);
+    let solid = PreparedSolid::prepare_pad(
+        PadSolidSource {
+            object: SelectedObject::Via(ObjectId(12)),
+            net: NetId(3),
+            pad: &pad,
+            placement: PadPlacement::default(),
+            drill: Some(drill.clone()),
+        },
+        [0.0, 0.1],
+        0.0001,
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert!(
+        (top_area(&solid) - 3.66).abs() < 1e-6,
+        "the four bounding-box corners must remain copper: {}",
+        top_area(&solid)
+    );
+    let mut source = via();
+    source.drill_shape = drill;
+    let thickness = 0.01;
+    let wall = PreparedSolid::prepare_via_wall(
+        &source,
+        ViaWallSpan {
+            z: [0.0, 0.1],
+            layers: [LayerId(0), LayerId(1)],
+            plating_thickness_mm: thickness,
+        },
+        0.00001,
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    let perimeter = 4.0 * 0.4 + 4.0 * 0.1 * 2.0f64.sqrt();
+    let expected = perimeter * thickness + std::f64::consts::PI * thickness * thickness;
+    assert!(
+        (top_area(&wall) - expected).abs() < 1e-5,
+        "plating must offset the polygon, not an ellipse: {} vs {expected}",
+        top_area(&wall)
+    );
+    let body = PreparedSolid::prepare_via_body(
+        &source,
+        ViaWallSpan {
+            z: [0.0, 0.1],
+            layers: [LayerId(0), LayerId(1)],
+            plating_thickness_mm: thickness,
+        },
+        0.00001,
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert!(
+        (top_area(&body) - (0.34 + expected)).abs() < 1e-5,
+        "the preview via body must seal its center"
+    );
 }
 
 #[test]

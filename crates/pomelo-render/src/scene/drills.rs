@@ -1,6 +1,6 @@
 //! One display instance per physical drill placement, independent of copper pad layers.
 use crate::{
-    pads::{PadBatch, PadInstance, PadLimits, PreparedPads},
+    pads::{CustomPadInstance, PadBatch, PadInstance, PadLimits, PreparedPads},
     split_position,
     tracks::PrepareError,
 };
@@ -11,7 +11,7 @@ use pomelo_core::{
 };
 
 pub struct PreparedDrills {
-    /// Instances use the analytic pad ABI. Source category/index resolves drill layer scope.
+    /// Analytic instances and exact custom coverage share source category/index layer scopes.
     pub geometry: PreparedPads,
 }
 impl PreparedDrills {
@@ -40,8 +40,17 @@ impl PreparedDrills {
                 .saturating_add(via.pads.len())
                 .saturating_add(via.pads.iter().filter(|pad| pad.backdrill).count())
         });
-        let bytes = count
+        let custom_count = pins
+            .iter()
+            .filter(|p| p.drill_shape.custom.is_some())
+            .count()
+            + vias
+                .iter()
+                .filter(|p| p.drill_shape.custom.is_some())
+                .count();
+        let bytes = (count - custom_count)
             .saturating_mul(std::mem::size_of::<PadInstance>())
+            .saturating_add(custom_count.saturating_mul(std::mem::size_of::<CustomPadInstance>()))
             .saturating_add(std::mem::size_of::<PadBatch>())
             .saturating_add(scope_layers.saturating_mul(std::mem::size_of::<LayerId>()))
             .saturating_add(
@@ -56,7 +65,11 @@ impl PreparedDrills {
         }
         let mut analytic = Vec::new();
         analytic
-            .try_reserve_exact(count)
+            .try_reserve_exact(count - custom_count)
+            .map_err(|_| PrepareError::Allocation)?;
+        let mut custom = Vec::new();
+        custom
+            .try_reserve_exact(custom_count)
             .map_err(|_| PrepareError::Allocation)?;
         let owners = pins
             .iter()
@@ -68,7 +81,7 @@ impl PreparedDrills {
                     pin.at,
                     pin.angle,
                     pin.mirrored,
-                    pin.drill_shape,
+                    &pin.drill_shape,
                     0,
                     index,
                 )
@@ -80,7 +93,7 @@ impl PreparedDrills {
                     via.at,
                     via.angle,
                     via.mirrored,
-                    via.drill_shape,
+                    &via.drill_shape,
                     1,
                     index,
                 )
@@ -106,6 +119,22 @@ impl PreparedDrills {
                 mirrored,
             };
             let bounds = pad.bounds(placement).ok_or(PrepareError::Invalid(object))?;
+            if pad.custom.is_some() {
+                custom.push(CustomPadInstance {
+                    object,
+                    net,
+                    placement,
+                    pad,
+                    bounds,
+                    source: [
+                        category,
+                        index as u32,
+                        0,
+                        u32::from(mirrored) | (u32::from(drill.plated) << 3),
+                    ],
+                });
+                continue;
+            }
             let (sin, cos) = angle.sin_cos();
             let instance = PadInstance {
                 center: split_point(at),
@@ -225,18 +254,33 @@ impl PreparedDrills {
             cut_layers.dedup();
             backdrill_scopes.push(cut_layers);
         }
-        Ok(Self {
-            geometry: PreparedPads {
-                memory_reservation: None,
-                analytic,
-                custom: vec![],
-                batches,
-                custom_mesh: None,
-                custom_outlines: None,
-                drill_scopes: Some(std::sync::Arc::new(scopes)),
-                backdrill_scopes: Some(std::sync::Arc::new(backdrill_scopes)),
-            },
-        })
+        let mut geometry = PreparedPads {
+            memory_reservation: None,
+            analytic,
+            custom,
+            batches,
+            custom_mesh: None,
+            custom_outlines: None,
+            drill_scopes: Some(std::sync::Arc::new(scopes)),
+            backdrill_scopes: Some(std::sync::Arc::new(backdrill_scopes)),
+        };
+        if !geometry.custom.is_empty() {
+            geometry.custom_mesh = Some(std::sync::Arc::new(geometry.build_custom_meshes(
+                crate::copper::CopperLimits {
+                    max_bytes: limits.max_bytes.saturating_sub(geometry.allocation_bytes()),
+                    ..Default::default()
+                },
+                &Default::default(),
+                cancellation,
+            )?));
+        }
+        if geometry.allocation_bytes() > limits.max_bytes {
+            return Err(PrepareError::Limit {
+                actual: geometry.allocation_bytes(),
+                limit: limits.max_bytes,
+            });
+        }
+        Ok(Self { geometry })
     }
 }
 fn split_point(point: Point) -> [f32; 4] {

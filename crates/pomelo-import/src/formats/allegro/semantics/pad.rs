@@ -256,7 +256,7 @@ impl<'a> PadDecoder<'a> {
     ) -> Result<DrillShape, ImportError> {
         context.check_cancelled()?;
         if let Some(drill) = self.drills.get(&stack.key) {
-            return Ok(*drill);
+            return Ok(drill.clone());
         }
         self.budget.check(128, self.offset(stack.key))?;
         let mut width = if stack.slot_y > 0 {
@@ -278,12 +278,13 @@ impl<'a> PadDecoder<'a> {
             std::mem::swap(&mut width, &mut height);
         }
         let drill = DrillShape {
+            custom: None,
             rectangular: false,
             width: f64::from(width) * self.scale,
             height: f64::from(height) * self.scale,
             plated: stack.plated,
         };
-        self.drills.insert(stack.key, drill);
+        self.drills.insert(stack.key, drill.clone());
         self.budget.commit(128);
         Ok(drill)
     }

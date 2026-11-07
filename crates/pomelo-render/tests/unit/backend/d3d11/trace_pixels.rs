@@ -30,6 +30,8 @@ const SIDE: u32 = 128;
 
 #[path = "appearance_pixels.rs"]
 mod appearance;
+#[path = "custom_drill_pixels.rs"]
+mod custom_drill;
 #[path = "object_filter_pixels.rs"]
 mod object_filter;
 #[path = "pattern_pixels.rs"]
@@ -138,6 +140,7 @@ fn hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache() {
         paths: vec![],
     }));
     let drill = DrillShape {
+        custom: None,
         rectangular: false,
         width: 0.0,
         height: 0.0,
@@ -153,7 +156,7 @@ fn hardware_custom_pad_outlines_preserve_holes_owner_kind_and_cache() {
         angle: 0.0,
         mirrored: false,
         drill: 0.0,
-        drill_shape: drill,
+        drill_shape: drill.clone(),
         pads: vec![pad],
         stackup_region: None,
         die: None,
@@ -1470,6 +1473,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         mirrored: false,
         drill: 0.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.0,
             height: 0.0,
@@ -1483,6 +1487,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
     drill_pin.at = Point::new(15.0, 15.0);
     drill_pin.angle = std::f64::consts::FRAC_PI_2;
     drill_pin.drill_shape = DrillShape {
+        custom: None,
         rectangular: false,
         width: 2.0,
         height: 1.0,
@@ -1703,7 +1708,7 @@ fn hardware_copper_overlapping_holes_preserve_underlying_trace() {
         net: pin.net,
         at: pin.at,
         drill: 0.0,
-        drill_shape: pin.drill_shape,
+        drill_shape: pin.drill_shape.clone(),
         padstack: ObjectId(51),
         padstack_name: String::new(),
         start_layer: Some(LayerId(2)),

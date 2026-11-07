@@ -2,6 +2,7 @@
 mod binary;
 mod geometry;
 mod pads;
+mod paths;
 mod text;
 use super::{
     ParsedBoard, SourceDrawingLayer, SourceSpecialLayer, SourceZone, geometry as shared,
@@ -33,16 +34,14 @@ struct Component {
     reference: String,
     at: Point,
     angle: f64,
+    mirrored: bool,
 }
 impl Component {
     fn read(group: &Object) -> Result<Self, ImportError> {
         let transform = text::statement(group.field(2)?.text()?)?.1;
         let t = transform.call()?;
-        if t.name != "f"
-            || geometry::quantity(t.arg("s")?, false)? != 1.0
-            || !matches!(t.arg("m")?, text::Value::Bool(false))
-        {
-            return Err(error("Unsupported component scale or mirror transform"));
+        if t.name != "f" || geometry::quantity(t.arg("s")?, false)? != 1.0 {
+            return Err(error("Unsupported component scale transform"));
         }
         let at = Point::new(
             geometry::quantity(t.arg("x")?, false)? * 1000.0,
@@ -56,11 +55,18 @@ impl Component {
             reference: group.field(1)?.text()?.to_owned(),
             at,
             angle,
+            mirrored: match t.arg("m")? {
+                text::Value::Bool(value) => *value,
+                _ => return Err(error("Invalid component mirror flag")),
+            },
         })
     }
     fn place(&self, local: Point) -> Point {
-        let p = local.rotate(self.angle);
+        let p = self.vector(local);
         Point::new(self.at.x + p.x, self.at.y + p.y)
+    }
+    fn vector(&self, local: Point) -> Point {
+        Point::new(local.x, if self.mirrored { -local.y } else { local.y }).rotate(self.angle)
     }
 }
 fn info(p: &Object) -> Result<Info, ImportError> {
@@ -98,10 +104,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             cells.push(c.object(Some(3))?);
         }
     }
-    if cells.len() != 1 {
-        return Err(error("Only one board cell is supported"));
-    }
-    let cell = cells[0];
+    let cell = *cells.first().ok_or_else(|| error("Missing board cell"))?;
     let metadata = text::read(cell.field(0)?.text()?)?;
     if metadata.prop("dn")?.text()?.is_empty() {
         return Err(error("Unnamed board cell"));
@@ -112,6 +115,12 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     let mut layer_ids = HashMap::new();
     let mut source_ids = HashSet::new();
     let mut output = scene_builder::new_parsed_board(archive.version);
+    if cells.len() > 1 {
+        output.diagnostics.push(format!(
+            "HFSS archive contains {} cells; displaying the first cell '{}'; other cells are not loaded",
+            cells.len(), metadata.prop("dn")?.text()?
+        ));
+    }
     let colors = [
         "#58b5ed", "#83ce94", "#edb963", "#ba8bec", "#eb819d", "#54c7bd", "#a5b8df", "#e18d61",
     ];
@@ -156,6 +165,9 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         layers.push(Layer { id, name, kind });
     }
     if layer_ids.is_empty() {
+        if layout.field(4)?.array()?.is_empty() && layout.field(5)?.array()?.is_empty() {
+            return Err(ImportError::NoGeometry);
+        }
         return Err(error("No copper layers"));
     }
     let mut net_ids = HashMap::new();
@@ -171,8 +183,12 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     let mut components = HashMap::new();
     for value in layout.field(6)?.array()? {
         context.check_cancelled()?;
-        let c = value.object(Some(22))?;
-        let group = c.field(0)?.object(Some(21))?;
+        let c = value.object(None)?;
+        let group = if c.schema == 21 {
+            c
+        } else {
+            value.object(Some(22))?.field(0)?.object(Some(21))?
+        };
         let base = group.field(0)?.object(Some(10))?;
         if components
             .insert(
@@ -190,7 +206,19 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     for value in layout.field(4)?.array()? {
         context.check_cancelled()?;
         let p = value.object(None)?;
-        if !(12..=16).contains(&p.schema) {
+        if p.schema == 39 {
+            if !output
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("point terminals"))
+            {
+                output
+                    .diagnostics
+                    .push("HFSS simulation point terminals are not displayed".into());
+            }
+            continue;
+        }
+        if !matches!(p.schema, 12..=17 | 51) {
             return Err(error("Unsupported primitive schema"));
         }
         let i = info(p)?;
@@ -202,10 +230,43 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         if primitive_ids.insert(i.id, index).is_some() {
             return Err(error("Duplicate primitive"));
         }
-        if i.parent != -1 {
-            voids.entry(i.parent).or_default().push(index);
-        }
         primitives.push((p, i));
+    }
+    for (index, (_, child)) in primitives
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, i))| i.parent != -1)
+    {
+        let parent_index = *primitive_ids
+            .get(&child.parent)
+            .ok_or_else(|| error("Missing void parent"))?;
+        let (shape, parent) = &primitives[parent_index];
+        let parent_id = if parent.layer == child.layer {
+            child.parent
+        } else {
+            // Copied layer polygons can retain the original layer's parent ID.
+            // Rebind only when the declared parent has one identical peer on this layer.
+            let mut peers = primitives.iter().filter(|(p, i)| {
+                i.parent == -1
+                    && i.layer == child.layer
+                    && i.component == child.component
+                    && p.schema == shape.schema
+                    && p.fields[1..] == shape.fields[1..]
+            });
+            let (_, peer) = peers.next().ok_or_else(|| error("Mismatched void layer"))?;
+            if peers.next().is_some() {
+                return Err(error("Ambiguous copied void parent"));
+            }
+            if !output
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("copied void parent"))
+            {
+                output.diagnostics.push("HFSS copied void parent references were matched to identical polygons on their own layers".into());
+            }
+            peer.id
+        };
+        voids.entry(parent_id).or_default().push(index);
     }
     for (&parent, children) in &voids {
         let parent = *primitive_ids
@@ -213,11 +274,11 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             .ok_or_else(|| error("Missing void parent"))?;
         let i = &primitives[parent].1;
         if i.parent != -1
-            || children.iter().any(|&c| {
-                primitives[c].1.layer != i.layer || primitives[c].1.component != i.component
-            })
+            || children
+                .iter()
+                .any(|&c| primitives[c].1.component != i.component)
         {
-            return Err(error("Nested void or mismatched void layer"));
+            return Err(error("Nested void or mismatched void component"));
         }
     }
     let mut next = 1u32;
@@ -238,7 +299,8 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         let place = |mut path: Vec<Segment>| {
             if let Some(component) = component {
                 for edge in &mut path {
-                    *edge = shared::transform(edge, component.at, component.angle, false);
+                    *edge =
+                        shared::transform(edge, component.at, component.angle, component.mirrored);
                 }
             }
             path
@@ -248,6 +310,18 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             .find(|l| l.id == i.layer)
             .ok_or_else(|| error("Missing source layer"))?;
         let net = net(i.net, &net_ids)?;
+        if p.schema == 17 {
+            if !output
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("text annotations"))
+            {
+                output
+                    .diagnostics
+                    .push("HFSS text annotations are not displayed".into());
+            }
+            continue;
+        }
         if p.schema == 16 {
             if source.kind != "wirebond" || voids.contains_key(&i.id) {
                 return Err(error("Invalid bond wire layer/geometry"));
@@ -290,10 +364,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             }
             continue;
         }
-        if matches!(
-            source.kind.as_str(),
-            "outline" | "silkscreen" | "soldermask"
-        ) {
+        if !layer_ids.contains_key(&i.layer) {
             let mut paths = Vec::new();
             if p.schema == 14 {
                 let width = p.field(4)?.quantity()? * 1000.0;
@@ -309,7 +380,9 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                     .collect();
                 paths.push(path);
             } else {
-                paths.push(place(geometry::primitive(p)?));
+                for path in self::paths::outlines(p, context)? {
+                    paths.push(place(path));
+                }
                 for &hole in voids.get(&i.id).map(Vec::as_slice).unwrap_or_default() {
                     paths.push(place(geometry::primitive(primitives[hole].0)?));
                 }
@@ -360,7 +433,12 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                     segments,
                     text_ids: vec![],
                 });
-                if p.schema != 14 && output.diagnostics.is_empty() {
+                if p.schema != 14
+                    && !output
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.contains("non-copper filled graphics"))
+                {
                     output
                         .diagnostics
                         .push("HFSS non-copper filled graphics are rendered as boundaries".into());
@@ -374,15 +452,14 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                 source.name
             ))
         })?;
-        if p.schema == 14 {
-            if !(1..=3).all(|field| {
+        if p.schema == 14
+            && (1..=3).all(|field| {
                 p.field(field)
                     .and_then(|v| v.integer())
                     .is_ok_and(|v| v == 0)
-            }) || voids.contains_key(&i.id)
-            {
-                return Err(error("Nonround/voided trace not supported"));
-            }
+            })
+            && !voids.contains_key(&i.id)
+        {
             let width = p.field(4)?.quantity()? * 1000.0;
             if width < 0.0 {
                 return Err(error("Negative trace width"));
@@ -399,31 +476,43 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
                 output.scene.segments.push(s);
             }
         } else {
-            let mut paths = vec![place(geometry::primitive(p)?)];
-            for &hole in voids.get(&i.id).map(Vec::as_slice).unwrap_or_default() {
-                paths.push(place(geometry::primitive(primitives[hole].0)?));
-            }
-            if paths[0].is_empty() {
-                return Err(error("Empty copper area"));
-            }
-            let id = ObjectId(next);
-            next += 1;
-            for path in &mut paths {
-                for s in path {
-                    s.id = id;
-                    s.track_id = id;
-                    s.layer = layer;
-                    s.net = net;
+            let outlines = self::paths::outlines(p, context)?;
+            let regions = if p.schema == 51 {
+                outlines.into_iter().map(|p| vec![p]).collect()
+            } else {
+                vec![outlines]
+            };
+            for region in regions {
+                let mut paths: Vec<_> = region.into_iter().map(&place).collect();
+                for &hole in voids.get(&i.id).map(Vec::as_slice).unwrap_or_default() {
+                    paths.extend(
+                        self::paths::outlines(primitives[hole].0, context)?
+                            .into_iter()
+                            .map(&place),
+                    );
                 }
+                if paths.is_empty() || paths[0].is_empty() {
+                    return Err(error("Empty copper area"));
+                }
+                let id = ObjectId(next);
+                next += 1;
+                for path in &mut paths {
+                    for s in path {
+                        s.id = id;
+                        s.track_id = id;
+                        s.layer = layer;
+                        s.net = net;
+                    }
+                }
+                let rings = shared::rings(&paths, context)?;
+                output.zones.push(SourceZone {
+                    id,
+                    layer,
+                    net,
+                    paths,
+                    rings,
+                });
             }
-            let rings = shared::rings(&paths, context)?;
-            output.zones.push(SourceZone {
-                id,
-                layer,
-                net,
-                paths,
-                rings,
-            });
         }
     }
     pads::build(

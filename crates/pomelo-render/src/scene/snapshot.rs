@@ -838,14 +838,14 @@ pub fn svg(
             let drills = scene
                 .pins
                 .iter()
-                .map(|pin| (pin.at, pin.angle, pin.mirrored, pin.drill_shape, None))
+                .map(|pin| (pin.at, pin.angle, pin.mirrored, &pin.drill_shape, None))
                 .chain(scene.vias.iter().map(|via| {
                     let scope: Vec<_> = via.pads.iter().map(|pad| pad.layer).collect();
                     (
                         via.at,
                         via.angle,
                         via.mirrored,
-                        via.drill_shape,
+                        &via.drill_shape,
                         Some(scope),
                     )
                 }));

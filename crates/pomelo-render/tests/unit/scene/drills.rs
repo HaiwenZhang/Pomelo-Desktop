@@ -17,6 +17,7 @@ pub(crate) fn backdrilled_via() -> Via {
         at: Point::new(10.0, 20.0),
         drill: 2.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 2.0,
             height: 2.0,
@@ -150,6 +151,7 @@ fn pin(width: f64, height: f64) -> Pin {
         mirrored: false,
         drill: width,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width,
             height,
@@ -196,5 +198,66 @@ fn absent_drill_is_skipped_and_invalid_geometry_is_reported() {
             &CancellationToken::default()
         ),
         Err(PrepareError::Invalid(ObjectId(9)))
+    ));
+}
+
+#[test]
+fn custom_drill_builds_a_transformed_coverage_mesh_without_an_analytic_substitute() {
+    let cancel = CancellationToken::default();
+    let mut pin = pin(2.0, 2.0);
+    pin.drill_shape.custom = Some(std::sync::Arc::new(pomelo_core::model::CustomPadGeometry {
+        contours: vec![vec![
+            Point::new(-1.0, -1.0),
+            Point::new(1.0, -1.0),
+            Point::new(-1.0, 1.0),
+        ]],
+        paths: vec![],
+    }));
+    pin.mirrored = true;
+    let prepared = PreparedDrills::build(
+        std::slice::from_ref(&pin),
+        &[],
+        PadLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert!(prepared.geometry.analytic.is_empty());
+    assert_eq!(prepared.geometry.custom.len(), 1);
+    let source = &prepared.geometry.custom[0];
+    assert_eq!(source.source, [0, 0, 0, 9]);
+    let hole = &prepared.geometry.custom_mesh.as_ref().unwrap().batches[0];
+    assert_eq!(
+        hole.selected_object,
+        pomelo_core::selection::SelectedObject::Pin(pin.id)
+    );
+    let inside = source
+        .pad
+        .to_world(Point::new(-0.5, -0.5), source.placement);
+    let outside = source.pad.to_world(Point::new(0.5, 0.5), source.placement);
+    assert_eq!(
+        source
+            .pad
+            .custom_covers_fill(inside, source.placement, &cancel)
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        source
+            .pad
+            .custom_covers_fill(outside, source.placement, &cancel)
+            .unwrap(),
+        Some(false)
+    );
+    assert!(matches!(
+        PreparedDrills::build(
+            &[pin],
+            &[],
+            PadLimits {
+                max_bytes: 128,
+                ..Default::default()
+            },
+            &cancel
+        ),
+        Err(PrepareError::Limit { .. })
     ));
 }

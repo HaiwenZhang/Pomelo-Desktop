@@ -251,14 +251,17 @@ pub struct CustomPadGeometry {
     pub paths: Vec<Vec<Segment>>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrillShape {
     pub width: f64,
     pub height: f64,
     pub plated: bool,
-    /// A sharp-cornered rectangle; otherwise the hole is circular or a round-ended slot.
+    /// A sharp-cornered rectangle; otherwise circular or a round-ended slot when custom is absent.
     #[serde(default)]
     pub rectangular: bool,
+    /// Exact source-space hole boundaries; width and height remain its bounding dimensions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<Shared<CustomPadGeometry>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

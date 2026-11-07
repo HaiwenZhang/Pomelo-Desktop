@@ -102,6 +102,7 @@ fn hardware_category_colors_cover_analytic_custom_copper_text_and_drills_without
             }));
         }
         let drill_shape = DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.8,
             height: 0.8,
@@ -117,7 +118,7 @@ fn hardware_category_colors_cover_analytic_custom_copper_text_and_drills_without
             angle: 0.0,
             mirrored: false,
             drill: 0.8,
-            drill_shape,
+            drill_shape: drill_shape.clone(),
             pads: vec![pad.clone()],
             stackup_region: None,
             die: None,

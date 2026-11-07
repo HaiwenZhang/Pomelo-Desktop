@@ -36,6 +36,7 @@ fn index_with_pad(angle: f64, width: f64, height: f64) -> LabelIndex {
             mirrored: false,
             drill: 0.0,
             drill_shape: DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 0.0,
                 height: 0.0,
@@ -500,6 +501,7 @@ fn active_scope_filters_track_copper_and_via_names_not_just_pin_pads() {
         at: Point::default(),
         drill: 0.2,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.2,
             height: 0.2,
@@ -645,6 +647,7 @@ fn embedded_name_filter_does_not_hide_independent_drill_span_labels() {
         at: Point::default(),
         drill: 0.2,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.2,
             height: 0.2,

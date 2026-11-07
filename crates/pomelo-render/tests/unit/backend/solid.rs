@@ -161,7 +161,7 @@ pub(crate) fn verify(
             .all(|p| *p == [0, 255, 0, 255]),
         "hidden materials leave background intact"
     );
-    // EDB stores physical drills independently of copper-zone voids.
+    // Via drill metadata must not open the center of the solid 3D preview.
     let mut drilled = board;
     for zone in &mut drilled.zones {
         zone.mesh =
@@ -173,6 +173,7 @@ pub(crate) fn verify(
         at: Point::default(),
         drill: 2.0,
         drill_shape: pomelo_core::model::DrillShape {
+            custom: None,
             width: 2.0,
             height: 2.0,
             plated: true,
@@ -215,10 +216,10 @@ pub(crate) fn verify(
     };
     pipeline = None;
     let pixels = render(&mut pipeline, &frame, false, 1.0);
-    assert_eq!(
-        sample(&pixels, 64, 64),
-        [0, 255, 0, 255],
-        "copper sealed an independently stored via hole"
+    let center = sample(&pixels, 64, 64);
+    assert!(
+        center[0] > 180 && center[1] == 0 && center[2] == 0,
+        "the via center must render solid copper: {center:?}"
     );
     assert!(
         sample(&pixels, 90, 64)[0] > 180,

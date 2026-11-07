@@ -22,6 +22,7 @@ native-gpu = [
 pomelo-core.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
+clipper2-rust.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sysinfo = { version = "=0.31.4", default-features = false, features = ["system"] }

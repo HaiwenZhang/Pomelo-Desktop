@@ -137,17 +137,21 @@ pub(super) fn primitive(p: &Object) -> Result<Vec<Segment>, ImportError> {
             Ok(vec![shared::edge(a, a, 0.0, Some(Point::new(x, y)), false)])
         }
         12 => {
-            if p.field(1)?.integer()? != 2 {
-                return Err(error("Unverified rectangle representation"));
-            }
             let x0 = p.field(2)?.quantity()? * 1000.0;
             let y0 = p.field(3)?.quantity()? * 1000.0;
             let x1 = p.field(4)?.quantity()? * 1000.0;
             let y1 = p.field(5)?.quantity()? * 1000.0;
             let corner = p.field(6)?.quantity()? * 1000.0;
             let angle = p.field(7)?.quantity()?;
-            let width = (x1 - x0).abs();
-            let height = (y1 - y0).abs();
+            let (center, width, height) = match p.field(1)?.integer()? {
+                1 => (Point::new(x0, y0), x1, y1),
+                2 => (
+                    Point::new((x0 + x1) * 0.5, (y0 + y1) * 0.5),
+                    (x1 - x0).abs(),
+                    (y1 - y0).abs(),
+                ),
+                _ => return Err(error("Unknown rectangle representation")),
+            };
             if width <= 0.0 || height <= 0.0 || corner < 0.0 || corner > width.min(height) * 0.5 {
                 return Err(error("Invalid rectangle dimensions"));
             }
@@ -158,14 +162,7 @@ pub(super) fn primitive(p: &Object) -> Result<Vec<Segment>, ImportError> {
             Ok(shared::pad_paths(&pad)
                 .remove(0)
                 .iter()
-                .map(|s| {
-                    shared::transform(
-                        s,
-                        Point::new((x0 + x1) * 0.5, (y0 + y1) * 0.5),
-                        angle,
-                        false,
-                    )
-                })
+                .map(|s| shared::transform(s, center, angle, false))
                 .collect())
         }
         _ => Err(error("Primitive has no supported outline")),
@@ -226,7 +223,7 @@ pub(super) fn standard(call: &Call) -> Result<Standard, ImportError> {
         "No" => 0,
         "Cir" | "Sq" => 1,
         "Rct" => 2,
-        "Ov" => 3,
+        "Ov" | "Blt" => 3,
         _ => return Err(error("Nonstandard pad shape")),
     };
     let sizes = nested(call, "Szs")?
@@ -252,6 +249,36 @@ pub(super) fn pad(
     layer: LayerId,
     context: &ImportContext<'_>,
 ) -> Result<Option<Pad>, ImportError> {
+    if call.arg("shp")?.text()? == "NPl" {
+        let sizes = nested(call, "Szs")?;
+        if sizes.args.len() != 2 {
+            return Err(error("Invalid regular polygon pad dimensions"));
+        }
+        let diameter = quantity(&sizes.args[0].1, false)? * 1000.0;
+        let count = quantity(&sizes.args[1].1, false)?;
+        if diameter <= 0.0 || count.fract() != 0.0 || !(3.0..=4096.0).contains(&count) {
+            return Err(error("Invalid regular polygon pad dimensions"));
+        }
+        let angle = quantity(call.arg("R")?, true)?;
+        let points: Vec<_> = (0..count as usize)
+            .map(|i| {
+                let a = angle + (i as f64 + 0.5) * std::f64::consts::TAU / count;
+                Point::new(a.cos() * diameter * 0.5, a.sin() * diameter * 0.5)
+            })
+            .collect();
+        let path = points
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| shared::edge(a, points[(i + 1) % points.len()], 0.0, None, false))
+            .collect();
+        let mut pad = shared::custom(vec![path], context)?;
+        pad.layer = layer;
+        pad.offset = Point::new(
+            quantity(call.arg("X")?, false)? * 1000.0,
+            quantity(call.arg("Y")?, false)? * 1000.0,
+        );
+        return Ok(Some(pad));
+    }
     if call.arg("shp")?.text()? == "Ply" {
         let poly = nested(call, "ply")?;
         if !matches!(poly.arg("cl")?, Value::Bool(true)) {
@@ -308,8 +335,40 @@ pub(super) fn pad(
     });
     pad.corner = radius;
     pad.offset = value.offset;
-    if value.angle != 0.0 && pad.kind != PadKind::CIRCLE {
-        let paths = shared::pad_paths(&pad)
+    if value.shape == "Blt" || (value.angle != 0.0 && pad.kind != PadKind::CIRCLE) {
+        let mut outlines = shared::pad_paths(&pad);
+        if value.shape == "Blt" {
+            // Bullet pads have two rounded corners at +X and square corners at -X.
+            let w = width * 0.5;
+            let h = height * 0.5;
+            let r = radius;
+            if r > w.min(h) {
+                return Err(error("Bullet corner exceeds dimensions"));
+            }
+            let v = [
+                Point::new(w, -h + r),
+                Point::new(w, h - r),
+                Point::new(w - r, h),
+                Point::new(-w, h),
+                Point::new(-w, -h),
+                Point::new(w - r, -h),
+            ];
+            outlines = vec![
+                v.iter()
+                    .enumerate()
+                    .map(|(i, &a)| {
+                        let center = match i {
+                            1 if r > 0.0 => Some(Point::new(w - r, h - r)),
+                            5 if r > 0.0 => Some(Point::new(w - r, -h + r)),
+                            _ => None,
+                        };
+                        shared::edge(a, v[(i + 1) % v.len()], 0.0, center, false)
+                    })
+                    .filter(|s| s.a != s.b)
+                    .collect(),
+            ];
+        }
+        let paths = outlines
             .into_iter()
             .map(|p| {
                 p.iter()
@@ -330,6 +389,7 @@ pub(super) struct Drill {
     pub height: f64,
     pub angle: f64,
     pub offset: Point,
+    pub custom: Option<std::sync::Arc<pomelo_core::model::CustomPadGeometry>>,
 }
 pub(super) fn drill(call: &Call, context: &ImportContext<'_>) -> Result<Drill, ImportError> {
     if call.arg("shp")?.text()? != "Ply" {
@@ -360,50 +420,46 @@ pub(super) fn drill(call: &Call, context: &ImportContext<'_>) -> Result<Drill, I
             height,
             angle,
             offset: s.offset,
+            custom: None,
         });
     }
     let shape =
         pad(call, LayerId::UNASSIGNED, context)?.ok_or_else(|| error("Empty polygon drill"))?;
-    let path = shape
+    let bounds = shape
+        .bounds(pomelo_core::pad::PadPlacement::default())
+        .ok_or_else(|| error("Invalid polygon drill bounds"))?;
+    if bounds.max.x <= bounds.min.x || bounds.max.y <= bounds.min.y {
+        return Err(error("Degenerate polygon drill"));
+    }
+    let center = bounds.center();
+    let geometry = shape
         .custom
         .as_ref()
-        .and_then(|c| c.paths.first())
-        .ok_or_else(|| error("Missing polygon drill path"))?;
-    let arcs: Vec<_> = path.iter().filter(|s| s.arc.is_some()).collect();
-    let lines: Vec<_> = path.iter().filter(|s| s.arc.is_none()).collect();
-    if path.len() != 4 || arcs.len() != 2 || lines.len() != 2 {
-        return Err(error("Unverified polygon drill"));
-    }
-    let a = arcs[0].arc.ok_or_else(|| error("Missing drill arc"))?;
-    let b = arcs[1].arc.ok_or_else(|| error("Missing drill arc"))?;
-    let dx = b.center.x - a.center.x;
-    let dy = b.center.y - a.center.y;
-    let length = dx.hypot(dy);
-    if length == 0.0
-        || (a.radius - b.radius).abs() > 1e-8
-        || [a, b]
-            .iter()
-            .any(|a| (a.sweep.abs() - std::f64::consts::PI).abs() > 1e-8)
-        || lines
-            .iter()
-            .any(|s| (s.a.distance(s.b) - length).abs() > 1e-8)
-        || arcs.iter().any(|s| {
-            s.arc.is_some_and(|a| {
-                (((s.a.x - a.center.x) * dx + (s.a.y - a.center.y) * dy) / length).abs() > 1e-8
-            })
+        .ok_or_else(|| error("Missing polygon drill geometry"))?;
+    let paths = geometry
+        .paths
+        .iter()
+        .map(|path| {
+            path.iter()
+                .map(|edge| {
+                    shared::transform(
+                        edge,
+                        Point::new(shape.offset.x - center.x, shape.offset.y - center.y),
+                        0.0,
+                        false,
+                    )
+                })
+                .collect()
         })
-    {
-        return Err(error("Invalid polygon slot geometry"));
-    }
+        .collect();
+    let centered = shared::custom(paths, context)?;
     Ok(Drill {
         rectangular: false,
-        width: length + 2.0 * a.radius,
-        height: 2.0 * a.radius,
-        angle: dy.atan2(dx),
-        offset: Point::new(
-            (a.center.x + b.center.x) * 0.5 + shape.offset.x,
-            (a.center.y + b.center.y) * 0.5 + shape.offset.y,
-        ),
+        width: bounds.max.x - bounds.min.x,
+        height: bounds.max.y - bounds.min.y,
+        angle: 0.0,
+        offset: center,
+        custom: centered.custom,
     })
 }
 
@@ -459,6 +515,27 @@ mod tests {
     }
 
     #[test]
+    fn center_width_height_rectangles_keep_their_center_and_size() {
+        use super::super::binary::Value as B;
+        let rectangle = Object {
+            schema: 12,
+            fields: vec![
+                B::Null,
+                B::Number(1.0),
+                B::Quantity(0.024),
+                B::Quantity(-0.0015),
+                B::Quantity(0.006),
+                B::Quantity(0.003),
+                B::Quantity(0.0),
+                B::Quantity(0.0),
+            ],
+        };
+        let bounds = pomelo_core::geometry::path_bounds(&primitive(&rectangle).unwrap()).unwrap();
+        assert_eq!(bounds.min, Point::new(21.0, -3.0));
+        assert_eq!(bounds.max, Point::new(27.0, 0.0));
+    }
+
+    #[test]
     fn explicit_quantities_convert_units_and_reject_expressions() {
         assert!((quantity(&Value::Text("10mil".into()), false).unwrap() - 0.000254).abs() < 1e-12);
         assert!(
@@ -501,5 +578,46 @@ mod tests {
         let bounds = pomelo_core::geometry::path_bounds(&pad.custom.unwrap().paths[0]).unwrap();
         assert!((bounds.max.x - bounds.min.x - 2.0).abs() < 1e-9);
         assert!((bounds.max.y - bounds.min.y - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn arbitrary_polygon_drills_preserve_edges_offsets_rotation_and_coverage() {
+        let cancel = CancellationToken::default();
+        let context = ImportContext {
+            cancellation: &cancel,
+            progress: &|_| {},
+        };
+        let call = super::super::text::statement(
+            "hle(shp='Ply', Szs(), ply(cw=false, cl=true, pt(U='mm', x=0, y=0, x=0.4, y=0, x=0, y=0.2)), X='0.1mm', Y='0.2mm', R='90deg')"
+        ).unwrap().1;
+        let hole = drill(call.call().unwrap(), &context).unwrap();
+        let custom = hole.custom.unwrap();
+        assert_eq!(custom.paths[0].len(), 3);
+        assert!((hole.width - 0.2).abs() < 1e-12 && (hole.height - 0.4).abs() < 1e-12);
+        let mut shape = Pad::circle(LayerId(0), hole.width);
+        shape.height = hole.height;
+        shape.custom = Some(custom);
+        let owner = pomelo_core::pad::PadPlacement {
+            at: hole.offset,
+            ..Default::default()
+        };
+        assert_eq!(
+            shape
+                .custom_covers_fill(Point::new(0.05, 0.25), owner, &cancel)
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            shape
+                .custom_covers_fill(Point::new(0.05, 0.55), owner, &cancel)
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            shape
+                .custom_covers_fill(Point::new(-0.15, 0.25), owner, &cancel)
+                .unwrap(),
+            Some(false)
+        );
     }
 }

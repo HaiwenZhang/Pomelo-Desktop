@@ -1,4 +1,4 @@
-//! Physical holes are independent of copper connectivity and saved zone voids.
+//! Pin holes remain physical cutouts. Vias are rendered as solid bodies in the 3D preview.
 use super::super::solid::{outline_rings, ring_bytes};
 use super::*;
 use pomelo_core::model::{Bounds, Pad};
@@ -14,15 +14,6 @@ pub(super) fn count(board: &BoardScene) -> usize {
         .iter()
         .filter(|pin| pin.drill_shape.pad().is_some())
         .count()
-        .saturating_add(
-            board
-                .vias
-                .iter()
-                .filter(|via| {
-                    via.start_layer.zip(via.end_layer).is_some() && via.drill_shape.pad().is_some()
-                })
-                .count(),
-        )
 }
 pub(super) fn build(
     board: &BoardScene,
@@ -44,7 +35,7 @@ pub(super) fn build(
         .map_err(|_| SolidError::Allocation)?;
     let pins = board.pins.iter().map(|p| {
         (
-            p.drill_shape,
+            &p.drill_shape,
             PadPlacement {
                 at: p.at,
                 angle: p.angle,
@@ -53,18 +44,7 @@ pub(super) fn build(
             None,
         )
     });
-    let vias = board.vias.iter().filter_map(|v| {
-        Some((
-            v.drill_shape,
-            PadPlacement {
-                at: v.at,
-                angle: v.angle,
-                mirrored: v.mirrored,
-            },
-            Some(v.start_layer.zip(v.end_layer)?),
-        ))
-    });
-    for (drill, placement, layers) in pins.chain(vias) {
+    for (drill, placement, layers) in pins {
         cancel.check()?;
         if let Some(pad) = drill.pad() {
             let bounds = pad
@@ -163,6 +143,7 @@ mod tests {
                 mirrored: false,
                 drill: 0.0,
                 drill_shape: DrillShape {
+                    custom: None,
                     width: 0.0,
                     height: 0.0,
                     plated: false,

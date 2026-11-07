@@ -50,7 +50,7 @@ POMELO_HFSS_12_LAYER_CASE=/path/to/local/edb.def cargo test -p pomelo-import --l
 cargo test -p pomelo-render --test board3d imported_hfss_plated --locked -- --ignored --nocapture
 ```
 
-该检查核对每个可解析的镀层过孔都有全跨度且材质可见的孔壁。常规 `board3d` 回归另检查独立钻孔能贯穿实心铜区和走线、矩形孔角点及盲孔层范围；Windows 的实体像素回归检查孔心能露出背景。
+该检查核对每个可解析的镀层 Via 都有全跨度且材质可见的三维实体。三维预览中的所有 Via 都按实心显示，不挖孔；常规 `board3d` 回归核对圆形、矩形、槽形和多边形 Via 的中心有覆盖，且铜区和走线保持完整。Pin 孔仍按原始轮廓切除。WARP 像素回归同时覆盖三维实心 Via 与二维精确多边形孔。TEDB 本地导入回归命令见 [EDB 格式兼容](edb-format-compatibility.md#pyedb-tedb-回归)。
 
 几何检查覆盖直线、圆弧、退化路径、凹轮廓、孔洞、重复点和极端坐标。相机检查覆盖坐标往返、光标锚点缩放、适应整板及最小可见范围。
 

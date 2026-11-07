@@ -166,6 +166,7 @@ fn canvas_backdrill_picking_uses_cut_scope_and_independent_switch_with_base_fall
         at: Point::default(),
         drill: 2.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 2.0,
             height: 2.0,
@@ -468,6 +469,7 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
         mirrored: false,
         drill: 0.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.0,
             height: 0.0,
@@ -483,6 +485,7 @@ fn mixed_candidates_keep_category_identity_and_global_distance_order() {
         at: Point::new(0.5, 0.0),
         drill: 0.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.0,
             height: 0.0,
@@ -1069,6 +1072,7 @@ fn via_candidates_follow_copper_layers_and_ignore_drill_visibility() {
         at: Point::new(10.0, 10.0),
         drill: 1.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 1.0,
             height: 1.0,
@@ -1442,6 +1446,7 @@ fn locating_component_includes_rotated_offset_pad_and_physical_drill() {
         mirrored: false,
         drill: 3.0,
         drill_shape: DrillShape {
+            custom: None,
             rectangular: false,
             width: 3.0,
             height: 3.0,

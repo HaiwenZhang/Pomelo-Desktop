@@ -197,8 +197,18 @@ pub(super) fn build(
                     "3" => 3,
                     _ => return Err(error("Unknown pad usage flags")),
                 };
-                if !seen.insert(layer) || !source_ids.contains(&layer) {
-                    return Err(error("Duplicate or missing pad usage layer"));
+                if !seen.insert(layer) {
+                    return Err(error("Duplicate pad usage layer"));
+                }
+                if !source_ids.contains(&layer) {
+                    if !output
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.contains("removed layers"))
+                    {
+                        output.diagnostics.push("HFSS pad usage contains removed layers; only existing layers are displayed".into());
+                    }
+                    continue;
                 }
                 if flags & 1 != 0 {
                     used.insert(layer);
@@ -221,7 +231,7 @@ pub(super) fn build(
             }
         } else {
             for layer in layers {
-                if used.contains(&layer.id)
+                if (usage.is_empty() || used.contains(&layer.id))
                     && let Some(&display) = layer_ids.get(&layer.id)
                 {
                     let mapped = usize::try_from(layer.id)
@@ -259,10 +269,12 @@ pub(super) fn build(
         let p = value.object(Some(19))?;
         if p.field(9)?.integer()? != 0
             || !p.field(8)?.text()?.is_empty()
-            || !p.field(11)?.array()?.is_empty()
             || !p.field(12)?.text()?.is_empty()
         {
             return Err(error("Unsupported drill override or padstack extensions"));
+        }
+        for group in p.field(11)?.array()? {
+            group.integer()?;
         }
         let pin = p.field(10)?.integer()?;
         if pin != 0 && pin != 1 {
@@ -293,14 +305,17 @@ pub(super) fn build(
             p.field(3)?.numeric()? * 1000.0 + offset.y,
         );
         let at = component.map_or(local_at, |c| c.place(local_at));
-        let angle = rotation + hole.angle + component.map_or(0.0, |c| c.angle);
+        let mirrored = component.is_some_and(|c| c.mirrored);
+        let angle = if mirrored {
+            -rotation - hole.angle
+        } else {
+            rotation + hole.angle
+        } + component.map_or(0.0, |c| c.angle);
         let mut pads = binding.templates.clone();
         for pad in &mut pads {
             let origin = rotate(pad.offset, rotation);
-            pad.offset = rotate(
-                Point::new(origin.x - offset.x, origin.y - offset.y),
-                component.map_or(0.0, |c| c.angle),
-            );
+            let local = Point::new(origin.x - offset.x, origin.y - offset.y);
+            pad.offset = component.map_or(local, |c| c.vector(local));
             if hole.angle != 0.0 && pad.kind != PadKind::CIRCLE {
                 let paths = shared::pad_paths(pad)
                     .into_iter()
@@ -320,6 +335,7 @@ pub(super) fn build(
         *next += 1;
         let net = super::net(base.field(1)?.integer()?, net_ids)?;
         let drill_shape = DrillShape {
+            custom: hole.custom.clone(),
             rectangular: hole.rectangular,
             width: hole.width,
             height: hole.height,
@@ -354,9 +370,9 @@ pub(super) fn build(
                         id: owner,
                         source_reference: u32::try_from(source_component).ok().map(ObjectId),
                         reference: reference.clone(),
-                        at,
-                        angle,
-                        mirrored: false,
+                        at: component.map_or(at, |c| c.at),
+                        angle: component.map_or(angle, |c| c.angle),
+                        mirrored,
                         pins: Vec::new(),
                     });
                     owners.insert(source_component, index);
@@ -373,7 +389,7 @@ pub(super) fn build(
                 reference,
                 at,
                 angle,
-                mirrored: false,
+                mirrored,
                 drill: hole.height,
                 drill_shape,
                 pads,
@@ -404,7 +420,7 @@ pub(super) fn build(
                 backdrill: None,
                 stackup_region: None,
                 angle,
-                mirrored: false,
+                mirrored,
                 finger: None,
             });
         }
@@ -415,12 +431,19 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn component_rotation_places_pad_offsets_and_drill_offsets_in_world_coordinates() {
+    fn check_component_transform(mirrored: bool, usage: &str) {
         use super::super::binary::Value as B;
         let object = |schema, fields| B::Object(Box::new(Object { schema, fields }));
         let root = Object {schema:0,fields:vec![B::Text("$begin 'EDB'\n$begin 'pds'\n$begin 'pd'\nid=1\n$begin 'psd'\nnam='test'\nplt='20'\n$begin 'pds'\n$begin 'lgm'\nid=0\nlay='Top'\npad(shp='Rct',Szs('1mm','2mm'),X='1mm',Y='2mm',R='0deg')\n$end 'lgm'\n$end 'pds'\nhle(shp='Cir',Szs('0.2mm'),X='0.2mm',Y='0.3mm',R='0deg')\n$end 'psd'\n$end 'pd'\n$end 'pds'\n$end 'EDB'".into())]};
-        let binding = object(6,vec![B::Number(10.0),B::Text("$begin 'binding'\ndef=1\nfl=0\ntl=1\nflp=false\npum='0:1:'\n$begin 'lm'\nforward[2:0,-1]\n$end 'lm'\n$end 'binding'".into())]);
+        let binding = object(
+            6,
+            vec![
+                B::Number(10.0),
+                B::Text(format!(
+                    "$begin 'binding'\ndef=1\nfl=0\ntl=1\nflp=false\npum='{usage}'\n$begin 'lm'\nforward[2:0,-1]\n$end 'lm'\n$end 'binding'"
+                )),
+            ],
+        );
         let cell = Object {
             schema: 3,
             fields: vec![B::Null, B::Null, B::Null, B::Array(vec![binding])],
@@ -479,6 +502,7 @@ mod tests {
                 reference: "U1".into(),
                 at: Point::new(10.0, 20.0),
                 angle: std::f64::consts::FRAC_PI_2,
+                mirrored,
             },
         )]);
         let cancel = pomelo_core::task::CancellationToken::default();
@@ -500,21 +524,34 @@ mod tests {
         )
         .unwrap();
         let pin = &output.scene.pins[0];
-        assert!((pin.at.x - 5.8).abs() < 1e-10 && (pin.at.y - 22.7).abs() < 1e-10);
-        assert!((pin.angle - std::f64::consts::PI).abs() < 1e-12);
+        assert!(
+            (pin.at.x - if mirrored { 14.2 } else { 5.8 }).abs() < 1e-10
+                && (pin.at.y - 22.7).abs() < 1e-10
+        );
+        assert!((pin.angle - if mirrored { 0.0 } else { std::f64::consts::PI }).abs() < 1e-12);
+        assert_eq!(pin.mirrored, mirrored);
         let center = pin.pads[0]
             .bounds(pomelo_core::pad::PadPlacement {
                 at: pin.at,
                 angle: pin.angle,
-                mirrored: false,
+                mirrored,
             })
             .unwrap()
             .center();
         assert!(
-            (center.x - 5.0).abs() < 1e-10 && (center.y - 21.0).abs() < 1e-10,
+            (center.x - if mirrored { 15.0 } else { 5.0 }).abs() < 1e-10
+                && (center.y - 21.0).abs() < 1e-10,
             "{center:?}"
         );
         assert!(pin.drill_shape.plated);
+    }
+    #[test]
+    fn component_rotation_and_mirror_keep_offsets_with_explicit_and_implicit_pad_usage() {
+        for mirrored in [false, true] {
+            for usage in ["0:1:", ""] {
+                check_component_transform(mirrored, usage);
+            }
+        }
     }
     #[test]
     fn plating_ratio_accepts_quoted_and_numeric_values_without_defaulting_to_unplated() {

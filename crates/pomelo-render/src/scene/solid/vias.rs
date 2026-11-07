@@ -106,8 +106,30 @@ impl PreparedSolid {
         via: &Via,
         span: ViaWallSpan,
         tolerance_mm: f64,
+        limits: SolidLimits,
+        cancel: &CancellationToken,
+    ) -> Result<Self, SolidPrepareError> {
+        Self::prepare_via_geometry(via, span, tolerance_mm, limits, cancel, false)
+    }
+
+    /// Solid via display body for the 3D preview, including the hole center.
+    pub fn prepare_via_body(
+        via: &Via,
+        span: ViaWallSpan,
+        tolerance_mm: f64,
+        limits: SolidLimits,
+        cancel: &CancellationToken,
+    ) -> Result<Self, SolidPrepareError> {
+        Self::prepare_via_geometry(via, span, tolerance_mm, limits, cancel, true)
+    }
+
+    fn prepare_via_geometry(
+        via: &Via,
+        span: ViaWallSpan,
+        tolerance_mm: f64,
         mut limits: SolidLimits,
         cancel: &CancellationToken,
+        filled: bool,
     ) -> Result<Self, SolidPrepareError> {
         let object = SelectedObject::Via(via.id);
         let error = |source| SolidPrepareError::Geometry { object, source };
@@ -117,6 +139,7 @@ impl PreparedSolid {
             .pad()
             .ok_or_else(|| error(SolidError::Invalid("DRILL")))?;
         let outer = DrillShape {
+            custom: None,
             rectangular: via.drill_shape.rectangular,
             width: via.drill_shape.width + 2.0 * span.plating_thickness_mm,
             height: via.drill_shape.height + 2.0 * span.plating_thickness_mm,
@@ -125,21 +148,71 @@ impl PreparedSolid {
         .pad()
         .ok_or_else(|| error(SolidError::Invalid("PLATING_THICKNESS")))?;
         let outline = |pad: &pomelo_core::model::Pad| {
-            pad.outline(PadPlacement::default(), tolerance_mm)
-                .map_err(|_| error(SolidError::Invalid("DRILL_OUTLINE")))?
-                .ok_or_else(|| error(SolidError::Unsupported("DRILL_OUTLINE")))
+            pad.outline(
+                PadPlacement {
+                    mirrored: via.mirrored,
+                    ..Default::default()
+                },
+                tolerance_mm,
+            )
+            .map_err(|_| error(SolidError::Invalid("DRILL_OUTLINE")))?
+            .ok_or_else(|| error(SolidError::Unsupported("DRILL_OUTLINE")))
         };
-        let mut rings =
-            outline_rings(outline(&outer)?, tolerance_mm, limits, cancel).map_err(error)?;
-        let used = ring_bytes(&rings);
-        let mut remaining = limits;
-        remaining.max_allocation_bytes = remaining.max_allocation_bytes.saturating_sub(used);
-        let holes =
-            outline_rings(outline(&inner)?, tolerance_mm, remaining, cancel).map_err(error)?;
-        rings
-            .try_reserve_exact(holes.len())
-            .map_err(|_| error(SolidError::Allocation))?;
-        rings.extend(holes);
+        let mut rings = if via.drill_shape.custom.is_some() {
+            use clipper2_rust::{EndType, FillRule, JoinType, PointD, inflate_paths_d, union_d};
+            let contours =
+                outline_rings(outline(&inner)?, tolerance_mm, limits, cancel).map_err(error)?;
+            let scratch = contours
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>()
+                .saturating_mul(256);
+            if scratch > limits.max_allocation_bytes {
+                return Err(error(SolidError::Limit {
+                    resource: "bytes",
+                    actual: scratch,
+                    limit: limits.max_allocation_bytes,
+                }));
+            }
+            let paths = contours
+                .iter()
+                .map(|r| r.iter().map(|p| PointD::new(p.x, p.y)).collect())
+                .collect();
+            let normalized = union_d(&paths, &vec![], FillRule::EvenOdd, 6);
+            cancel.check().map_err(|e| error(e.into()))?;
+            let offset = inflate_paths_d(
+                &normalized,
+                span.plating_thickness_mm,
+                JoinType::Round,
+                EndType::Polygon,
+                2.0,
+                6,
+                tolerance_mm,
+            );
+            let rings: Vec<Vec<_>> = offset
+                .into_iter()
+                .map(|r| {
+                    r.into_iter()
+                        .map(|p| pomelo_core::model::Point::new(p.x, p.y))
+                        .collect()
+                })
+                .collect();
+            super::check_ring_budget(&rings, limits).map_err(error)?;
+            rings
+        } else {
+            outline_rings(outline(&outer)?, tolerance_mm, limits, cancel).map_err(error)?
+        };
+        if !filled {
+            let used = ring_bytes(&rings);
+            let mut remaining = limits;
+            remaining.max_allocation_bytes = remaining.max_allocation_bytes.saturating_sub(used);
+            let holes =
+                outline_rings(outline(&inner)?, tolerance_mm, remaining, cancel).map_err(error)?;
+            rings
+                .try_reserve_exact(holes.len())
+                .map_err(|_| error(SolidError::Allocation))?;
+            rings.extend(holes);
+        }
         limits.max_allocation_bytes = limits
             .max_allocation_bytes
             .saturating_sub(ring_bytes(&rings));

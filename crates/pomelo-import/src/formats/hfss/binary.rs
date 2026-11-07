@@ -2,6 +2,7 @@
 use super::error;
 use crate::{ImportContext, ImportError};
 use std::collections::{HashMap, HashSet};
+#[derive(PartialEq)]
 pub(super) enum Value {
     Null,
     Number(f64),
@@ -10,6 +11,7 @@ pub(super) enum Value {
     Object(Box<Object>),
     Array(Vec<Value>),
 }
+#[derive(PartialEq)]
 pub(super) struct Object {
     pub schema: i32,
     pub fields: Vec<Value>,
@@ -63,6 +65,8 @@ fn required_fields(schema: i32) -> &'static [(usize, u32)] {
         21 => &[(0, 5), (1, 4), (2, 4)],
         22 => &[(0, 5)],
         36 => &[(0, 0), (2, 6)],
+        51 => &[(0, 5), (1, 5), (2, 5)],
+        52 => &[(0, 8)],
         _ => &[],
     }
 }
@@ -81,8 +85,19 @@ fn validate_schema(schema: i32, fields: &[(usize, u32)]) -> Result<(), ImportErr
 
 fn header_version(header: &str) -> Result<String, ImportError> {
     let header = super::text::read(header)?;
-    if header.name != "Hdr" || !matches!(header.prop("Encrypted")?, super::text::Value::Bool(false))
-    {
+    let unencrypted = matches!(
+        (
+            header.properties.get("Encrypted"),
+            header.properties.get("EncryptionLevel"),
+        ),
+        (Some(super::text::Value::Bool(false)), None)
+            | (None, Some(super::text::Value::Number(0.0)))
+            | (
+                Some(super::text::Value::Bool(false)),
+                Some(super::text::Value::Number(0.0))
+            )
+    );
+    if header.name != "Hdr" || !unencrypted {
         return Err(error(
             "Only unencrypted EDB typed DEF archives are supported",
         ));
@@ -268,6 +283,19 @@ impl Reader<'_, '_> {
                 }
                 Value::Array(values)
             }
+            8 => {
+                // Packed doubles use a 64-bit count, without per-element type tags.
+                let b = self.take(8)?;
+                let count = u64::from_le_bytes(b.try_into().map_err(|_| error("array length"))?);
+                if count > 10_000_000 || count > ((self.bytes.len() - self.at) / 8) as u64 {
+                    return Err(error("Invalid packed DEF array"));
+                }
+                let mut values = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    values.push(self.value(2, depth + 1)?);
+                }
+                Value::Array(values)
+            }
             _ => return Err(error(format!("Unverified DEF field type {kind}"))),
         })
     }
@@ -377,5 +405,62 @@ mod tests {
             bytes.pop();
             assert!(read(&bytes, &context).is_err());
         }
+    }
+
+    #[test]
+    fn both_encryption_header_conventions_require_explicit_unencrypted_values() {
+        for properties in [
+            "Encrypted=false",
+            "EncryptionLevel=0",
+            "Encrypted=false\nEncryptionLevel=0",
+        ] {
+            let text = format!("$begin 'Hdr'\nVersion='7.6'\n{properties}\n$end 'Hdr'");
+            assert_eq!(header_version(&text).unwrap(), "7.6");
+        }
+        for properties in [
+            "",
+            "Encrypted=true",
+            "EncryptionLevel=1",
+            "EncryptionLevel=-1",
+            "EncryptionLevel='0'",
+            "Encrypted=false\nEncryptionLevel=1",
+            "Encrypted=true\nEncryptionLevel=0",
+        ] {
+            let text = format!("$begin 'Hdr'\nVersion='7.6'\n{properties}\n$end 'Hdr'");
+            assert!(header_version(&text).is_err(), "{properties}");
+        }
+    }
+
+    #[test]
+    fn packed_doubles_preserve_coordinates_and_reject_bad_lengths() {
+        let context = ImportContext {
+            cancellation: &CancellationToken::default(),
+            progress: &|_| {},
+        };
+        let mut bytes = 2u64.to_le_bytes().to_vec();
+        bytes.extend(0.25f64.to_le_bytes());
+        bytes.extend((-0.5f64).to_le_bytes());
+        let huge = u64::MAX.to_le_bytes();
+        let excessive = 10_000_001u64.to_le_bytes();
+        let decode = |bytes| {
+            Reader {
+                bytes,
+                at: 0,
+                schemas: HashMap::new(),
+                validated_schemas: HashSet::new(),
+                values: 0,
+                context: &context,
+            }
+            .value(8, 0)
+        };
+        let values = decode(&bytes).unwrap();
+        let values = values.array().unwrap();
+        assert_eq!(
+            [values[0].numeric().unwrap(), values[1].numeric().unwrap()],
+            [0.25, -0.5]
+        );
+        assert!(decode(&bytes[..bytes.len() - 1]).is_err());
+        assert!(decode(&huge).is_err());
+        assert!(decode(&excessive).is_err());
     }
 }

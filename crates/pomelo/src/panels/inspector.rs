@@ -389,8 +389,8 @@ pub(crate) fn selection_source_labels(
         SourceObject::Zone(_) | SourceObject::Drawing(_) => {}
     }
     let drill = match source {
-        SourceObject::Pin(pin) => Some(pin.drill_shape),
-        SourceObject::Via(via) => Some(via.drill_shape),
+        SourceObject::Pin(pin) => Some(&pin.drill_shape),
+        SourceObject::Via(via) => Some(&via.drill_shape),
         _ => None,
     };
     if let Some(drill) = drill.filter(|drill| {
@@ -538,6 +538,7 @@ mod unit_tests {
                 mirrored: false,
                 drill: 0.3,
                 drill_shape: DrillShape {
+                    custom: None,
                     rectangular: false,
                     width: 0.3,
                     height: 0.3,

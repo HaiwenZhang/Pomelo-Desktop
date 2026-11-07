@@ -384,7 +384,7 @@ impl Pad {
 
 impl DrillShape {
     /// Drill display is independent of the copper pad's donut opening.
-    pub fn pad(self) -> Option<Pad> {
+    pub fn pad(&self) -> Option<Pad> {
         if self.width <= 0.0
             || self.height <= 0.0
             || !self.width.is_finite()
@@ -394,7 +394,10 @@ impl DrillShape {
         }
         let mut pad = Pad::circle(LayerId::UNASSIGNED, self.width);
         pad.height = self.height;
-        if self.rectangular {
+        if let Some(custom) = &self.custom {
+            pad.kind = PadKind::CUSTOM;
+            pad.custom = Some(std::sync::Arc::clone(custom));
+        } else if self.rectangular {
             pad.kind = PadKind(5);
         } else if self.width != self.height {
             pad.kind = PadKind(11);

@@ -252,7 +252,7 @@ impl BoardPickingIndex {
             });
         }
         let pin_bounds =
-            |at, angle, mirrored, pads: &[crate::model::Pad], drill: crate::model::DrillShape| {
+            |at, angle, mirrored, pads: &[crate::model::Pad], drill: &crate::model::DrillShape| {
                 let owner = crate::pad::PadPlacement {
                     at,
                     angle,
@@ -277,14 +277,14 @@ impl BoardPickingIndex {
             scene
                 .pins
                 .iter()
-                .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, p.drill_shape)),
+                .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, &p.drill_shape)),
             cancel,
         )?;
         let vias = super::spatial::BoundsIndex::build(
             scene
                 .vias
                 .iter()
-                .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, p.drill_shape)),
+                .map(|p| pin_bounds(p.at, p.angle, p.mirrored, &p.pads, &p.drill_shape)),
             cancel,
         )?;
         for component in &scene.components {

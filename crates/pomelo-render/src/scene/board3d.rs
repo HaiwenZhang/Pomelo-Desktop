@@ -256,7 +256,7 @@ impl PreparedBoard3d {
                             net: pin.net,
                             pad,
                             placement,
-                            drill: pin.drill_shape.pad().map(|_| pin.drill_shape),
+                            drill: pin.drill_shape.pad().map(|_| pin.drill_shape.clone()),
                         },
                         z,
                         preview.chord_mm,
@@ -276,17 +276,13 @@ impl PreparedBoard3d {
                 .and_then(|(a, b)| Some((a, b, *heights.get(&a)?, *heights.get(&b)?)));
             for pad in via.pads.iter() {
                 if let Some(&z) = heights.get(&pad.layer) {
-                    let drill = span
-                        .filter(|(_, _, a, b)| z[0] >= a[0].min(b[0]) && z[1] <= a[1].max(b[1]))
-                        .map(|_| via.drill_shape)
-                        .filter(|d| d.pad().is_some());
                     builder.add_pad(
                         PadSolidSource {
                             object: SelectedObject::Via(via.id),
                             net: via.net,
                             pad,
                             placement,
-                            drill,
+                            drill: None,
                         },
                         z,
                         preview.chord_mm,
@@ -294,7 +290,7 @@ impl PreparedBoard3d {
                 }
             }
             if via.drill_shape.plated && via.drill_shape.pad().is_some() {
-                if let Some((a, b, za, zb)) = span.filter(|_| via.backdrill.is_none()) {
+                if let Some((a, b, za, zb)) = span {
                     let z = [za[0].min(zb[0]), za[1].max(zb[1])];
                     let mut key = [0_u64; 16];
                     key[..7].copy_from_slice(&[
@@ -306,6 +302,12 @@ impl PreparedBoard3d {
                         z[1].to_bits(),
                         u64::from(via.drill_shape.rectangular),
                     ]);
+                    key[7] = via
+                        .drill_shape
+                        .custom
+                        .as_ref()
+                        .map_or(0, |c| std::sync::Arc::as_ptr(c) as u64);
+                    key[8] = u64::from(via.drill_shape.custom.is_some() && via.mirrored);
                     let meta = Identity {
                         object: SelectedObject::Via(via.id),
                         layers: MemberLayers::Span(a, b),
@@ -317,7 +319,7 @@ impl PreparedBoard3d {
                         },
                     };
                     builder.add_shared(key, meta, |limits| {
-                        PreparedSolid::prepare_via_wall(
+                        PreparedSolid::prepare_via_body(
                             via,
                             ViaWallSpan {
                                 z,
@@ -332,7 +334,7 @@ impl PreparedBoard3d {
                 } else {
                     builder.warning(SolidPrepareError::Geometry {
                         object: SelectedObject::Via(via.id),
-                        source: SolidError::Unsupported("PREVIEW_VIA_SPAN_OR_BACKDRILL"),
+                        source: SolidError::Unsupported("PREVIEW_VIA_SPAN"),
                     })?;
                 }
             }
@@ -713,12 +715,14 @@ impl Builder<'_> {
         tolerance: f64,
     ) -> Result<(), SolidPrepareError> {
         let p = source.pad;
-        let d = source.drill.unwrap_or(DrillShape {
+        let empty_drill = DrillShape {
+            custom: None,
             rectangular: false,
             width: 0.0,
             height: 0.0,
             plated: false,
-        });
+        };
+        let d = source.drill.as_ref().unwrap_or(&empty_drill);
         let center = Point::new(-p.offset.x, -p.offset.y).rotate(-source.placement.angle);
         let key = [
             1,
@@ -730,7 +734,7 @@ impl Builder<'_> {
             p.custom
                 .as_ref()
                 .map_or(0, |c| std::sync::Arc::as_ptr(c) as u64),
-            u64::from(p.custom.is_some() && source.placement.mirrored),
+            u64::from((p.custom.is_some() || d.custom.is_some()) && source.placement.mirrored),
             d.width.to_bits(),
             d.height.to_bits(),
             if source.drill.is_some() {
@@ -746,7 +750,9 @@ impl Builder<'_> {
             z[0].to_bits(),
             z[1].to_bits(),
             u64::from(d.rectangular),
-            0,
+            d.custom
+                .as_ref()
+                .map_or(0, |c| std::sync::Arc::as_ptr(c) as u64),
         ];
         let meta = Identity {
             object: source.object,

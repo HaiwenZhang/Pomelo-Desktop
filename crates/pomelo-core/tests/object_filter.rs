@@ -68,6 +68,7 @@ fn source(paths: bool) -> Arc<BoardScene> {
             mirrored: false,
             drill: 0.0,
             drill_shape: DrillShape {
+                custom: None,
                 rectangular: false,
                 width: 0.0,
                 height: 0.0,
@@ -97,6 +98,56 @@ fn source(paths: bool) -> Arc<BoardScene> {
         },
         diagnostics: vec![],
     })
+}
+
+#[test]
+fn polygon_drill_picking_uses_the_rotated_mirrored_outline() {
+    let mut scene = Arc::try_unwrap(source(false)).unwrap();
+    scene.zones.clear();
+    let pin = &mut scene.pins[0];
+    pin.pads.clear();
+    pin.mirrored = true;
+    pin.drill_shape = DrillShape {
+        width: 2.0,
+        height: 2.0,
+        rectangular: false,
+        plated: false,
+        custom: Some(Arc::new(CustomPadGeometry {
+            contours: vec![vec![
+                Point::new(-1.0, -1.0),
+                Point::new(1.0, -1.0),
+                Point::new(-1.0, 1.0),
+            ]],
+            paths: vec![],
+        })),
+    };
+    let hole = pin.drill_shape.pad().unwrap();
+    let owner = pomelo_core::pad::PadPlacement {
+        at: pin.at,
+        angle: pin.angle,
+        mirrored: pin.mirrored,
+    };
+    let inside = hole.to_world(Point::new(-0.5, -0.5), owner);
+    let outside = hole.to_world(Point::new(0.5, 0.5), owner);
+    let cancel = CancellationToken::default();
+    let index = BoardPickingIndex::build(Arc::new(scene), 100, &cancel).unwrap();
+    let query = |point| {
+        index
+            .query_visible_objects(
+                PickQuery::new(point, 0.0).unwrap(),
+                100.0,
+                PickFilter::all(),
+                &BoardDisplay::default(),
+                16,
+                &cancel,
+            )
+            .unwrap()
+    };
+    assert_eq!(query(inside).len(), 1);
+    assert!(
+        query(outside).is_empty(),
+        "the bounding rectangle must not be pickable"
+    );
 }
 #[test]
 fn visible_picking_follows_pad_and_void_filtering_after_zoom() {
