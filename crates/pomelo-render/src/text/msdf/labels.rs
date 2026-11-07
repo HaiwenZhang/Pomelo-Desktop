@@ -118,7 +118,7 @@ fn placement_label_fit(width: f64, height: f64, angle: f64, advance: f64) -> (f6
         angle + std::f64::consts::FRAC_PI_2,
     );
     // Near-square bodies should not turn a name just for a marginally larger
-    // fit. Allegro keeps J3302 horizontal while the narrower J3301 is vertical.
+    // fit. Keep orientation stable near the horizontal/vertical size threshold.
     // Prefer the axis closer to horizontal when it retains at least 90% of the
     // available text size; this decision is in board space, independent of zoom.
     let (horizontal, other) = if a.1.cos().abs() >= b.1.cos().abs() {

@@ -45,8 +45,6 @@ mod ui_viewport;
 mod compositor_parity;
 #[path = "copper_direct_pixels.rs"]
 mod copper_direct;
-#[path = "frame_profile.rs"]
-mod frame_profile;
 #[path = "pad_range_pixels.rs"]
 mod pad_range;
 #[path = "residency_pixels.rs"]
@@ -65,9 +63,6 @@ mod zone_highlight;
 #[path = "dynamic_outline_pixels.rs"]
 mod dynamic_outline;
 
-#[path = "ansi_text_pixels.rs"]
-mod ansi_text;
-
 #[path = "line_precision_pixels.rs"]
 mod line_precision;
 
@@ -79,12 +74,6 @@ mod die_pad;
 
 #[path = "curve_fill_pixels.rs"]
 mod curve_fill;
-
-#[path = "s5000c_u94_pixels.rs"]
-mod s5000c_u94;
-
-#[path = "s5000c_full_geometry_pixels.rs"]
-mod s5000c_full_geometry;
 
 #[test]
 #[ignore = "requires a Windows hardware D3D11 adapter; diagnostic readback only"]

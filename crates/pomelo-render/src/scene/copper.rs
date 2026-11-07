@@ -117,7 +117,6 @@ pub struct CopperLimits {
 impl Default for CopperLimits {
     fn default() -> Self {
         Self {
-            // The verified RDIMM source has 19.7M vertices / 57.8M indices.
             // Keep explicit count and byte ceilings before any output allocation.
             max_vertices: 32_000_000,
             max_indices: 96_000_000,

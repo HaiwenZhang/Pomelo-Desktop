@@ -11,6 +11,7 @@ serde.workspace = true
 thiserror.workspace = true
 rust-i18n.workspace = true
 earcut.workspace = true
+spade.workspace = true
 clipper2-rust.workspace = true
 icu_collator.workspace = true
 icu_locale_core.workspace = true

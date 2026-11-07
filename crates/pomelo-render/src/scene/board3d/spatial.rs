@@ -129,10 +129,11 @@ impl SpatialIndex3d {
         &self,
         ray: PickRay3d,
         nearest: &mut f64,
+        padding: f64,
         mut visit: impl FnMut(usize, &mut f64),
     ) {
         if !self.nodes.is_empty() {
-            self.ray_node(0, ray, nearest, &mut visit);
+            self.ray_node(0, ray, nearest, padding, &mut visit);
         }
     }
     fn ray_node(
@@ -140,15 +141,16 @@ impl SpatialIndex3d {
         node: usize,
         ray: PickRay3d,
         nearest: &mut f64,
+        padding: f64,
         visit: &mut impl FnMut(usize, &mut f64),
     ) {
         let node = &self.nodes[node];
-        if !ray_box(ray, node.bounds, *nearest) {
+        if !ray_box(ray, node.bounds, *nearest, padding) {
             return;
         }
         if let Some([left, right]) = node.children {
-            self.ray_node(left, ray, nearest, visit);
-            self.ray_node(right, ray, nearest, visit);
+            self.ray_node(left, ray, nearest, padding, visit);
+            self.ray_node(right, ray, nearest, padding, visit);
         } else {
             for &id in &self.ids[node.range.clone()] {
                 visit(id, nearest);
@@ -228,11 +230,11 @@ mod tests {
                 length: 20.0,
             };
             let mut candidates = std::collections::BTreeSet::new();
-            index.visit_ray(ray, &mut 20.0, |id, _| {
+            index.visit_ray(ray, &mut 20.0, 0.0, |id, _| {
                 candidates.insert(id);
             });
             for (i, &b) in bounds.iter().enumerate() {
-                if ray_box(ray, b, 20.0) {
+                if ray_box(ray, b, 20.0, 0.0) {
                     assert!(candidates.contains(&i));
                 }
             }

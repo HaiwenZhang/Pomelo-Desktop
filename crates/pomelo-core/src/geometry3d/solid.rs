@@ -1,6 +1,8 @@
 //! Material coverage extruded directly into display triangles, with no B-rep intermediate.
 
 use super::Bounds3;
+#[path = "solid/cdt.rs"]
+mod cdt;
 use crate::{model::Point, task::CancellationToken};
 use clipper2_rust::{
     ClipType, EndType, FillRule, JoinType, PathD, PathsD, PointD, PolyTreeD, boolean_op_tree_d,
@@ -483,7 +485,11 @@ impl SolidMesh {
             .saturating_add(surfaces.saturating_mul(size_of::<SolidSurface>()))
             .saturating_add(scratch);
         limit("bytes", bytes, limits.max_allocation_bytes)?;
-        limit("earcut_nodes", count.saturating_mul(256), u32::MAX as usize)?;
+        limit(
+            "triangulation_nodes",
+            count.saturating_mul(256),
+            u32::MAX as usize,
+        )?;
         self.vertices
             .try_reserve_exact(vertices - self.vertices.len())
             .map_err(|_| SolidError::Allocation)?;
@@ -525,9 +531,8 @@ impl SolidMesh {
             return Err(SolidError::Invalid("REGION_AREA"));
         }
         let mut triangles: Vec<u32> = reserve(cap_count)?;
-        let mut triangulator = earcut::Earcut::<f64>::new();
         cancel.check()?;
-        triangulator.earcut(points.iter().copied(), &holes, &mut triangles);
+        cdt::triangulate(&points, &holes, &mut triangles, cancel)?;
         cancel.check()?;
         if triangles.is_empty()
             || triangles.len() > cap_count

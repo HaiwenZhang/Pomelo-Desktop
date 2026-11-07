@@ -390,47 +390,6 @@ mod tests {
     };
 
     #[test]
-    #[ignore = "requires POMELO_DOCUMENT_CASES with explicitly selected local board paths"]
-    fn local_native_boards_prepare_for_the_desktop() {
-        let paths = std::env::var_os("POMELO_DOCUMENT_CASES").expect("set POMELO_DOCUMENT_CASES");
-        for path in std::env::split_paths(&paths) {
-            let started = std::time::Instant::now();
-            let budget = MemoryBudget::new(0);
-            let prepared = prepare_document(DocumentPreparation {
-                path: path.clone(),
-                options: ImportOptions::default(),
-                cancellation: CancellationToken::default(),
-                mailbox: LatestImportProgress::default(),
-                reload_view: None,
-                search_locale: Locale::English,
-                source_font: None,
-                preparation_budget: budget.clone(),
-            })
-            .unwrap_or_else(|error| panic!("{}: {:?}", path.display(), error.diagnostic()));
-            assert_eq!(
-                prepared.picking.segment_count(),
-                prepared.board.scene.segments.len()
-            );
-            eprintln!(
-                "DOCUMENT_PREPARED {} tracks={} drawings={} zone_edges={} pads={} managed_bytes={} seconds={:.2}",
-                path.display(),
-                prepared.tracks.instances.len(),
-                prepared.drawings.instances.len(),
-                prepared.zone_outlines.instances.len(),
-                prepared.pads.analytic.len(),
-                budget.used(),
-                started.elapsed().as_secs_f64()
-            );
-            drop(prepared);
-            assert_eq!(
-                budget.used(),
-                0,
-                "document geometry reservations must be released"
-            );
-        }
-    }
-
-    #[test]
     fn prepares_a_board_with_indexes_and_restores_its_matching_view() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("board.kicad_pcb");

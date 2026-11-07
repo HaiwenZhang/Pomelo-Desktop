@@ -94,12 +94,6 @@ enum BufferSizing {
     SmallPages,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DrawScope {
-    All,
-    OneBatchPerPage,
-}
-
 fn paint_context<'a>(
     raw: &'a wgpu::Device,
     encoder: &'a mut wgpu::CommandEncoder,
@@ -122,12 +116,7 @@ fn paint_context<'a>(
     }
 }
 
-fn render(
-    source: Arc<PreparedCopper>,
-    bounds: Bounds,
-    sizing: BufferSizing,
-    scope: DrawScope,
-) -> Vec<u8> {
+fn render(source: Arc<PreparedCopper>, bounds: Bounds, sizing: BufferSizing) -> Vec<u8> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         futures::executor::block_on(instance.request_adapter(&Default::default())).unwrap();
@@ -206,9 +195,6 @@ fn render(
         uploaded.pages.len(),
         uploaded.uploaded_bytes()
     );
-    if scope == DrawScope::OneBatchPerPage {
-        assert!(uploaded.pages.len() > 1);
-    }
     let mut encoder = raw.create_command_encoder(&Default::default());
     {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -263,23 +249,6 @@ fn render(
         hovered_object: None,
         highlighted_related_objects: None,
     };
-    // The real board exercises all uploads and one small batch from each page.
-    let selected: BTreeSet<_> = (0..uploaded.pages.len())
-        .filter_map(|page| {
-            source
-                .batches
-                .iter()
-                .enumerate()
-                .filter(|(index, batch)| {
-                    uploaded.batch_pages[*index] == page && !batch.outer_indices().is_empty()
-                })
-                .min_by_key(|(_, batch)| batch.vertex_count)
-                .map(|(_, batch)| batch.object)
-        })
-        .collect();
-    let visible = |batch: &crate::copper::CopperBatch| {
-        scope == DrawScope::All || selected.contains(&batch.object)
-    };
     let (_, zones) = pipeline
         .draw(
             &context,
@@ -288,7 +257,7 @@ fn render(
             CopperDrawOptions {
                 opacity: 1.0,
                 layer: None,
-                visible: Some(&visible),
+                visible: None,
                 annotations: None,
                 annotation_owners: None,
                 overrides: None,
@@ -296,14 +265,7 @@ fn render(
             },
         )
         .unwrap();
-    assert_eq!(
-        zones as usize,
-        if scope == DrawScope::OneBatchPerPage {
-            selected.len()
-        } else {
-            source.batches.len()
-        }
-    );
+    assert_eq!(zones as usize, source.batches.len());
     drop(context);
     let output = raw.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -352,50 +314,12 @@ fn copper_pages_preserve_pixels_and_holes_across_upload_boundaries() {
         min: Point::new(0.0, 0.0),
         max: Point::new(34.0, 10.0),
     };
-    let single = render(
-        Arc::clone(&source),
-        bounds,
-        BufferSizing::DeviceLimits,
-        DrawScope::All,
-    );
-    let paged = render(source, bounds, BufferSizing::SmallPages, DrawScope::All);
+    let single = render(Arc::clone(&source), bounds, BufferSizing::DeviceLimits);
+    let paged = render(source, bounds, BufferSizing::SmallPages);
     assert_eq!(single, paged);
     assert!(paged.as_chunks::<4>().0.contains(&[255, 0, 0, 255]));
     // Hole centers and the spaces between zones remain transparent.
     for x in [12, 32, 52, 22, 42] {
         assert_eq!(&paged[(32 * 64 + x) * 4..][..4], &[0, 0, 0, 0]);
     }
-}
-
-#[test]
-#[ignore = "requires POMELO_TEST_BOARD and a GPU adapter; real board copper upload"]
-fn copper_pages_upload_large_source_backed_board() {
-    use pomelo_import::{
-        BoardImporter, ImportContext, ImportOptions, formats::allegro::AllegroImporter,
-    };
-    let path = std::env::var_os("POMELO_TEST_BOARD").expect("set POMELO_TEST_BOARD");
-    let cancel = CancellationToken::default();
-    let imported = AllegroImporter
-        .import(
-            std::path::Path::new(&path),
-            &ImportOptions::default(),
-            &ImportContext {
-                cancellation: &cancel,
-                progress: &|_| {},
-            },
-        )
-        .unwrap();
-    let bounds = imported.scene.bounds;
-    let source = PreparedCopper::build_scene(
-        imported.scene,
-        crate::copper::CopperLimits::default(),
-        &cancel,
-    )
-    .unwrap();
-    render(
-        Arc::new(source),
-        bounds,
-        BufferSizing::DeviceLimits,
-        DrawScope::OneBatchPerPage,
-    );
 }

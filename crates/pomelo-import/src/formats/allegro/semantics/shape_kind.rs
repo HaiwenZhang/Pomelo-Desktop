@@ -99,10 +99,10 @@ impl ShapeKinds {
                     break;
                 };
                 // The first array points back to the table, later chunks to their predecessor.
-                // RDIMM's multi-chunk fills prove that GroupPtr is not always the table key.
+                // GroupPtr identifies the previous chunk rather than always the table key.
                 if array.group_ptr != previous.0
                     // Nonzero Unknown2 arrays can contain scalar values, not only keys.
-                    // Their layout is unproved (e.g. 16178 raw10 includes integer 1/1).
+                    // Reject them until their element encoding can be resolved.
                     || array.unknown2 != 0
                     || array.count > array.capacity
                     || array.count as usize > array.ptrs.len()

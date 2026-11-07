@@ -99,59 +99,6 @@ mod tests {
     use pomelo_core::model::ObjectId;
 
     #[test]
-    #[ignore = "requires explicit local board input; pad index memory and construction diagnostic"]
-    fn real_board_pad_index_profile() {
-        use crate::{drills::PreparedDrills, pads::PreparedPads};
-        use pomelo_import::{
-            BoardImporter, ImportContext, ImportOptions, TextEncoding,
-            formats::allegro::AllegroImporter,
-        };
-        let path = std::env::var_os("POMELO_FRAME_PROFILE_CASE").expect("explicit local case");
-        let cancel = pomelo_core::task::CancellationToken::default();
-        let board = AllegroImporter
-            .import(
-                std::path::Path::new(&path),
-                &ImportOptions {
-                    text_encoding: TextEncoding::Windows1252,
-                    ..Default::default()
-                },
-                &ImportContext {
-                    cancellation: &cancel,
-                    progress: &|_| {},
-                },
-            )
-            .unwrap();
-        let limits = crate::pads::PadLimits {
-            max_pads: usize::MAX,
-            max_bytes: usize::MAX,
-        };
-        let pads =
-            PreparedPads::build(&board.scene.pins, &board.scene.vias, limits, &cancel).unwrap();
-        let drills =
-            PreparedDrills::build(&board.scene.pins, &board.scene.vias, limits, &cancel).unwrap();
-        for (kind, source) in [("pads", &pads), ("drills", &drills.geometry)] {
-            let started = std::time::Instant::now();
-            let mut bytes = 0;
-            let mut max_chunk_us = 0;
-            for chunk in source.analytic.chunks(super::super::trace::CHUNK_INSTANCES) {
-                let chunk_started = std::time::Instant::now();
-                let index = PadIndex::build(chunk).unwrap();
-                max_chunk_us = max_chunk_us.max(chunk_started.elapsed().as_micros());
-                bytes += index.nets.capacity() * size_of::<[u32; 3]>()
-                    + index
-                        .owners
-                        .iter()
-                        .map(|rows| rows.capacity() * size_of::<[u32; 2]>())
-                        .sum::<usize>();
-            }
-            println!(
-                "PAD_INDEX_PROFILE {}",
-                serde_json::json!({"case":path,"kind":kind,"instances":source.analytic.len(),"retained_bytes":bytes,"build_us":started.elapsed().as_micros(),"max_chunk_us":max_chunk_us})
-            );
-        }
-    }
-
-    #[test]
     fn indexed_counts_runs_and_typed_owners_match_source_scan() {
         let source: Vec<_> = (0..16_385)
             .map(|i| {

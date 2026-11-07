@@ -1,6 +1,7 @@
 //! Immutable, GPU-ready conductor geometry. Preview heights are explicit assumptions.
 mod holes;
 mod paging;
+mod parallel;
 mod spatial;
 use super::solid::{PadSolidSource, PreparedSolid, SolidPrepareError, ViaWallSpan};
 use pomelo_core::{
@@ -107,8 +108,18 @@ impl PreparedBoard3d {
     pub fn preview(
         board: &BoardScene,
         preview: PreviewStackup,
+        limits: SolidLimits,
+        cancel: &CancellationToken,
+    ) -> Result<Self, SolidPrepareError> {
+        Self::preview_with_workers(board, preview, limits, cancel, parallel::worker_limit())
+    }
+
+    fn preview_partition(
+        board: &BoardScene,
+        preview: PreviewStackup,
         mut limits: SolidLimits,
         cancel: &CancellationToken,
+        only: Option<LayerId>,
     ) -> Result<Self, SolidPrepareError> {
         let fail = SolidPrepareError::Scene;
         if ![
@@ -177,7 +188,9 @@ impl PreparedBoard3d {
         };
         for segment in &board.segments {
             cancel.check().map_err(|e| fail(e.into()))?;
-            if let Some(&z) = heights.get(&segment.layer) {
+            if let Some(&z) = heights.get(&segment.layer)
+                && only.is_none_or(|layer| layer == segment.layer)
+            {
                 let remaining = builder.remaining()?;
                 let cuts = holes::cutouts(
                     &holes,
@@ -212,7 +225,9 @@ impl PreparedBoard3d {
         }
         for zone in &board.zones {
             cancel.check().map_err(|e| fail(e.into()))?;
-            if let Some(&z) = heights.get(&zone.layer) {
+            if let Some(&z) = heights.get(&zone.layer)
+                && only.is_none_or(|layer| layer == zone.layer)
+            {
                 let remaining = builder.remaining()?;
                 let bounds = zone.mesh.ring_bounds.first().copied();
                 let cuts = holes::cutouts(
@@ -243,13 +258,16 @@ impl PreparedBoard3d {
             }
         }
         for pin in &board.pins {
+            cancel.check().map_err(|e| fail(e.into()))?;
             let placement = PadPlacement {
                 at: pin.at,
                 angle: pin.angle,
                 mirrored: pin.mirrored,
             };
             for pad in &pin.pads {
-                if let Some(&z) = heights.get(&pad.layer) {
+                if let Some(&z) = heights.get(&pad.layer)
+                    && only.is_none_or(|layer| layer == pad.layer)
+                {
                     builder.add_pad(
                         PadSolidSource {
                             object: SelectedObject::Pin(pin.id),
@@ -265,6 +283,7 @@ impl PreparedBoard3d {
             }
         }
         for via in &board.vias {
+            cancel.check().map_err(|e| fail(e.into()))?;
             let placement = PadPlacement {
                 at: via.at,
                 angle: via.angle,
@@ -275,7 +294,9 @@ impl PreparedBoard3d {
                 .zip(via.end_layer)
                 .and_then(|(a, b)| Some((a, b, *heights.get(&a)?, *heights.get(&b)?)));
             for pad in via.pads.iter() {
-                if let Some(&z) = heights.get(&pad.layer) {
+                if let Some(&z) = heights.get(&pad.layer)
+                    && only.is_none_or(|layer| layer == pad.layer)
+                {
                     builder.add_pad(
                         PadSolidSource {
                             object: SelectedObject::Via(via.id),
@@ -289,7 +310,10 @@ impl PreparedBoard3d {
                     )?;
                 }
             }
-            if via.drill_shape.plated && via.drill_shape.pad().is_some() {
+            if via.drill_shape.plated
+                && via.drill_shape.pad().is_some()
+                && only.is_none_or(|layer| layer == span.map_or(layers[0], |s| s.0))
+            {
                 if let Some((a, b, za, zb)) = span {
                     let z = [za[0].min(zb[0]), za[1].max(zb[1])];
                     let mut key = [0_u64; 16];
@@ -339,7 +363,7 @@ impl PreparedBoard3d {
                 }
             }
         }
-        builder.finish(layers, preview)
+        builder.finish(layers, preview, only.is_some())
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -481,13 +505,20 @@ impl PreparedBoard3d {
     ) -> Option<SelectedObject> {
         let mut nearest = ray.length;
         let mut hit = None;
-        let mut hit_index = usize::MAX;
+        // Bounds use f64 source geometry, while picking intersects f32 GPU vertices.
+        // Allow their rounding envelope so a previous coplanar hit cannot prune
+        // equivalent candidates before the stable object-identity tie break.
+        let padding = (0..3)
+            .map(|axis| self.bounds.max[axis] - self.bounds.min[axis])
+            .fold(1.0_f64, f64::max)
+            * f64::from(f32::EPSILON)
+            * 4.0;
         self.source_index
-            .visit_ray(ray, &mut nearest, |i, nearest| {
+            .visit_ray(ray, &mut nearest, padding, |i, nearest| {
                 let source = &self.sources[i];
                 if !filter.contains(source.object.into())
                     || materials.get(i + 1).is_none_or(|m| m[3] <= 0.0)
-                    || !ray_box(ray, source.bounds, *nearest)
+                    || !ray_box(ray, source.bounds, *nearest, padding)
                 {
                     return;
                 }
@@ -515,10 +546,10 @@ impl PreparedBoard3d {
                             p
                         });
                         if let Some(t) = ray_triangle(origin, direction, points)
-                            && (t < *nearest || (t == *nearest && i < hit_index))
+                            && (t < *nearest
+                                || (t == *nearest && hit.is_none_or(|old| source.object < old)))
                         {
                             *nearest = t;
-                            hit_index = i;
                             hit = Some(source.object);
                         }
                     }
@@ -792,17 +823,17 @@ fn parse_color(value: &str) -> [f32; 4] {
         1.0,
     ]
 }
-fn ray_box(ray: PickRay3d, b: Bounds3, maximum: f64) -> bool {
+fn ray_box(ray: PickRay3d, b: Bounds3, maximum: f64, padding: f64) -> bool {
     let mut near = 0.0_f64;
-    let mut far = maximum;
+    let mut far = maximum + padding;
     for i in 0..3 {
         if ray.direction[i].abs() < 1e-15 {
-            if ray.origin[i] < b.min[i] || ray.origin[i] > b.max[i] {
+            if ray.origin[i] < b.min[i] - padding || ray.origin[i] > b.max[i] + padding {
                 return false;
             }
         } else {
-            let a = (b.min[i] - ray.origin[i]) / ray.direction[i];
-            let c = (b.max[i] - ray.origin[i]) / ray.direction[i];
+            let a = (b.min[i] - padding - ray.origin[i]) / ray.direction[i];
+            let c = (b.max[i] + padding - ray.origin[i]) / ray.direction[i];
             near = near.max(a.min(c));
             far = far.min(a.max(c));
             if near > far {

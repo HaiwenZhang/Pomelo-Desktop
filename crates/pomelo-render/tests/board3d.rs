@@ -12,127 +12,6 @@ use pomelo_core::{
 use pomelo_render::scene::board3d::{PreparedBoard3d, PreviewStackup};
 
 #[test]
-#[ignore = "requires POMELO_HFSS_TEDB pointing at the local PyEDB TEDB corpus"]
-fn imported_polygon_vias_prepare_solid_bodies_without_warnings() {
-    use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::FormatImporter};
-    let root = std::path::PathBuf::from(
-        std::env::var_os("POMELO_HFSS_TEDB").expect("set POMELO_HFSS_TEDB"),
-    );
-    let cancel = CancellationToken::default();
-    let board = FormatImporter
-        .import(
-            &root.join("padstacks.aedb/edb.def"),
-            &ImportOptions::default(),
-            &ImportContext {
-                cancellation: &cancel,
-                progress: &|_| {},
-            },
-        )
-        .unwrap();
-    let solid = PreparedBoard3d::preview(
-        &board.scene,
-        PreviewStackup::default(),
-        SolidLimits::default(),
-        &cancel,
-    )
-    .unwrap();
-    assert_eq!(solid.warning_count, 0, "{:?}", solid.warnings);
-    let polygon = board
-        .scene
-        .vias
-        .iter()
-        .find(|v| v.padstack_name == "MyVia_poly")
-        .unwrap();
-    assert!(polygon.drill_shape.custom.is_some());
-    let barrels: Vec<_> = solid
-        .sources
-        .iter()
-        .filter(|s| {
-            s.object == SelectedObject::Via(polygon.id)
-                && matches!(s.layers, pomelo_core::selection::MemberLayers::Span(_, _))
-        })
-        .collect();
-    assert_eq!(barrels.len(), 1);
-    assert!(!barrels[0].parts.is_empty());
-}
-
-#[test]
-#[ignore = "requires POMELO_HFSS_3D_CASE pointing at a local edb.def"]
-fn imported_hfss_plated_vias_produce_visible_full_depth_barrels() {
-    use pomelo_import::{BoardImporter, ImportContext, ImportOptions, formats::FormatImporter};
-    use std::{collections::BTreeSet, path::PathBuf};
-    let path =
-        PathBuf::from(std::env::var_os("POMELO_HFSS_3D_CASE").expect("set POMELO_HFSS_3D_CASE"));
-    let cancel = CancellationToken::default();
-    let imported = FormatImporter
-        .import(
-            &path,
-            &ImportOptions::default(),
-            &ImportContext {
-                cancellation: &cancel,
-                progress: &|_| {},
-            },
-        )
-        .unwrap();
-    let expected: BTreeSet<_> = imported
-        .scene
-        .vias
-        .iter()
-        .filter(|via| {
-            via.drill_shape.plated
-                && via.drill_shape.pad().is_some()
-                && via.start_layer.zip(via.end_layer).is_some()
-                && via.backdrill.is_none()
-        })
-        .map(|via| SelectedObject::Via(via.id))
-        .collect();
-    assert!(expected.len() > 2000);
-    let solid = PreparedBoard3d::preview(
-        &imported.scene,
-        PreviewStackup::default(),
-        SolidLimits::default(),
-        &cancel,
-    )
-    .unwrap();
-    let materials = solid.materials(&imported.scene, &BoardDisplay::default(), false, None, None);
-    let mut actual = BTreeSet::new();
-    for (index, source) in solid.sources.iter().enumerate() {
-        if matches!(source.object, SelectedObject::Via(_))
-            && matches!(
-                source.layers,
-                pomelo_core::interaction::selection::MemberLayers::Span(_, _)
-            )
-        {
-            assert!(source.bounds.max[2] - source.bounds.min[2] > 0.0);
-            assert!(!source.parts.is_empty());
-            assert!(materials[index + 1][3] > 0.0);
-            actual.insert(source.object);
-        }
-    }
-    assert_eq!(
-        actual, expected,
-        "every imported plated via needs a 3D barrel"
-    );
-    println!(
-        "plated_vias={} barrels={} preparation_warnings={}",
-        expected.len(),
-        actual.len(),
-        solid.warning_count
-    );
-    let mut warning_types = std::collections::BTreeMap::new();
-    for warning in &solid.warnings {
-        let code = match warning {
-            pomelo_render::scene::solid::SolidPrepareError::Geometry { source, .. } => {
-                source.to_string()
-            }
-            other => other.to_string(),
-        };
-        *warning_types.entry(code).or_insert(0usize) += 1;
-    }
-    println!("preparation_warning_types={warning_types:?}");
-}
-
-#[test]
 fn solid_via_pads_share_meshes_while_their_body_profiles_remain_distinct() {
     let mut input = source();
     input.segments.clear();
@@ -849,6 +728,160 @@ fn invalid_preview_and_exhausted_budget_do_not_publish_partial_boards() {
             PreviewStackup::default(),
             SolidLimits::default(),
             &cancel
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn parallel_preparation_preserves_geometry_ownership_and_empty_layer_warnings() {
+    let mut input = source();
+    input.pins.clear();
+    input.layers.insert(
+        0,
+        Layer {
+            id: LayerId(2),
+            name: "empty".into(),
+            function: LayerFunction::Conductor,
+            color: "#cc8800".into(),
+            source_flags: None,
+        },
+    );
+    let template = input.segments[0].clone();
+    input.segments = (0..10_100)
+        .map(|i| Segment {
+            id: ObjectId(10_000 + i),
+            layer: LayerId(i % 2),
+            ..template.clone()
+        })
+        .collect();
+    // An invalid span must produce exactly one warning, including in a partition
+    // with no valid geometry (the first copper layer owns invalid-span warnings).
+    input.vias[0].start_layer = None;
+    input.zones = vec![square_zone(99_000, 0., 4., true)];
+    let cancel = CancellationToken::default();
+    let serial = PreparedBoard3d::preview_with_workers(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &cancel,
+        1,
+    )
+    .unwrap();
+    let parallel = PreparedBoard3d::preview_with_workers(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &cancel,
+        4,
+    )
+    .unwrap();
+    let signature = |scene: &PreparedBoard3d| {
+        let mut result = scene
+            .sources
+            .iter()
+            .map(|s| {
+                format!(
+                    "{:?}:{:?}:{:?}:{:?}:{:?}",
+                    s.object, s.layers, s.bounds, s.transform, s.extension
+                )
+            })
+            .collect::<Vec<_>>();
+        result.sort_unstable();
+        result
+    };
+    assert_eq!(signature(&serial), signature(&parallel));
+    assert_eq!(serial.bounds, parallel.bounds);
+    assert_eq!(serial.index_count(), parallel.index_count());
+    assert_eq!(serial.warning_count, parallel.warning_count);
+    assert_eq!(parallel.warning_count, 1);
+    if std::thread::available_parallelism().map_or(1, usize::from) >= 4 {
+        // Confirm this exercised the layer merge instead of silently retrying serial.
+        assert_ne!(serial.sources[1].object, parallel.sources[1].object);
+    }
+    let materials = |scene: &PreparedBoard3d| {
+        scene.materials(&input, &BoardDisplay::default(), false, None, None)
+    };
+    for [x, y] in [
+        [0.1, 0.1],
+        [2., 2.],
+        [3.9, 3.9],
+        [0., 5.],
+        [9., 5.],
+        [20., 20.],
+    ] {
+        let ray = PickRay3d {
+            origin: [x, y, 10.],
+            direction: [0., 0., -1.],
+            length: 20.,
+        };
+        assert_eq!(
+            serial.pick(
+                ray,
+                &materials(&serial),
+                pomelo_core::picking::PickFilter::default()
+            ),
+            parallel.pick(
+                ray,
+                &materials(&parallel),
+                pomelo_core::picking::PickFilter::default()
+            )
+        );
+    }
+
+    for page in &parallel.pages {
+        let mesh = &parallel.meshes[page.mesh];
+        assert!(
+            page.sources
+                .iter()
+                .all(|&id| id > 0 && id as usize <= parallel.sources.len())
+        );
+        for instance in &page.instances {
+            assert!(instance.owner[0] as usize <= parallel.sources.len());
+        }
+        for vertex in &mesh.vertices {
+            assert!(vertex.owner[0] as usize <= parallel.sources.len());
+        }
+        for &id in &page.sources {
+            let source = &parallel.sources[id as usize - 1];
+            assert!(
+                parallel.parts[source.parts.clone()]
+                    .iter()
+                    .any(|p| p.mesh == page.mesh)
+            );
+        }
+    }
+    // Tiny per-layer shares must fall back without discarding geometry. The full
+    // serial allowance can still hold this board.
+    let budget = serial.allocation_bytes() * 2 + 128 * 1024;
+    let constrained = PreparedBoard3d::preview_with_workers(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits {
+            max_allocation_bytes: budget,
+            ..Default::default()
+        },
+        &cancel,
+        4,
+    )
+    .unwrap();
+    assert_eq!(signature(&serial), signature(&constrained));
+    assert_eq!(
+        serial.sources.iter().map(|s| s.object).collect::<Vec<_>>(),
+        constrained
+            .sources
+            .iter()
+            .map(|s| s.object)
+            .collect::<Vec<_>>()
+    );
+    cancel.cancel();
+    assert!(
+        PreparedBoard3d::preview_with_workers(
+            &input,
+            PreviewStackup::default(),
+            SolidLimits::default(),
+            &cancel,
+            4
         )
         .is_err()
     );

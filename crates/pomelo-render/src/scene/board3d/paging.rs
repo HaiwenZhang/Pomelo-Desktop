@@ -378,6 +378,7 @@ impl Builder<'_> {
         self,
         layers: Vec<LayerId>,
         preview: PreviewStackup,
+        allow_empty: bool,
     ) -> Result<PreparedBoard3d, SolidPrepareError> {
         self.remaining()?;
         let mut meshes = Vec::new();
@@ -490,6 +491,12 @@ impl Builder<'_> {
             sources: self.sources,
             origin: self.origin,
             bounds: scene_bounds
+                .or_else(|| {
+                    allow_empty.then_some(Bounds3 {
+                        min: [0.0; 3],
+                        max: [0.0; 3],
+                    })
+                })
                 .ok_or_else(|| Self::error(SolidError::Invalid("EMPTY_3D_BOARD")))?,
             layers,
             warnings: self.warnings,

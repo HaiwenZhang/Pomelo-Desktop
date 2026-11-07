@@ -830,15 +830,15 @@ fn placement_references_follow_body_zoom_side_and_flip_without_decluttering() {
 #[test]
 fn near_square_placement_prefers_horizontal_but_narrow_body_keeps_vertical() {
     let angle = std::f64::consts::FRAC_PI_2;
-    let (_, square) = placement_label_fit(17.0, 16.25, angle, 3.0);
+    let (_, square) = placement_label_fit(20.0, 19.0, angle, 3.0);
     assert!(
         square.sin().abs() < 1e-10,
-        "J3302's almost square body keeps a horizontal name"
+        "a synthetic near-square body keeps a horizontal name"
     );
-    let (_, narrow) = placement_label_fit(10.4, 8.02, angle, 3.0);
+    let (_, narrow) = placement_label_fit(20.0, 5.0, angle, 3.0);
     assert!(
         narrow.cos().abs() < 1e-10,
-        "J3301's narrower body retains its vertical name"
+        "a synthetic narrow body retains its vertical name"
     );
     let (_, rotated) = placement_label_fit(6.0, 2.0, 0.6, 3.0);
     assert!((rotated - 0.6).abs() < 1e-10);

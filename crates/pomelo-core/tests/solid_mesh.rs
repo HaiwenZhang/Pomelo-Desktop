@@ -364,3 +364,50 @@ fn strokes_have_round_caps_and_closed_strokes_keep_their_opening() {
     check_closed(&closed);
     check_normals(&closed);
 }
+
+#[test]
+fn concave_cap_with_many_holes_has_no_filled_hole_triangles() {
+    // An L-shaped exterior exercises both convex-hull rejection and hole parity.
+    let mut rings = vec![vec![
+        Point::new(0., 0.),
+        Point::new(30., 0.),
+        Point::new(30., 10.),
+        Point::new(10., 10.),
+        Point::new(10., 30.),
+        Point::new(0., 30.),
+    ]];
+    for y in 0..9 {
+        for x in 0..9 {
+            rings.push(rectangle(x as f64 + 0.1, y as f64 + 0.1, 0.5, 0.5));
+        }
+    }
+    let mesh = build(&rings);
+    assert!((top_area(&mesh) - (500.0 - 81.0 * 0.25)).abs() < 1e-8);
+    assert!((volume(&mesh) - (500.0 - 81.0 * 0.25)).abs() < 1e-8);
+    check_closed(&mesh);
+    check_normals(&mesh);
+    for surface in mesh.surfaces.iter().filter(|s| s.kind == SurfaceKind::Top) {
+        for triangle in mesh.indices[surface.indices.start as usize..surface.indices.end as usize]
+            .as_chunks::<3>()
+            .0
+            .iter()
+        {
+            let center = [0, 1].map(|axis| {
+                triangle
+                    .iter()
+                    .map(|&i| mesh.vertices[i as usize].position[axis])
+                    .sum::<f64>()
+                    / 3.0
+            });
+            assert!(center[0] <= 10. || center[1] <= 10.);
+            for hole in &rings[1..] {
+                assert!(
+                    !(center[0] > hole[0].x
+                        && center[0] < hole[2].x
+                        && center[1] > hole[0].y
+                        && center[1] < hole[2].y)
+                );
+            }
+        }
+    }
+}

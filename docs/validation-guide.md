@@ -24,33 +24,9 @@ Allegro 18.0/18.1 的合成回归覆盖 `0x00150000` / `0x00150200` 布局、重
 cargo test -p pomelo-import --locked --test allegro_181
 ```
 
-本地批量样本可通过 `scripts/validate-brd-cases.py` 和 `validate_brd_case` 示例验证。以文件头选择布局，不能从目录名或编辑器版本推断；场景构建成功与无诊断通过分别统计。
+导入器的合成测试覆盖文件标识、头部字段、记录边界、类型表、未知扩展、截断、资源预算和取消。回归使用仓库内可公开的夹具，并检查对象引用与有限坐标。
 
-Allegro 26.1 的合成测试覆盖文件标识 `0x00170300`、头部字段、记录边界和解码。另有本地样例回归，检查完整导入的对象数量、网络引用、有限坐标和无诊断结果：
-
-```sh
-POMELO_ALLEGRO_261_CASES=/path/to/local/cases cargo test -p pomelo-import --locked --test native_cases allegro_261 -- --ignored
-```
-
-该检查只验证 CPU 导入，不代表 GPU 显示验证。
-
-EDB 12.1 的本地十二层样例回归检查对象数量、网络和元件引脚引用、有限几何、铜区网格及搜索索引。输入文件保留在仓库外，通过环境变量指定：
-
-```sh
-POMELO_HFSS_12_LAYER_CASE=/path/to/local/edb.def cargo test -p pomelo-import --locked --test hfss_case -- --ignored
-```
-
-该样例使用现有 HFSS 原生读取器；通过 CPU 导入检查不代表完成画布显示或完整三维数据验收。
-
-多版本 EDB 样例可设置 `POMELO_EDB_CASES` 后运行 `hfss_case` 中的 `edb_archive_versions` 测试；字段表规律和未见版本的兼容边界见 [EDB 格式兼容](edb-format-compatibility.md)。
-
-带非零元件变换、矩形钻孔和辅助图形层的本地 DEF 可设置 `POMELO_HFSS_T40_CASE`，运行 `hfss_case` 中的 `transformed_components` 测试。三维孔壁检查使用 `POMELO_HFSS_3D_CASE` 指向 DEF，然后运行：
-
-```sh
-cargo test -p pomelo-render --test board3d imported_hfss_plated --locked -- --ignored --nocapture
-```
-
-该检查核对每个可解析的镀层 Via 都有全跨度且材质可见的三维实体。三维预览中的所有 Via 都按实心显示，不挖孔；常规 `board3d` 回归核对圆形、矩形、槽形和多边形 Via 的中心有覆盖，且铜区和走线保持完整。Pin 孔仍按原始轮廓切除。WARP 像素回归同时覆盖三维实心 Via 与二维精确多边形孔。TEDB 本地导入回归命令见 [EDB 格式兼容](edb-format-compatibility.md#pyedb-tedb-回归)。
+三维 `board3d` 回归核对圆形、矩形、槽形和多边形 Via 的实心覆盖，以及走线和铜区的完整性。Pin 孔按原始轮廓切除。WARP 像素回归覆盖三维实心 Via 与二维精确多边形孔。
 
 几何检查覆盖直线、圆弧、退化路径、凹轮廓、孔洞、重复点和极端坐标。相机检查覆盖坐标往返、光标锚点缩放、适应整板及最小可见范围。
 

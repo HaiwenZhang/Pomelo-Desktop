@@ -12,11 +12,12 @@ Pomelo Desktop 是基于 Rust、GPUI 和 GPUI Kit 的本地 PCB 查看器。本�
 ## 工程设计
 
 - [代码组织](code-organization.md)：crate 边界和应用模块职责。
-- [EDB 格式兼容](edb-format-compatibility.md)：内部版本、字段表演进规律和兼容边界。
+- [EDB 格式兼容](edb-format-compatibility.md)：类型表解码、几何行为和兼容边界。
 - [构建依赖](gpui-dependencies.md)：依赖来源、锁文件和构建方式。
 - [GPU 设计](cad-gpu-painter-design.md)与[原生后端](native-gpu-backends.md)：数据流、帧目标和资源生命周期。
 - [渲染决策](adr/0001-native-gpu-rendering.md)：为何复用 GPUI 原生设备。
 - [PCB 三维渲染方案](pcb-3d-rendering-design.md)：网格生成、物理叠层、元件模型、原生 GPU 接入及分阶段验收。
+- [三维准备加速与帧率保障](pcb-3d-preparation-performance-plan.md)：Rust CDT、按 CPU 与内存约束的并行准备、帧预算和合成回归。
 - [国际化](i18n.md)与[字体来源](pcb-text-font-provenance.md)：消息契约及资源维护。
 
 ## 验证与维护
@@ -29,6 +30,6 @@ Pomelo Desktop 是基于 Rust、GPUI 和 GPUI Kit 的本地 PCB 查看器。本�
 - [设置](settings-validation.md)：语言、主题、快捷键和焦点。
 - [诊断界面](diagnostics-ui-validation.md)：错误、分页、取消及上下文。
 
-公开文档不收录实际项目名称、设计截图、本地案例路径、原始运行日志或专有格式解析细节。通用几何算法、架构与测试方法继续保留。第三方资源的原始许可证、署名和来源记录维护在对应资源目录。
+代码与公开文档不收录本地案例专用测试、项目名称、设计截图、路径、匿名统计或派生测量记录。通用几何算法、架构与测试方法继续保留。第三方资源的原始许可证、署名和来源记录维护在对应资源目录。
 
 待开发能力见[审阅能力规划](viewer-review-capabilities-plan.md)，实施边界见[审阅开发设计](viewer-review-development-design.md)。
