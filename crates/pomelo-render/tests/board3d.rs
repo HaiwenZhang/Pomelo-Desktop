@@ -886,3 +886,91 @@ fn parallel_preparation_preserves_geometry_ownership_and_empty_layer_warnings() 
         .is_err()
     );
 }
+
+#[test]
+fn round_instance_shading_does_not_smooth_rectangular_or_custom_vias() {
+    let mut board = source();
+    board.segments.clear();
+    board.pins.clear();
+    board.vias.truncate(3);
+    board.vias[1].drill_shape.rectangular = true;
+    board.vias[2].drill_shape.custom =
+        Some(std::sync::Arc::new(pomelo_core::model::CustomPadGeometry {
+            contours: vec![vec![
+                Point::new(-0.1, -0.1),
+                Point::new(0.1, -0.1),
+                Point::new(0.1, 0.1),
+                Point::new(-0.1, 0.1),
+            ]],
+            paths: vec![],
+        }));
+    let scene = PreparedBoard3d::preview(
+        &board,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    let mut round = 0;
+    let mut flat = 0;
+    for page in &scene.pages {
+        for instance in &page.instances {
+            let source = &scene.sources[instance.owner[0] as usize - 1];
+            if matches!(
+                source.layers,
+                pomelo_core::selection::MemberLayers::Span(_, _)
+            ) {
+                if source.object == SelectedObject::Via(board.vias[0].id) {
+                    assert_eq!(instance.owner[3], 1);
+                    round += 1;
+                } else {
+                    assert_eq!(instance.owner[3], 0);
+                    flat += 1;
+                }
+            }
+        }
+    }
+    assert!(round > 0 && flat > 0);
+    assert_eq!(size_of::<pomelo_render::scene::board3d::Instance3d>(), 32);
+}
+
+#[test]
+fn circle_lod_uses_subpixel_error_and_preserves_full_precision_picking() {
+    let mut board = source();
+    board.pins.clear();
+    board.segments.clear();
+    board.vias.truncate(1);
+    let scene = PreparedBoard3d::preview(
+        &board,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    let mut circles = 0;
+    for mesh in &scene.meshes {
+        if mesh.round_lods.is_empty() {
+            continue;
+        }
+        circles += 1;
+        assert!(mesh.vertices.len() >= 256);
+        assert_eq!(mesh.draw_indices(1.).len(), 84);
+        assert!(mesh.draw_indices(1000.).len() > mesh.draw_indices(1.).len());
+        assert_eq!(
+            mesh.draw_indices(f32::INFINITY),
+            0..mesh.fine_index_count() as u32
+        );
+        for lod in &mesh.round_lods {
+            assert!(lod.indices.start >= mesh.fine_index_count() as u32);
+            assert!(
+                mesh.indices[lod.indices.start as usize..lod.indices.end as usize]
+                    .iter()
+                    .all(|i| (*i as usize) < mesh.vertices.len())
+            );
+        }
+    }
+    assert!(circles > 0);
+    for part in &scene.parts {
+        assert!((part.indices.end as usize) <= scene.meshes[part.mesh].fine_index_count());
+    }
+}

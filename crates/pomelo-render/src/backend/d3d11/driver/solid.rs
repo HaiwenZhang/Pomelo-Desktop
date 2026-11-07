@@ -383,10 +383,12 @@ impl SolidDriver {
                         Some(offsets.as_ptr()),
                     );
                     ctx.IASetIndexBuffer(&mesh.indices.raw, DXGI_FORMAT_R32_UINT, 0);
+                    let indices =
+                        draw.scene.meshes[page.mesh].draw_indices(draw.uniforms.parameters[3]);
                     ctx.DrawIndexedInstanced(
-                        draw.scene.meshes[page.mesh].indices.len() as u32,
+                        indices.end - indices.start,
                         page.instances.len() as u32,
-                        0,
+                        indices.start,
                         0,
                         0,
                     );

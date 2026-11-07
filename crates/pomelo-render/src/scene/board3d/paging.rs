@@ -89,7 +89,11 @@ impl Builder<'_> {
             .try_reserve_exact(solid.mesh.indices.len())
             .map_err(|_| Self::error(SolidError::Allocation))?;
         indices.extend(solid.mesh.indices.iter().map(|&i| remap[i as usize]));
-        Ok(Mesh3d { vertices, indices })
+        Ok(Mesh3d {
+            vertices,
+            indices,
+            round_lods: vec![],
+        })
     }
 
     fn triangle_bounds(&self, mesh: &Mesh3d, triangle: &[u32], absolute: bool) -> Bounds3 {
@@ -196,6 +200,7 @@ impl Builder<'_> {
                 net: solid.net,
                 placement: solid.placement,
                 extension: 0.0,
+                smooth_round: false,
             },
             bounds,
             [0.0, 0.0, 1.0, 0.0],
@@ -275,7 +280,25 @@ impl Builder<'_> {
                 .mesh
                 .bounds
                 .ok_or_else(|| Self::error(SolidError::Invalid("MESH_BOUNDS")))?;
-            let mesh = self.weld(&solid, 0, false)?;
+            let mut mesh = self.weld(&solid, 0, false)?;
+            if meta.smooth_round
+                && !solid
+                    .mesh
+                    .surfaces
+                    .iter()
+                    .any(|s| s.kind == pomelo_core::geometry3d::solid::SurfaceKind::HoleWall)
+            {
+                mesh.add_round_lods(
+                    self.remaining()?
+                        .max_allocation_bytes
+                        .saturating_sub(solid.mesh.allocation_bytes()),
+                    self.cancel,
+                )?;
+            }
+            if mesh.indices.len() > PAGE_INDICES.min(self.limits.max_indices) {
+                mesh.indices.truncate(mesh.fine_index_count());
+                mesh.round_lods.clear();
+            }
             drop(solid);
             let mut groups = Vec::new();
             if mesh.vertices.len() <= PAGE_VERTICES.min(self.limits.max_vertices)
@@ -285,6 +308,7 @@ impl Builder<'_> {
                 groups.push(g);
                 self.groups[g].vertices = mesh.vertices;
                 self.groups[g].indices = mesh.indices;
+                self.groups[g].round_lods = mesh.round_lods;
                 self.groups[g].bounds = Some(bounds);
                 self.groups[g].shared = true;
                 self.group_bytes += self.groups[g].allocation_bytes();
@@ -337,6 +361,7 @@ impl Builder<'_> {
             include(&mut bounds, Bounds3 { min: p, max: p });
         }
         let extension = meta.extension;
+        let smooth_round = meta.smooth_round;
         let id = self.source(
             meta,
             bounds.ok_or_else(|| Self::error(SolidError::Invalid("SOURCE_BOUNDS")))?,
@@ -358,12 +383,20 @@ impl Builder<'_> {
                 .map_err(|_| Self::error(SolidError::Allocation))?;
             self.parts.push(SourcePart3d {
                 mesh: g,
-                indices: 0..self.groups[g].indices.len() as u32,
+                indices: 0..self.groups[g]
+                    .round_lods
+                    .first()
+                    .map_or(self.groups[g].indices.len() as u32, |lod| lod.indices.start),
             });
             self.groups[g].sources.push(id);
             self.groups[g].instances.push(Instance3d {
                 transform,
-                owner: [id, u32::from(extension != 0.0), extension.to_bits(), 0],
+                owner: [
+                    id,
+                    u32::from(extension != 0.0),
+                    extension.to_bits(),
+                    u32::from(smooth_round),
+                ],
             });
             self.group_bytes += self.groups[g].allocation_bytes() - before;
             self.instance_bytes +=
@@ -397,6 +430,7 @@ impl Builder<'_> {
             meshes.push(Mesh3d {
                 vertices: group.vertices,
                 indices: group.indices,
+                round_lods: group.round_lods,
             });
             if !group.shared {
                 pages
@@ -455,7 +489,11 @@ impl Builder<'_> {
         }
         let base_bytes = meshes
             .iter()
-            .map(|m| m.vertices.capacity() * size_of::<Vertex3d>() + m.indices.capacity() * 4)
+            .map(|m| {
+                m.vertices.capacity() * size_of::<Vertex3d>()
+                    + m.indices.capacity() * 4
+                    + m.round_lods.capacity() * size_of::<RoundLod3d>()
+            })
             .sum::<usize>()
             + pages
                 .iter()
@@ -503,6 +541,9 @@ impl Builder<'_> {
             warning_count: self.warning_count,
             preview,
         };
+        if !scene.meshes.iter().all(Mesh3d::valid_lods) {
+            return Err(Self::error(SolidError::Invalid("ROUND_LOD_RANGE")));
+        }
         if scene.allocation_bytes() > self.limits.max_allocation_bytes {
             return Err(Self::error(SolidError::Limit {
                 resource: "bytes",

@@ -1,4 +1,4 @@
-use super::{PreparedSolid, SolidPrepareError, outline_rings, ring_bytes};
+use super::{PreparedSolid, SolidPrepareError, outline_rings_with_segments, ring_bytes};
 use pomelo_core::{
     geometry3d::{
         drill::{DrillCut3d, DrillSpanError, MAX_DRILL_CUTS, retained_drill_spans},
@@ -147,6 +147,15 @@ impl PreparedSolid {
         }
         .pad()
         .ok_or_else(|| error(SolidError::Invalid("PLATING_THICKNESS")))?;
+        let circle_segments = if filled
+            && via.drill_shape.custom.is_none()
+            && !via.drill_shape.rectangular
+            && via.drill_shape.width == via.drill_shape.height
+        {
+            128
+        } else {
+            32
+        };
         let outline = |pad: &pomelo_core::model::Pad| {
             pad.outline(
                 PadPlacement {
@@ -160,8 +169,14 @@ impl PreparedSolid {
         };
         let mut rings = if via.drill_shape.custom.is_some() {
             use clipper2_rust::{EndType, FillRule, JoinType, PointD, inflate_paths_d, union_d};
-            let contours =
-                outline_rings(outline(&inner)?, tolerance_mm, limits, cancel).map_err(error)?;
+            let contours = outline_rings_with_segments(
+                outline(&inner)?,
+                tolerance_mm,
+                limits,
+                cancel,
+                circle_segments,
+            )
+            .map_err(error)?;
             let scratch = contours
                 .iter()
                 .map(Vec::len)
@@ -200,14 +215,27 @@ impl PreparedSolid {
             super::check_ring_budget(&rings, limits).map_err(error)?;
             rings
         } else {
-            outline_rings(outline(&outer)?, tolerance_mm, limits, cancel).map_err(error)?
+            outline_rings_with_segments(
+                outline(&outer)?,
+                tolerance_mm,
+                limits,
+                cancel,
+                circle_segments,
+            )
+            .map_err(error)?
         };
         if !filled {
             let used = ring_bytes(&rings);
             let mut remaining = limits;
             remaining.max_allocation_bytes = remaining.max_allocation_bytes.saturating_sub(used);
-            let holes =
-                outline_rings(outline(&inner)?, tolerance_mm, remaining, cancel).map_err(error)?;
+            let holes = outline_rings_with_segments(
+                outline(&inner)?,
+                tolerance_mm,
+                remaining,
+                cancel,
+                circle_segments,
+            )
+            .map_err(error)?;
             rings
                 .try_reserve_exact(holes.len())
                 .map_err(|_| error(SolidError::Allocation))?;

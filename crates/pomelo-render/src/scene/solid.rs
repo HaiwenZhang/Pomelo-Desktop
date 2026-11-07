@@ -56,6 +56,16 @@ pub(super) fn outline_rings(
     limits: SolidLimits,
     cancel: &CancellationToken,
 ) -> Result<Vec<Vec<Point>>, SolidError> {
+    outline_rings_with_segments(outline, tolerance, limits, cancel, 32)
+}
+
+pub(super) fn outline_rings_with_segments(
+    outline: PadOutline,
+    tolerance: f64,
+    limits: SolidLimits,
+    cancel: &CancellationToken,
+    circle_segments: usize,
+) -> Result<Vec<Vec<Point>>, SolidError> {
     cancel.check()?;
     if !tolerance.is_finite() || tolerance <= 0.0 {
         return Err(SolidError::Invalid("CHORD_TOLERANCE"));
@@ -76,7 +86,12 @@ pub(super) fn outline_rings(
     } else {
         std::f64::consts::PI
     };
-    let samples = curve_count(radius, sweep, tolerance, if closed { 8 } else { 4 })?;
+    let samples = curve_count(
+        radius,
+        sweep,
+        tolerance,
+        if closed { circle_segments } else { 4 },
+    )?;
     let count = if closed {
         samples
     } else {

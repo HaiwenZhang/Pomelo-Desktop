@@ -2,6 +2,7 @@
 mod holes;
 mod paging;
 mod parallel;
+mod round;
 mod spatial;
 use super::solid::{PadSolidSource, PreparedSolid, SolidPrepareError, ViaWallSpan};
 use pomelo_core::{
@@ -54,7 +55,7 @@ pub struct Vertex3d {
 pub struct Instance3d {
     /// Translation relative to board origin, then cosine/sine of the placement angle.
     pub transform: [f32; 4],
-    /// [source ID, capsule flag, f32 end-extension bits, reserved]. Zero ID uses vertex ownership.
+    /// [source ID, capsule flag, f32 end-extension bits, circular-side shading flag]. Zero ID uses vertex ownership.
     pub owner: [u32; 4],
 }
 const _: () = assert!(size_of::<Vertex3d>() == 48 && size_of::<Instance3d>() == 32);
@@ -66,6 +67,55 @@ pub const PAGE_INSTANCES: usize = 4_096;
 pub struct Mesh3d {
     pub vertices: Vec<Vertex3d>,
     pub indices: Vec<u32>,
+    /// Optional screen-error-bounded index ranges, sharing the full-resolution vertices.
+    pub round_lods: Vec<RoundLod3d>,
+}
+/// Alternative triangle range with a conservative model-space chord error.
+pub struct RoundLod3d {
+    pub indices: Range<u32>,
+    pub error_mm: f32,
+}
+impl Mesh3d {
+    /// Triangle prefix retained for full-resolution picking.
+    pub fn fine_index_count(&self) -> usize {
+        self.round_lods
+            .first()
+            .map_or(self.indices.len(), |lod| lod.indices.start as usize)
+    }
+    pub(crate) fn valid_lods(&self) -> bool {
+        let fine = self.fine_index_count();
+        if fine > self.indices.len()
+            || !fine.is_multiple_of(3)
+            || (!self.round_lods.is_empty() && fine == 0)
+        {
+            return false;
+        }
+        let mut end = fine as u32;
+        for lod in &self.round_lods {
+            if lod.indices.start != end
+                || lod.indices.end <= end
+                || lod.indices.end as usize > self.indices.len()
+                || !(lod.indices.end - end).is_multiple_of(3)
+                || !lod.error_mm.is_finite()
+                || lod.error_mm < 0.0
+            {
+                return false;
+            }
+            end = lod.indices.end;
+        }
+        end as usize == self.indices.len()
+    }
+    /// Select an uploaded range whose silhouette error is at most half a pixel.
+    pub fn draw_indices(&self, pixels_per_mm: f32) -> Range<u32> {
+        if pixels_per_mm.is_finite() && pixels_per_mm > 0.0 {
+            for lod in &self.round_lods {
+                if lod.error_mm * pixels_per_mm <= 0.5 {
+                    return lod.indices.clone();
+                }
+            }
+        }
+        0..self.fine_index_count() as u32
+    }
 }
 pub struct Page3d {
     pub mesh: usize,
@@ -337,6 +387,9 @@ impl PreparedBoard3d {
                         layers: MemberLayers::Span(a, b),
                         net: via.net,
                         extension: 0.0,
+                        smooth_round: via.drill_shape.custom.is_none()
+                            && !via.drill_shape.rectangular
+                            && via.drill_shape.width == via.drill_shape.height,
                         placement: PadPlacement {
                             mirrored: false,
                             ..placement
@@ -385,7 +438,11 @@ impl PreparedBoard3d {
             + self
                 .meshes
                 .iter()
-                .map(|m| m.vertices.capacity() * size_of::<Vertex3d>() + m.indices.capacity() * 4)
+                .map(|m| {
+                    m.vertices.capacity() * size_of::<Vertex3d>()
+                        + m.indices.capacity() * 4
+                        + m.round_lods.capacity() * size_of::<RoundLod3d>()
+                })
                 .sum::<usize>()
             + self.pages.capacity() * size_of::<Page3d>()
             + self
@@ -565,6 +622,7 @@ struct Identity {
     net: NetId,
     placement: PadPlacement,
     extension: f32,
+    smooth_round: bool,
 }
 struct Group {
     vertices: Vec<Vertex3d>,
@@ -573,6 +631,7 @@ struct Group {
     sources: Vec<u32>,
     bounds: Option<Bounds3>,
     shared: bool,
+    round_lods: Vec<RoundLod3d>,
 }
 impl Group {
     fn allocation_bytes(&self) -> usize {
@@ -580,6 +639,7 @@ impl Group {
             + self.indices.capacity() * 4
             + self.instances.capacity() * size_of::<Instance3d>()
             + self.sources.capacity() * 4
+            + self.round_lods.capacity() * size_of::<RoundLod3d>()
     }
 }
 struct Builder<'a> {
@@ -655,6 +715,7 @@ impl Builder<'_> {
             sources: vec![],
             bounds: None,
             shared: false,
+            round_lods: vec![],
         });
         Ok(self.groups.len() - 1)
     }
@@ -726,6 +787,7 @@ impl Builder<'_> {
                 mirrored: false,
             },
             extension,
+            smooth_round: false,
         };
         let cancel = self.cancel;
         self.add_shared(key, meta, |limits| {
@@ -789,6 +851,9 @@ impl Builder<'_> {
             object: source.object,
             layers: MemberLayers::Single(p.layer),
             net: source.net,
+            smooth_round: p.custom.is_none()
+                && matches!(p.kind.0, 2 | 25)
+                && source.drill.is_none(),
             extension: 0.0,
             placement: PadPlacement {
                 at: Point::new(

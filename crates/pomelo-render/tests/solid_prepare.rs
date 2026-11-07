@@ -726,3 +726,36 @@ fn via_cut_segments_share_one_aggregate_geometry_budget() {
         .is_empty()
     );
 }
+
+#[test]
+fn round_via_prototypes_keep_a_fine_silhouette_for_close_views() {
+    let mut source = via();
+    source.drill_shape.width = 0.1;
+    source.drill_shape.height = 0.1;
+    let body = PreparedSolid::prepare_via_body(
+        &source,
+        ViaWallSpan {
+            z: [-0.1, 0.1],
+            layers: [LayerId(0), LayerId(1)],
+            plating_thickness_mm: 0.025,
+        },
+        0.005,
+        SolidLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    let wall = body
+        .mesh
+        .surfaces
+        .iter()
+        .find(|s| s.kind == SurfaceKind::OuterWall)
+        .unwrap();
+    let mut points = std::collections::BTreeSet::new();
+    for &i in &body.mesh.indices[wall.indices.start as usize..wall.indices.end as usize] {
+        let p = body.mesh.vertices[i as usize].position;
+        points.insert([p[0].to_bits(), p[1].to_bits()]);
+    }
+    assert!(points.len() >= 128);
+    let expected = std::f64::consts::PI * 0.075 * 0.075;
+    assert!((top_area(&body) - expected).abs() / expected < 0.0005);
+}

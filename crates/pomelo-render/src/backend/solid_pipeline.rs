@@ -62,6 +62,7 @@ pub(crate) struct SolidPipeline {
 impl SolidPipeline {
     pub fn new(device: &Device<'_>, scene: &PreparedBoard3d) -> anyhow::Result<Self> {
         for mesh in &scene.meshes {
+            ensure!(mesh.valid_lods(), "SOLID_LOD_RANGE");
             ensure!(
                 u32::try_from(mesh.indices.len()).is_ok(),
                 "SOLID_INDEX_COUNT"
@@ -329,7 +330,10 @@ impl SolidPipeline {
                 frame.z_scale as f32,
                 device.solid_opacity(),
                 f32::from(!self.transparent_batches.is_empty()),
-                0.0,
+                (f64::from(size[1]).max(
+                    f64::from(size[0]) * f64::from(context.bounds.size.height.0)
+                        / f64::from(context.bounds.size.width.0),
+                ) / frame.camera.view_height()) as f32,
             ],
         };
 

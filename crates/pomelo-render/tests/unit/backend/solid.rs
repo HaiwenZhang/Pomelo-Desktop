@@ -225,4 +225,114 @@ pub(crate) fn verify(
         sample(&pixels, 90, 64)[0] > 180,
         "copper outside the drill disappeared"
     );
+    // The same welded mesh must have smooth cylindrical sides and flat end caps.
+    drilled.zones.clear();
+    drilled.vias[0].pads = Vec::new().into();
+    drilled.vias[0].drill_shape.width = 0.2;
+    drilled.vias[0].drill_shape.height = 0.2;
+    let make = || {
+        PreparedBoard3d::preview(
+            &drilled,
+            PreviewStackup {
+                board_mm: 0.2,
+                ..Default::default()
+            },
+            SolidLimits::default(),
+            &cancel,
+        )
+        .unwrap()
+    };
+    let smooth = Arc::new(make());
+    let mut flat = make();
+    for page in &mut flat.pages {
+        for instance in &mut page.instances {
+            instance.owner[3] = 0;
+        }
+    }
+    let flat = Arc::new(flat);
+    let mut camera = Camera3d::new(
+        [0.; 3],
+        [
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.,
+            0.,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ],
+        1.,
+    )
+    .unwrap();
+    assert!(camera.fit(smooth.bounds, [128.; 2], 8.));
+    let make_frame = |scene: Arc<PreparedBoard3d>, camera| SolidFrame {
+        materials: Arc::new(
+            std::iter::once([0.; 4])
+                .chain(scene.sources.iter().map(|_| [1., 0., 0., 1.]))
+                .collect(),
+        ),
+        scene,
+        camera,
+        z_scale: 1.,
+    };
+    let smooth_frame = make_frame(smooth.clone(), camera);
+    let flat_frame = make_frame(flat.clone(), camera);
+    let smooth_pixels = render(&mut None, &smooth_frame, false, 1.);
+    let flat_pixels = render(&mut None, &flat_frame, false, 1.);
+    let shades = |image: &[u8]| {
+        image[64 * 128 * 4..65 * 128 * 4]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 0 && p[1] == 0 && p[2] == 0)
+            .map(|p| p[0])
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert!(
+        shades(&smooth_pixels).len() > shades(&flat_pixels).len() + 8,
+        "cylinder side still has flat lighting bands: smooth={} flat={}",
+        shades(&smooth_pixels).len(),
+        shades(&flat_pixels).len()
+    );
+    let mut lod_frame = make_frame(smooth.clone(), camera);
+    let mut lod_pipeline = None;
+    assert!(lod_frame.camera.zoom_at([64.; 2], [128.; 2], 0.02));
+    render(&mut lod_pipeline, &lod_frame, false, 1.);
+    assert!(lod_frame.camera.zoom_at([64.; 2], [128.; 2], 50.));
+    render(&mut lod_pipeline, &lod_frame, false, 1.);
+    assert_eq!(
+        lod_pipeline.as_ref().unwrap().uploaded_this_frame,
+        0,
+        "zooming circle LOD must reuse uploaded geometry"
+    );
+    let mut top = Camera3d::default();
+    assert!(top.fit(smooth.bounds, [128.; 2], 8.));
+    assert_eq!(
+        render(&mut None, &make_frame(smooth, top), false, 1.),
+        render(&mut None, &make_frame(flat, top), false, 1.),
+        "round shading must preserve flat end caps"
+    );
+    let top_pixels = render(
+        &mut None,
+        &make_frame(smooth_frame.scene.clone(), top),
+        false,
+        1.,
+    );
+    for x in [40usize, 88] {
+        for y in [40usize, 88] {
+            assert!(
+                sample(&top_pixels, x, y)[0] > 100,
+                "LOD cap lost a filled quadrant"
+            );
+        }
+    }
+    if let Some(output) = std::env::var_os("POMELO_SOLID_ROUND_OUTPUT") {
+        let output = std::path::PathBuf::from(output);
+        std::fs::create_dir_all(&output).unwrap();
+        image::RgbaImage::from_raw(128, 128, smooth_pixels)
+            .unwrap()
+            .save(output.join("smooth.png"))
+            .unwrap();
+        image::RgbaImage::from_raw(128, 128, flat_pixels)
+            .unwrap()
+            .save(output.join("flat.png"))
+            .unwrap();
+    }
 }

@@ -78,6 +78,10 @@ impl SolidPipeline {
         library: &LibraryRef,
         archive: Option<&BinaryArchiveRef>,
     ) -> anyhow::Result<Self> {
+        ensure!(
+            scene.meshes.iter().all(|m| m.valid_lods()),
+            "SOLID_LOD_RANGE"
+        );
         for size in scene
             .meshes
             .iter()
@@ -490,7 +494,10 @@ impl SolidPipeline {
                 frame.z_scale as f32,
                 device.opacity,
                 f32::from(!self.transparent_batches.is_empty()),
-                0.0,
+                ((size[1] as f64).max(
+                    size[0] as f64 * f64::from(context.bounds.size.height.0)
+                        / f64::from(context.bounds.size.width.0),
+                ) / frame.camera.view_height()) as f32,
             ],
         };
         let sizes = [material.size as u32];
@@ -516,12 +523,13 @@ impl SolidPipeline {
                 encoder.set_vertex_buffer(1, Some(&mesh.vertices.raw), 0);
                 encoder.set_vertex_buffer(2, Some(&instances.raw), 0);
                 calls += 1;
+                let indices = frame.scene.meshes[b.mesh].draw_indices(uniforms.parameters[3]);
                 encoder.draw_indexed_primitives_instanced_base_instance(
                     MTLPrimitiveType::Triangle,
-                    frame.scene.meshes[b.mesh].indices.len() as u64,
+                    u64::from(indices.end - indices.start),
                     MTLIndexType::UInt32,
                     &mesh.indices.raw,
-                    0,
+                    u64::from(indices.start) * 4,
                     b.instances.len() as u64,
                     0,
                     0,

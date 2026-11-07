@@ -1,6 +1,6 @@
 use super::{
     PreparedSolid, SolidPrepareError, check_points, check_ring_budget, curve_count, outline_rings,
-    ring_bytes,
+    outline_rings_with_segments, ring_bytes,
 };
 use pomelo_core::{
     geometry::flatten_path,
@@ -62,6 +62,25 @@ impl PreparedSolid {
         let local_owner = PadPlacement {
             mirrored: source.placement.mirrored,
             ..Default::default()
+        };
+        // Analytic ring-producing families need the same angular floor as circles.
+        // Explicit polygons and custom contours retain their source corners.
+        let detailed_circle =
+            local_pad.custom.is_none() && local_pad.kind.0 == 2 && source.drill.is_none();
+        let radius = match local_pad.kind.0 {
+            25 => {
+                local_pad
+                    .inner_diameter
+                    .filter(|r| *r > 0.0)
+                    .unwrap_or(local_pad.width)
+                    * 0.5
+            }
+            _ => 0.0,
+        };
+        let outline_tolerance = if radius > 0.0 {
+            tolerance_mm.min(radius * (1.0 - (std::f64::consts::PI / 32.0).cos()))
+        } else {
+            tolerance_mm
         };
         let rings = if let Some(custom) = &local_pad.custom {
             let count = if custom.paths.is_empty() {
@@ -137,14 +156,19 @@ impl PreparedSolid {
             let n = match local_pad.kind.0 {
                 2 => 0,
                 11 | 12 => 0,
-                25 => curve_count(pad.width * 0.5, std::f64::consts::TAU, tolerance_mm, 8)
-                    .map_err(error)?
-                    .saturating_mul(2),
+                25 => curve_count(
+                    pad.width * 0.5,
+                    std::f64::consts::TAU,
+                    outline_tolerance,
+                    32,
+                )
+                .map_err(error)?
+                .saturating_mul(2),
                 3 => 8,
                 5 | 6 | 27 | 28 => curve_count(
                     pad.corner_radius(),
                     std::f64::consts::FRAC_PI_2,
-                    tolerance_mm,
+                    outline_tolerance,
                     1,
                 )
                 .map_err(error)?
@@ -154,10 +178,17 @@ impl PreparedSolid {
             };
             check_points(n, limits).map_err(error)?;
             let outline = local_pad
-                .outline(local_owner, tolerance_mm)
+                .outline(local_owner, outline_tolerance)
                 .map_err(|_| error(SolidError::Invalid("PAD_OUTLINE")))?
                 .ok_or_else(|| error(SolidError::Unsupported("PAD_FAMILY")))?;
-            outline_rings(outline, tolerance_mm, limits, cancel).map_err(error)?
+            outline_rings_with_segments(
+                outline,
+                outline_tolerance,
+                limits,
+                cancel,
+                if detailed_circle { 128 } else { 32 },
+            )
+            .map_err(error)?
         };
         check_ring_budget(&rings, limits).map_err(error)?;
         let mut cutouts = Vec::new();

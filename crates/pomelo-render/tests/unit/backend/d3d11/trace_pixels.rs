@@ -3332,3 +3332,6 @@ impl crate::text::StrokeGlyphs for SyntheticStrokeFont {
 
 #[path = "solid_pixels.rs"]
 mod solid_pixels;
+
+#[path = "round_profile.rs"]
+mod round_profile;

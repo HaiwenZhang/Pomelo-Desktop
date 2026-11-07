@@ -417,7 +417,7 @@ impl SolidDriver {
                 pass.set_vertex_buffer(1, instances.raw.slice(..));
                 pass.set_index_buffer(mesh.indices.raw.slice(..), IndexFormat::Uint32);
                 pass.draw_indexed(
-                    0..draw.scene.meshes[page.mesh].indices.len() as u32,
+                    draw.scene.meshes[page.mesh].draw_indices(draw.uniforms.parameters[3]),
                     0,
                     0..page.instances.len() as u32,
                 );
