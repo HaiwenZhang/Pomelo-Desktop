@@ -127,7 +127,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config clang libclang-dev dpkg-dev desktop-file-utils \
             libasound2-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libxcb1-dev libx11-xcb-dev libssl-dev libvulkan-dev
+            libwayland-dev libxcb1-dev libx11-xcb-dev libssl-dev libvulkan-dev mesa-vulkan-drivers
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p pomelo-core -p pomelo-import --locked
       - run: cargo test -p pomelo-render --features native-gpu --lib --locked
