@@ -282,3 +282,13 @@ fn limits_and_pre_cancel_are_checked_before_triangulation() {
         Err(MeshError::Cancelled)
     ));
 }
+
+#[test]
+fn deferred_mesh_checks_cancellation_after_metadata_preparation() {
+    let rings = vec![square(0., 0., 10.), square(2., 2., 1.)];
+    let cancel = CancellationToken::default();
+    let pending = CopperMesh::prepare(&rings, &[], &MeshLimits::default(), &cancel).unwrap();
+    assert_eq!(pending.outer_bounds().unwrap().min, Point::new(0., 0.));
+    cancel.cancel();
+    assert!(matches!(pending.finish(&cancel), Err(MeshError::Cancelled)));
+}

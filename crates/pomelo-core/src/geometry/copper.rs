@@ -141,6 +141,17 @@ impl CopperMesh {
         limits: &MeshLimits,
         cancellation: &CancellationToken,
     ) -> Result<Self, MeshError> {
+        Self::prepare(rings, paths, limits, cancellation)?.finish(cancellation)
+    }
+
+    /// Own validated source contours and reserved output before CPU triangulation.
+    /// The intermediate cannot be rendered until `finish` succeeds.
+    pub fn prepare(
+        rings: &[Vec<Point>],
+        paths: &[Vec<Segment>],
+        limits: &MeshLimits,
+        cancellation: &CancellationToken,
+    ) -> Result<PendingCopperMesh, MeshError> {
         check_cancelled(cancellation)?;
         check_limit(
             "rings",
@@ -242,12 +253,57 @@ impl CopperMesh {
                 .extend(holes.iter().map(|(_, index)| *index));
         }
         check_cancelled(cancellation)?;
+        Ok(PendingCopperMesh {
+            mesh: result,
+            largest,
+        })
+    }
+
+    /// Retained mesh allocation for scene-wide accounting after scratch is released.
+    pub fn allocation_bytes(&self) -> usize {
+        self.vertices.capacity() * size_of::<Point>()
+            + self.indices.capacity() * size_of::<u32>()
+            + self.ring_offsets.capacity() * size_of::<u32>()
+            + self.ring_bounds.capacity() * size_of::<Bounds>()
+            + self.ring_order.capacity() * size_of::<u32>()
+            + self.hole_chunks.capacity() * size_of::<CopperChunk>()
+    }
+}
+
+/// Validated metadata with exclusively owned output buffers and no published triangles.
+#[derive(Debug)]
+pub struct PendingCopperMesh {
+    mesh: CopperMesh,
+    largest: usize,
+}
+impl PendingCopperMesh {
+    /// Bounds needed for scene fitting before the mesh is published.
+    pub fn outer_bounds(&self) -> Option<Bounds> {
+        self.mesh.ring_bounds.first().copied()
+    }
+    /// Resident buffers, including the already reserved final index capacity.
+    pub fn allocation_bytes(&self) -> usize {
+        self.mesh.allocation_bytes()
+    }
+    /// Conservative Earcut nodes and per-ring index conversion workspace.
+    pub fn scratch_bytes(&self) -> usize {
+        self.largest.saturating_mul(512)
+    }
+    /// Work estimate for balancing independent source zones.
+    pub fn point_count(&self) -> usize {
+        self.mesh.vertices.len()
+    }
+    /// Generate exactly the same source-ordered triangles as `CopperMesh::build`.
+    pub fn finish(self, cancellation: &CancellationToken) -> Result<CopperMesh, MeshError> {
+        check_cancelled(cancellation)?;
+        let Self { mut mesh, largest } = self;
         let mut triangulator = earcut::Earcut::<f64>::new();
         let mut local = reserve(largest.saturating_sub(2).saturating_mul(3))?;
-        for (position, ring_index) in result.ring_order.iter().copied().enumerate() {
+        for (position, ring_index) in mesh.ring_order.iter().copied().enumerate() {
             check_cancelled(cancellation)?;
             let ring_index = ring_index as usize;
-            let ring = &rings[ring_index];
+            let ring = &mesh.vertices[mesh.ring_offsets[ring_index] as usize
+                ..mesh.ring_offsets[ring_index + 1] as usize];
             local.clear();
             if ring.len() >= 3 && !convex_indices(ring, &mut local, cancellation)? {
                 local.clear();
@@ -264,46 +320,36 @@ impl CopperMesh {
                 });
             }
             if position > 0 {
-                let bounds = result.ring_bounds[ring_index];
+                let bounds = mesh.ring_bounds[ring_index];
                 if (position - 1).is_multiple_of(64) {
-                    result.hole_chunks.push(CopperChunk {
-                        start: result.indices.len() as u32,
+                    mesh.hole_chunks.push(CopperChunk {
+                        start: mesh.indices.len() as u32,
                         count: 0,
                         ring_start: position as u32,
                         ring_count: 0,
                         bounds,
                     });
                 }
-                if let Some(chunk) = result.hole_chunks.last_mut() {
+                if let Some(chunk) = mesh.hole_chunks.last_mut() {
                     chunk.count += local.len() as u32;
                     chunk.ring_count += 1;
                     chunk.bounds.include(bounds.min);
                     chunk.bounds.include(bounds.max);
                 }
             }
-            let base = result.ring_offsets[ring_index];
+            let base = mesh.ring_offsets[ring_index];
             for (index, vertex) in local.iter().enumerate() {
                 if index.is_multiple_of(1024) {
                     check_cancelled(cancellation)?;
                 }
-                result.indices.push(*vertex + base);
+                mesh.indices.push(*vertex + base);
             }
             if position == 0 {
-                result.outer_count = result.indices.len() as u32;
+                mesh.outer_count = mesh.indices.len() as u32;
             }
         }
         check_cancelled(cancellation)?;
-        Ok(result)
-    }
-
-    /// Retained mesh allocation for scene-wide accounting after scratch is released.
-    pub fn allocation_bytes(&self) -> usize {
-        self.vertices.capacity() * size_of::<Point>()
-            + self.indices.capacity() * size_of::<u32>()
-            + self.ring_offsets.capacity() * size_of::<u32>()
-            + self.ring_bounds.capacity() * size_of::<Bounds>()
-            + self.ring_order.capacity() * size_of::<u32>()
-            + self.hole_chunks.capacity() * size_of::<CopperChunk>()
+        Ok(mesh)
     }
 }
 

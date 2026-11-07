@@ -1,64 +1,18 @@
 //! Bounded CPU preparation, with a shared process ceiling and disjoint byte allowances.
 use super::*;
-use std::sync::{
-    Condvar, Mutex, OnceLock,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
-use std::time::Duration;
-
-fn cpu_limit(cpus: usize) -> usize {
-    let reserve = if cpus <= 2 {
-        1
-    } else if cpus <= 8 {
-        2
-    } else {
-        cpus.div_ceil(4)
-    };
-    cpus.saturating_sub(reserve).clamp(1, 4)
-}
+use pomelo_core::task::preparation::PreparationPermit;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub(super) fn worker_limit() -> usize {
-    cpu_limit(std::thread::available_parallelism().map_or(1, usize::from))
+    pomelo_core::task::preparation::worker_limit()
 }
-
-// Shared across documents, including serial preparations, so several open boards do
-// not each claim a full set of workers. Waiting is cancellable and uses no CPU spin.
-struct Pool {
-    active: Mutex<usize>,
-    changed: Condvar,
+struct Permit {
+    _permit: PreparationPermit,
 }
-static POOL: OnceLock<Pool> = OnceLock::new();
-struct Permit<'a>(&'a Pool);
-impl Permit<'_> {
+impl Permit {
     fn acquire(cancel: &CancellationToken) -> Result<Self, SolidPrepareError> {
-        let pool = POOL.get_or_init(|| Pool {
-            active: Mutex::new(0),
-            changed: Condvar::new(),
-        });
-        Self::acquire_in(pool, worker_limit(), cancel)
-    }
-    fn acquire_in<'a>(
-        pool: &'a Pool,
-        limit: usize,
-        cancel: &CancellationToken,
-    ) -> Result<Permit<'a>, SolidPrepareError> {
-        let mut active = pool.active.lock().unwrap_or_else(|p| p.into_inner());
-        while *active >= limit {
-            cancel.check().map_err(|e| Builder::error(e.into()))?;
-            active = pool
-                .changed
-                .wait_timeout(active, Duration::from_millis(10))
-                .unwrap_or_else(|p| p.into_inner())
-                .0;
-        }
-        cancel.check().map_err(|e| Builder::error(e.into()))?;
-        *active += 1;
-        Ok(Permit(pool))
-    }
-}
-impl Drop for Permit<'_> {
-    fn drop(&mut self) {
-        *self.0.active.lock().unwrap_or_else(|p| p.into_inner()) -= 1;
-        self.0.changed.notify_one();
+        Ok(Self {
+            _permit: PreparationPermit::acquire(cancel).map_err(|e| Builder::error(e.into()))?,
+        })
     }
 }
 fn reserve<T>(out: &mut Vec<T>, count: usize) -> Result<(), SolidPrepareError> {
@@ -390,44 +344,5 @@ impl PreparedBoard3d {
             }));
         }
         Ok(scene)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn concurrency_reserves_cpu_capacity_and_caps_large_machines() {
-        assert_eq!(
-            [1, 2, 3, 4, 8, 12, 24, 64].map(cpu_limit),
-            [1, 1, 1, 2, 4, 4, 4, 4]
-        );
-    }
-    #[test]
-    fn cancelled_permit_does_not_consume_capacity() {
-        let cancel = CancellationToken::default();
-        cancel.cancel();
-        assert!(matches!(
-            Permit::acquire(&cancel),
-            Err(SolidPrepareError::Scene(SolidError::Cancelled))
-        ));
-        assert!(Permit::acquire(&CancellationToken::default()).is_ok());
-    }
-    #[test]
-    fn cancellation_wakes_a_worker_waiting_for_a_cpu_permit() {
-        let pool = Pool {
-            active: Mutex::new(0),
-            changed: Condvar::new(),
-        };
-        let cancel = CancellationToken::default();
-        let permit = Permit::acquire_in(&pool, 1, &cancel).unwrap();
-        std::thread::scope(|scope| {
-            let waiting = scope.spawn(|| Permit::acquire_in(&pool, 1, &cancel).is_err());
-            cancel.cancel();
-            assert!(waiting.join().unwrap());
-        });
-        assert_eq!(*pool.active.lock().unwrap(), 1);
-        drop(permit);
-        assert_eq!(*pool.active.lock().unwrap(), 0);
     }
 }

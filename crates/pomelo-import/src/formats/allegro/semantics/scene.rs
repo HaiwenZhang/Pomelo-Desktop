@@ -91,10 +91,21 @@ impl OutputBudget {
 pub struct SceneBuilder<'a> {
     database: &'a BrdDatabase,
     limits: SceneLimits,
+    mesh_workers: usize,
 }
 impl<'a> SceneBuilder<'a> {
     pub fn new(database: &'a BrdDatabase, limits: SceneLimits) -> Self {
-        Self { database, limits }
+        Self {
+            database,
+            limits,
+            mesh_workers: 0,
+        }
+    }
+
+    /// Bound zone preparation workers; zero selects the machine resource policy.
+    pub fn with_mesh_workers(mut self, workers: usize) -> Self {
+        self.mesh_workers = workers;
+        self
     }
 
     /// No partial scene is published after cancellation, a reference failure, or a resource limit.
@@ -108,6 +119,30 @@ impl<'a> SceneBuilder<'a> {
         self,
         context: &ImportContext<'_>,
         observer: &dyn Fn(&'static str, std::time::Duration),
+    ) -> Result<BoardScene, ImportError> {
+        let fallback = Self {
+            database: self.database,
+            limits: self.limits.clone(),
+            mesh_workers: 1,
+        };
+        let parallel = self.mesh_workers != 1 && pomelo_core::task::preparation::worker_limit() > 1;
+        match self.build_inner(context, observer, parallel) {
+            Err(
+                ImportError::SemanticCacheLimit { .. }
+                | ImportError::GeometryLimit { .. }
+                | ImportError::CopperMesh {
+                    source: pomelo_core::copper::MeshError::Limit { .. },
+                    ..
+                },
+            ) if parallel => fallback.build_inner(context, observer, false),
+            result => result,
+        }
+    }
+    fn build_inner(
+        self,
+        context: &ImportContext<'_>,
+        observer: &dyn Fn(&'static str, std::time::Duration),
+        parallel: bool,
     ) -> Result<BoardScene, ImportError> {
         let mut checkpoint = std::time::Instant::now();
         let mut stage = |name| {
@@ -250,6 +285,9 @@ impl<'a> SceneBuilder<'a> {
         drop(placement);
         stage("footprints");
         let mut copper = CopperDecoder::new(database, &networks, layer_count, self.limits.copper)?;
+        if parallel {
+            copper.defer_meshes();
+        }
         for record in database.records_of_type(0x28, context) {
             let record = record?;
             let offset = record.span.offset.0 as usize;
@@ -274,6 +312,13 @@ impl<'a> SceneBuilder<'a> {
             if let Some(zone) = object.zone {
                 include_zone(&mut bounds, &zone, offset, context)?;
                 scene.zones.push(zone);
+                copper.complete_meshes(
+                    &mut scene.zones,
+                    budget.available(),
+                    self.mesh_workers,
+                    context,
+                    false,
+                )?;
             }
             scene.segments.extend(object.segments);
             scene.outline.extend(object.outline);
@@ -293,6 +338,13 @@ impl<'a> SceneBuilder<'a> {
                 if let Some(zone) = zone {
                     include_zone(&mut bounds, &zone, offset, context)?;
                     scene.zones.push(zone);
+                    copper.complete_meshes(
+                        &mut scene.zones,
+                        budget.available(),
+                        self.mesh_workers,
+                        context,
+                        false,
+                    )?;
                 }
             }
         }
@@ -314,6 +366,13 @@ impl<'a> SceneBuilder<'a> {
             }
             scene.outline.extend(outline);
         }
+        copper.complete_meshes(
+            &mut scene.zones,
+            budget.available(),
+            self.mesh_workers,
+            context,
+            true,
+        )?;
         budget.diagnostics(copper.take_diagnostics(), &mut scene.diagnostics)?;
         drop(copper);
         stage("copper");

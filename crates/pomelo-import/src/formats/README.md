@@ -11,6 +11,8 @@ All active parsers are Rust implementations inside `pomelo-import`. `FormatImpor
 | `kicad.rs`, `sexpr.rs` | Byte-span board index with one bounded S-expression object decoded at a time; layer/network tables, tracks/arcs, footprints, custom/per-layer pads, vias, saved filled polygons and board drawings |
 | `hfss/` | Self-describing unencrypted EDB typed DEF archives, AEDT property grammar, layer/net/component tables, analytic primitives, saved voids, pad definitions and placed instances |
 
+Zone metadata preparation and Earcut triangulation have separate ownership boundaries. Independent zones complete in a persistent CPU pool, bounded by available CPUs, physical-memory headroom and caller budgets. Source order, contour coordinates, independent hole coverage and generated index order are retained. CPU permits are shared with 3D preparation; small or memory-constrained batches run serially. No partially prepared scene is published on failure or cancellation.
+
 Allegro 18.0 and 18.1 use the `0x00150000` and `0x00150200` layout families. Both support 92-byte paired-net records and header-defined chain sentinels; their writer metadata, coordinate units and divisor remain at version-specific header offsets. Synthetic coverage is in `tests/allegro_181.rs`. Release labels and directory names do not identify the on-disk layout.
 
 EDB compatibility uses the archive's field IDs and type table rather than a version allowlist. The actual archive version is retained in source metadata. Structurally compatible versions are accepted; changed core field encodings and encountered unknown wire types fail explicitly. See [EDB compatibility](../../../../docs/edb-format-compatibility.md) for behavior and limits.

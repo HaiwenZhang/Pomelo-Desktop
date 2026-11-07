@@ -17,7 +17,7 @@ Pomelo Desktop 是基于 Rust、GPUI 和 GPUI Kit 的本地 PCB 查看器。本�
 - [GPU 设计](cad-gpu-painter-design.md)与[原生后端](native-gpu-backends.md)：数据流、帧目标和资源生命周期。
 - [渲染决策](adr/0001-native-gpu-rendering.md)：为何复用 GPUI 原生设备。
 - [PCB 三维渲染方案](pcb-3d-rendering-design.md)：网格生成、物理叠层、元件模型、原生 GPU 接入及分阶段验收。
-- [三维准备加速与帧率保障](pcb-3d-preparation-performance-plan.md)：Rust CDT、按 CPU 与内存约束的并行准备、帧预算和合成回归。
+- [网格准备加速与帧率约束](pcb-3d-preparation-performance-plan.md)：Rust CDT、按 CPU 与内存约束的并行准备、帧预算和合成回归。
 - [国际化](i18n.md)与[字体来源](pcb-text-font-provenance.md)：消息契约及资源维护。
 
 ## 验证与维护

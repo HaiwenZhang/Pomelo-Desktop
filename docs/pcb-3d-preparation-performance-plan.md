@@ -1,6 +1,6 @@
-# PCB 三维准备与帧率约束
+# PCB 网格准备与帧率约束
 
-三维实体使用纯 Rust CDT（Spade）和有上限的 CPU 并行准备。帧率与输入响应优先于后台吞吐量。本文只说明实现、资源约束和可公开复现的验证方法。
+二维 Zone 使用 Earcut 与独立轮廓覆盖；三维实体使用纯 Rust CDT（Spade）。两者均采用有上限的 CPU 并行准备。帧率与输入响应优先于后台吞吐量。本文只说明实现、资源约束和可公开复现的验证方法。
 
 ## 几何准备
 
@@ -21,7 +21,24 @@ W = max(1, min(4, C - R))
 
 小规模任务串行处理。较大任务按铜层分配，重任务先派发，并按原层顺序合并。各任务使用完整层高表，Via 实体只准备一次。合并时重新映射源 ID、顶点与实例所有者、网格、分片和空间索引。
 
-全进程的三维准备共享 CPU 许可，避免多个文档各自占用一组满负荷线程。`preview_with_workers(..., 1)` 可显式要求串行；请求更高并发仍受默认 CPU 上限限制。当前未接入实时帧耗时反馈，预留 CPU 余量不等于在所有设备上保证固定帧率。
+全进程的二维 Zone 与三维准备共享 CPU 许可，避免多个文档各自占用一组满负荷线程。`preview_with_workers(..., 1)` 可显式要求串行；请求更高并发仍受默认 CPU 上限限制。当前未接入实时帧耗时反馈，预留 CPU 余量不等于在所有设备上保证固定帧率。
+
+## 二维 Zone 准备
+
+二维保留原有外轮廓和独立孔剖分，不把孔合并为单个挖孔网格。孔的并集扣除、按孔显示过滤、源坐标、Morton 排序及分块边界不变。
+
+`CopperMesh::prepare` 校验并拥有轮廓元数据和预留输出，返回不能直接渲染的 `PendingCopperMesh`。`finish` 使用原 Earcut 和凸轮廓快速路径，生成原顺序的索引。导入器按有界批次准备多个 Zone，将连续任务按点数平衡到长期复用的线程池；批次完成后才继续发布进度。失败或取消不返回部分场景。
+
+CPU 上限使用上面的 `W`。设当前批次最大保守临时空间为 `S`，并行临时额度为 `B`：
+
+```text
+B = min(调用方剩余额度, 当前可用物理内存 / 4, 物理内存总量 / 8)
+W_effective <= min(W, 独立任务数量, max(1, floor(B / max(1, S))))
+```
+
+小任务直接串行。物理内存信息不可用时使用有界回退；单任务超过物理内存软额度时独占准备许可。场景的长期内存仍由导入器预算管理，该公式控制并行临时存储。全进程同时限制 CPU 许可和临时空间准入，避免多个文档分别用满资源。
+
+Allegro 的 `SceneBuilder::with_mesh_workers(1)` 可显式要求串行。并行延后完成网格可能增加同时驻留的元数据；如触发资源限额，则释放本轮私有结果并以原串行流程重试。其他格式在通用 Zone 完成边界使用相同线程和内存策略。
 
 ## 内存与取消
 
@@ -40,7 +57,8 @@ W = max(1, min(4, C - R))
 回归使用仓库内合成几何和公开夹具，覆盖多孔凹多边形、孔与外边界接触、重叠孔、闭合性、法线、CDT 冲突拒绝、取消、并发上限、层合并、来源映射、拾取和低预算回退。
 
 ```sh
-cargo test -p pomelo-core --test solid_mesh --locked
+cargo test -p pomelo-core --test solid_mesh --test copper_mesh --locked
+cargo test -p pomelo-import --lib formats::zone_mesh --locked
 cargo test -p pomelo-render --test board3d --test solid_prepare --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo fmt --all --check
@@ -50,6 +68,9 @@ GPU 像素测试使用合成场景检查深度、孔洞、透明度、裁剪和�
 
 ## 代码入口
 
+- `crates/pomelo-core/src/task/preparation.rs`：共享 CPU 与临时空间准入。
+- `crates/pomelo-core/src/geometry/copper.rs`：二维轮廓准备和 Earcut 完成边界。
+- `crates/pomelo-import/src/formats/zone_mesh.rs`：有界批次、机器资源策略和线程池。
 - `crates/pomelo-core/src/geometry3d/solid.rs`：归一化、挤出和几何预算。
 - `crates/pomelo-core/src/geometry3d/solid/cdt.rs`：约束三角化与面分类。
 - `crates/pomelo-render/src/scene/board3d/parallel.rs`：CPU 许可、内存分配和确定性合并。

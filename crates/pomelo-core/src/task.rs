@@ -1,5 +1,7 @@
 //! Cancellation and request identity, independent of any executor or UI.
 
+pub mod preparation;
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},

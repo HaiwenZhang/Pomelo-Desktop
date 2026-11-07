@@ -6,6 +6,7 @@ use super::{
     geometry::{GeometryDecoder, GeometryLimits},
     shape_kind::ShapeKinds,
 };
+use crate::formats::zone_mesh::{self, MeshJob};
 use crate::{
     ImportContext, ImportError,
     formats::allegro::{
@@ -58,6 +59,8 @@ pub struct CopperDecoder<'a> {
     budget: CacheBudget,
     diagnostics: Vec<Diagnostic>,
     shape_kinds: Option<ShapeKinds>,
+    pending: Option<Vec<MeshJob>>,
+    pending_points: usize,
 }
 impl<'a> CopperDecoder<'a> {
     pub fn new(
@@ -81,6 +84,8 @@ impl<'a> CopperDecoder<'a> {
             limits,
             diagnostics: Vec::new(),
             shape_kinds: None,
+            pending: None,
+            pending_points: 0,
         })
     }
 
@@ -97,6 +102,30 @@ impl<'a> CopperDecoder<'a> {
             .objects
             .max_bytes
             .min(self.budget.bytes.saturating_add(bytes));
+    }
+
+    pub(super) fn defer_meshes(&mut self) {
+        self.pending = Some(Vec::new());
+    }
+    pub(super) fn complete_meshes(
+        &mut self,
+        zones: &mut [Zone],
+        scene_available: usize,
+        workers: usize,
+        context: &ImportContext<'_>,
+        force: bool,
+    ) -> Result<(), ImportError> {
+        let available = self.budget.available().min(scene_available);
+        let Some(jobs) = &mut self.pending else {
+            return Ok(());
+        };
+        if !force && jobs.len() < 512 && self.pending_points < 4_000_000 {
+            return Ok(());
+        }
+        zone_mesh::complete(jobs, zones, available, workers, context.cancellation)?;
+        jobs.clear();
+        self.pending_points = 0;
+        Ok(())
     }
 
     fn geometry(&self) -> Result<GeometryDecoder<'a>, ImportError> {
@@ -400,16 +429,29 @@ impl<'a> CopperDecoder<'a> {
         limits.max_allocation_bytes = limits
             .max_allocation_bytes
             .min(self.budget.available().saturating_sub(input_bytes));
-        let mesh =
-            CopperMesh::build(&rings, &paths, &limits, context.cancellation).map_err(|source| {
-                ImportError::CopperMesh {
-                    key: key.0,
-                    offset,
-                    source,
-                }
-            })?;
+        let error = |source| ImportError::CopperMesh {
+            key: key.0,
+            offset,
+            source,
+        };
+        let (mesh, mesh_bytes) = if let Some(jobs) = &mut self.pending {
+            let pending = CopperMesh::prepare(&rings, &paths, &limits, context.cancellation)
+                .map_err(error)?;
+            let bytes = pending.allocation_bytes();
+            let placeholder = zone_mesh::placeholder(&pending).map_err(error)?;
+            jobs.try_reserve(1)
+                .map_err(|_| error(pomelo_core::copper::MeshError::Allocation))?;
+            self.pending_points = self.pending_points.saturating_add(pending.point_count());
+            jobs.push(MeshJob::new(key.0, offset, pending));
+            (placeholder, bytes.saturating_add(2 * size_of::<MeshJob>()))
+        } else {
+            let mesh =
+                CopperMesh::build(&rings, &paths, &limits, context.cancellation).map_err(error)?;
+            let bytes = mesh.allocation_bytes();
+            (mesh, bytes)
+        };
         let charge = paths_bytes
-            .saturating_add(mesh.allocation_bytes())
+            .saturating_add(mesh_bytes)
             .saturating_add(4 * size_of::<Zone>());
         self.budget.check(charge, offset)?;
         self.budget.commit(charge);

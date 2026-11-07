@@ -8,6 +8,7 @@ mod odb;
 pub mod pads;
 mod scene_builder;
 mod sexpr;
+pub(crate) mod zone_mesh;
 
 use std::{io::Read, path::Path, sync::Arc};
 
@@ -169,9 +170,10 @@ impl BoardImporter for FormatImporter {
         });
         let total = output.zones.len() as u64;
         let mut mesh_bytes = 0usize;
+        let mut mesh_jobs = Vec::new();
         for (index, zone) in output.zones.into_iter().enumerate() {
             context.check_cancelled()?;
-            let mesh = CopperMesh::build(
+            let pending = CopperMesh::prepare(
                 &zone.rings,
                 &zone.paths,
                 &MeshLimits::default(),
@@ -182,7 +184,21 @@ impl BoardImporter for FormatImporter {
                 offset: 0,
                 source,
             })?;
-            mesh_bytes = mesh_bytes.saturating_add(mesh.allocation_bytes());
+            mesh_bytes = mesh_bytes.saturating_add(pending.allocation_bytes());
+            let mesh =
+                zone_mesh::placeholder(&pending).map_err(|source| ImportError::CopperMesh {
+                    key: zone.id.0,
+                    offset: 0,
+                    source,
+                })?;
+            mesh_jobs
+                .try_reserve(1)
+                .map_err(|_| ImportError::CopperMesh {
+                    key: zone.id.0,
+                    offset: 0,
+                    source: pomelo_core::copper::MeshError::Allocation,
+                })?;
+            mesh_jobs.push(zone_mesh::MeshJob::new(zone.id.0, 0, pending));
             if mesh_bytes > 1024 * 1024 * 1024 {
                 return Err(ImportError::ResourceLimit {
                     actual: mesh_bytes as u64,
@@ -197,14 +213,42 @@ impl BoardImporter for FormatImporter {
                 paths: zone.paths,
                 mesh,
             });
+            if mesh_jobs.len() >= 512
+                || mesh_jobs
+                    .iter()
+                    .map(zone_mesh::MeshJob::points)
+                    .sum::<usize>()
+                    >= 4_000_000
+            {
+                zone_mesh::complete(
+                    &mut mesh_jobs,
+                    &mut output.scene.zones,
+                    MeshLimits::default().max_allocation_bytes,
+                    0,
+                    context.cancellation,
+                )?;
+                mesh_jobs.clear();
+            }
             if index.is_multiple_of(128) || index as u64 + 1 == total {
                 (context.progress)(ImportProgress {
                     stage: ImportStage::BuildingGeometry,
-                    completed: index as u64 + 1,
+                    completed: index as u64 + 1 - mesh_jobs.len() as u64,
                     total: Some(total),
                 });
             }
         }
+        zone_mesh::complete(
+            &mut mesh_jobs,
+            &mut output.scene.zones,
+            MeshLimits::default().max_allocation_bytes,
+            0,
+            context.cancellation,
+        )?;
+        (context.progress)(ImportProgress {
+            stage: ImportStage::BuildingGeometry,
+            completed: total,
+            total: Some(total),
+        });
         for layer in output.drawing_layers {
             let class_id = ((layer.id.0 >> 8) & 0xff) as u8;
             let subclass = (layer.id.0 & 0xff) as u8;

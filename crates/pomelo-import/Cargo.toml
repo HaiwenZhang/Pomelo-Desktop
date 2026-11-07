@@ -18,6 +18,9 @@ chardetng = "=0.1.17"
 flate2 = "1"
 clipper2-rust.workspace = true
 
+rayon = "=1.12.0"
+sysinfo = { version = "=0.31.4", default-features = false, features = ["system"] }
+
 [lints]
 workspace = true
 
