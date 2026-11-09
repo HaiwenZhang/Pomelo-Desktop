@@ -267,11 +267,14 @@ pub(super) fn build(
     for value in layout.field(5)?.array()? {
         context.check_cancelled()?;
         let p = value.object(Some(19))?;
-        if p.field(9)?.integer()? != 0
-            || !p.field(8)?.text()?.is_empty()
-            || !p.field(12)?.text()?.is_empty()
-        {
-            return Err(error("Unsupported drill override or padstack extensions"));
+        // Field 8 is the instance name (e.g. "via_0"); it carries no geometry.
+        p.field(8)?.text()?;
+        if p.field(9)?.integer()? != 0 || !p.field(12)?.text()?.is_empty() {
+            return Err(error(format!(
+                "Unsupported drill override or padstack extensions: f9={} f12={:?}",
+                p.field(9)?.integer()?,
+                p.field(12)?.text()?
+            )));
         }
         for group in p.field(11)?.array()? {
             group.integer()?;
