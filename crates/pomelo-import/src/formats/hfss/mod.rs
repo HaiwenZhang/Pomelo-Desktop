@@ -203,6 +203,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     let mut primitives = Vec::new();
     let mut primitive_ids = HashMap::new();
     let mut voids = HashMap::<i32, Vec<usize>>::new();
+    let mut unlayered = HashSet::new();
     for value in layout.field(4)?.array()? {
         context.check_cancelled()?;
         let p = value.object(None)?;
@@ -223,7 +224,24 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
         }
         let i = info(p)?;
         if !source_ids.contains(&i.layer) {
-            return Err(error("Primitive references missing source layer"));
+            if i.layer >= 0 {
+                return Err(error(format!(
+                    "Primitive {} references missing source layer {}",
+                    i.id, i.layer
+                )));
+            }
+            // Negative IDs (e.g. -100) are EDB's "no layer" sentinel for orphaned primitives.
+            unlayered.insert(i.id);
+            if !output
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("without a layer"))
+            {
+                output
+                    .diagnostics
+                    .push("HFSS primitives without a layer are not displayed".into());
+            }
+            continue;
         }
         net(i.net, &net_ids)?;
         let index = primitives.len();
@@ -235,7 +253,7 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
     for (index, (_, child)) in primitives
         .iter()
         .enumerate()
-        .filter(|(_, (_, i))| i.parent != -1)
+        .filter(|(_, (_, i))| i.parent != -1 && !unlayered.contains(&i.parent))
     {
         let parent_index = *primitive_ids
             .get(&child.parent)
@@ -323,8 +341,9 @@ pub(super) fn read(bytes: &[u8], context: &ImportContext<'_>) -> Result<ParsedBo
             continue;
         }
         if p.schema == 16 {
-            if source.kind != "wirebond" || voids.contains_key(&i.id) {
-                return Err(error("Invalid bond wire layer/geometry"));
+            // Bond wires may be anchored on wirebond or signal layers; only voids are invalid.
+            if voids.contains_key(&i.id) {
+                return Err(error(format!("Bond wire {} has voids", i.id)));
             }
             let path = p.field(0)?.object(Some(14))?;
             let width = path.field(4)?.quantity()? * 1000.0;
