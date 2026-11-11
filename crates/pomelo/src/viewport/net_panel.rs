@@ -32,7 +32,7 @@ pub(super) struct NetState {
 }
 
 impl BoardViewport {
-    fn net_groups(&mut self) -> Arc<NetGroups> {
+    pub(super) fn net_groups(&mut self) -> Arc<NetGroups> {
         if let Some(groups) = &self.nets.groups {
             return Arc::clone(groups);
         }
@@ -174,8 +174,21 @@ impl BoardViewport {
             .map_or_else(|| id.0.to_string(), |layer| layer.display_name(locale))
     }
 
-    pub(super) fn render_net_report(&self, locale: Locale, cx: &App) -> Option<AnyElement> {
-        let (_, report) = self.nets.report.as_ref()?;
+    pub(super) fn render_net_report(
+        &self,
+        locale: Locale,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (net, report) = self.nets.report.as_ref()?;
+        let net = *net;
+        let pinned = self.length_table.pinned.contains(&net);
+        let pin_button = Button::new("net-report-pin")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Table)
+            .label(text(locale, Key::PinToLengthTable))
+            .selected(pinned)
+            .on_click(cx.listener(move |this, _, _, cx| this.pin_to_length_table(net, cx)));
         let theme = cx.theme();
         let heading = |key: Key| {
             div()
@@ -344,7 +357,14 @@ impl BoardViewport {
                 .border_color(theme.border)
                 .flex()
                 .flex_col()
-                .child(heading(Key::NetReportLengths))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(heading(Key::NetReportLengths))
+                        .child(pin_button),
+                )
                 .children(lengths)
                 .child(
                     div()

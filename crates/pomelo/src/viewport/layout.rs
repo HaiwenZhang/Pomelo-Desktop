@@ -9,6 +9,8 @@ impl Render for BoardViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = i18n::current(cx);
         self.ensure_net_report(cx);
+        self.ensure_length_table(cx);
+        let length_table = self.render_length_table(locale, cx);
         let panel_budget = window.viewport_size().width.as_f32()
             - crate::workbench::panel_layout::MIN_CANVAS_WIDTH
             - crate::workbench::panel_layout::PANEL_FRAME_WIDTH;
@@ -166,6 +168,9 @@ impl Render for BoardViewport {
             .on_action(cx.listener(|this, _: &MeasureClearance, window, cx| {
                 this.set_review_tool(Some(review::ReviewTool::Clearance), window, cx)
             }))
+            .on_action(cx.listener(|this, _: &MeasurePinPath, window, cx| {
+                this.set_review_tool(Some(review::ReviewTool::PinPath), window, cx)
+            }))
             .on_action(cx.listener(|this, _: &BoxSelect, window, cx| {
                 this.set_review_tool(Some(review::ReviewTool::BoxSelect), window, cx)
             }))
@@ -253,138 +258,163 @@ impl Render for BoardViewport {
                                 )
                                 .child(
                                     div()
-                                        .id("board-canvas")
-                                        .relative()
-                                        .key_context("BoardViewport")
-                                        .track_focus(&self.focus)
-                                        .flex_1()
+                                        .size_full()
+                                        .flex()
+                                        .flex_col()
                                         .min_h_0()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .border_1()
-                                        .border_color(self.canvas_background())
-                                        .bg(self.canvas_background())
-                                        .focus_visible(|style| style.border_color(theme.ring))
-                                        .cursor(
-                                            if self
-                                                .pointer_gesture
-                                                .as_ref()
-                                                .is_some_and(|gesture| gesture.dragging)
-                                            {
-                                                CursorStyle::ClosedHand
-                                            } else if self.pan_tool {
-                                                CursorStyle::OpenHand
-                                            } else if self.review.tool.is_some() {
-                                                CursorStyle::Crosshair
-                                            } else {
-                                                CursorStyle::Arrow
-                                            },
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(Self::start_pan),
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Middle,
-                                            cx.listener(Self::start_pan),
-                                        )
-                                        .on_mouse_move(cx.listener(Self::move_pan))
-                                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                            if !*hovered {
-                                                this.pointer_position = None;
-                                                this.hover_cancel.cancel();
-                                                this.hovered = None;
-                                                this.hover_notice = None;
-                                                cx.notify();
-                                            }
-                                        }))
-                                        .on_mouse_up(MouseButton::Left, cx.listener(Self::stop_pan))
-                                        .on_mouse_up_out(
-                                            MouseButton::Left,
-                                            cx.listener(Self::cancel_pan),
-                                        )
-                                        .on_mouse_up(
-                                            MouseButton::Middle,
-                                            cx.listener(Self::stop_pan),
-                                        )
-                                        .on_mouse_up_out(
-                                            MouseButton::Middle,
-                                            cx.listener(Self::cancel_pan),
-                                        )
-                                        .on_scroll_wheel(cx.listener(Self::scroll))
-                                        .children(grid)
-                                        .child(viewport)
-                                        .children(review_overlay)
-                                        // Initial uploads must not resize the canvas after its first fit.
-                                        .when(!geometry_ready && failure.is_none(), |canvas| {
-                                            canvas.child(
-                                                div()
-                                                    .absolute()
-                                                    .top_10()
-                                                    .left_4()
-                                                    .max_w(relative(0.85))
-                                                    .truncate()
-                                                    .bg(theme.popover)
-                                                    .text_color(theme.popover_foreground)
-                                                    .rounded_sm()
-                                                    .px_4()
-                                                    .py_1()
-                                                    .text_xs()
-                                                    .child(
-                                                        Message::new(Key::TraceUpload)
-                                                            .arg("completed", uploaded_bytes)
-                                                            .arg("total", total_bytes)
-                                                            .display(locale),
-                                                    ),
-                                            )
-                                        })
                                         .child(
                                             div()
-                                                .absolute()
-                                                .top_3()
-                                                .left_4()
-                                                .max_w(relative(0.6))
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .text_sm()
-                                                .text_color(crate::theme::canvas_colors().1)
-                                                .child(
-                                                    Icon::new(IconName::Layers)
-                                                        .small()
-                                                        .flex_shrink_0(),
+                                                .id("board-canvas")
+                                                .relative()
+                                                .key_context("BoardViewport")
+                                                .track_focus(&self.focus)
+                                                .flex_1()
+                                                .min_h_0()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .border_1()
+                                                .border_color(self.canvas_background())
+                                                .bg(self.canvas_background())
+                                                .focus_visible(|style| {
+                                                    style.border_color(theme.ring)
+                                                })
+                                                .cursor(
+                                                    if self
+                                                        .pointer_gesture
+                                                        .as_ref()
+                                                        .is_some_and(|gesture| gesture.dragging)
+                                                    {
+                                                        CursorStyle::ClosedHand
+                                                    } else if self.pan_tool {
+                                                        CursorStyle::OpenHand
+                                                    } else if self.review.tool.is_some() {
+                                                        CursorStyle::Crosshair
+                                                    } else {
+                                                        CursorStyle::Arrow
+                                                    },
+                                                )
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::start_pan),
+                                                )
+                                                .on_mouse_down(
+                                                    MouseButton::Middle,
+                                                    cx.listener(Self::start_pan),
+                                                )
+                                                .on_mouse_move(cx.listener(Self::move_pan))
+                                                .on_hover(cx.listener(
+                                                    |this, hovered: &bool, _, cx| {
+                                                        if !*hovered {
+                                                            this.pointer_position = None;
+                                                            this.hover_cancel.cancel();
+                                                            this.hovered = None;
+                                                            this.hover_notice = None;
+                                                            cx.notify();
+                                                        }
+                                                    },
+                                                ))
+                                                .on_mouse_up(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::stop_pan),
+                                                )
+                                                .on_mouse_up_out(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::cancel_pan),
+                                                )
+                                                .on_mouse_up(
+                                                    MouseButton::Middle,
+                                                    cx.listener(Self::stop_pan),
+                                                )
+                                                .on_mouse_up_out(
+                                                    MouseButton::Middle,
+                                                    cx.listener(Self::cancel_pan),
+                                                )
+                                                .on_scroll_wheel(cx.listener(Self::scroll))
+                                                .children(grid)
+                                                .child(viewport)
+                                                .children(review_overlay)
+                                                // Initial uploads must not resize the canvas after its first fit.
+                                                .when(
+                                                    !geometry_ready && failure.is_none(),
+                                                    |canvas| {
+                                                        canvas.child(
+                                                            div()
+                                                                .absolute()
+                                                                .top_10()
+                                                                .left_4()
+                                                                .max_w(relative(0.85))
+                                                                .truncate()
+                                                                .bg(theme.popover)
+                                                                .text_color(
+                                                                    theme.popover_foreground,
+                                                                )
+                                                                .rounded_sm()
+                                                                .px_4()
+                                                                .py_1()
+                                                                .text_xs()
+                                                                .child(
+                                                                    Message::new(Key::TraceUpload)
+                                                                        .arg(
+                                                                            "completed",
+                                                                            uploaded_bytes,
+                                                                        )
+                                                                        .arg("total", total_bytes)
+                                                                        .display(locale),
+                                                                ),
+                                                        )
+                                                    },
                                                 )
                                                 .child(
                                                     div()
-                                                        .min_w_0()
-                                                        .truncate()
-                                                        .child(canvas_breadcrumb),
-                                                ),
-                                        )
-                                        .when(!self.view3d.active, |canvas| {
-                                            canvas.child(axes_indicator(locale))
-                                        })
-                                        .when_some(view_cube, |canvas, cube| {
-                                            canvas.child(
-                                                div().absolute().top_3().right_4().child(cube),
-                                            )
-                                        })
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .bottom_4()
-                                                .left_0()
-                                                .right_0()
-                                                .flex()
-                                                .justify_center()
+                                                        .absolute()
+                                                        .top_3()
+                                                        .left_4()
+                                                        .max_w(relative(0.6))
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .text_sm()
+                                                        .text_color(crate::theme::canvas_colors().1)
+                                                        .child(
+                                                            Icon::new(IconName::Layers)
+                                                                .small()
+                                                                .flex_shrink_0(),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .truncate()
+                                                                .child(canvas_breadcrumb),
+                                                        ),
+                                                )
+                                                .when(!self.view3d.active, |canvas| {
+                                                    canvas.child(axes_indicator(locale))
+                                                })
+                                                .when_some(view_cube, |canvas, cube| {
+                                                    canvas.child(
+                                                        div()
+                                                            .absolute()
+                                                            .top_3()
+                                                            .right_4()
+                                                            .child(cube),
+                                                    )
+                                                })
                                                 .child(
-                                                    canvas_bar(canvas_view_controls)
-                                                        .flex_wrap()
-                                                        .max_w_full(),
-                                                ),
-                                        )
-                                        .when_some(scale_bar, |canvas, scale| {
-                                            canvas.child(
+                                                    div()
+                                                        .absolute()
+                                                        .bottom_4()
+                                                        .left_0()
+                                                        .right_0()
+                                                        .flex()
+                                                        .justify_center()
+                                                        .child(
+                                                            canvas_bar(canvas_view_controls)
+                                                                .flex_wrap()
+                                                                .max_w_full(),
+                                                        ),
+                                                )
+                                                .when_some(scale_bar, |canvas, scale| {
+                                                    canvas.child(
                                                 div()
                                                     .absolute()
                                                     .right_4()
@@ -420,7 +450,9 @@ impl Render for BoardViewport {
                                                             ),
                                                     ),
                                             )
-                                        }),
+                                                }),
+                                        )
+                                        .children(length_table),
                                 ),
                         )
                         .when(!panels.right_collapsed, |group| {

@@ -20,6 +20,7 @@ impl BoardViewport {
         if self.pan_tool || self.pointer_gesture.is_some() {
             return;
         }
+        self.probe_at(position, window, cx);
         let Some(bounds) = self.bounds else {
             return;
         };

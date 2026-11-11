@@ -74,6 +74,7 @@ pub fn run() -> ExitCode {
             KeyBinding::new("m", viewport::MeasureDistance, Some("BoardViewport")),
             KeyBinding::new("p", viewport::MeasurePolyline, Some("BoardViewport")),
             KeyBinding::new("c", viewport::MeasureClearance, Some("BoardViewport")),
+            KeyBinding::new("shift-l", viewport::MeasurePinPath, Some("BoardViewport")),
             KeyBinding::new("s", viewport::BoxSelect, Some("BoardViewport")),
             KeyBinding::new("z", viewport::ZoomToArea, Some("BoardViewport")),
             KeyBinding::new("enter", viewport::FinishMeasurement, Some("BoardViewport")),

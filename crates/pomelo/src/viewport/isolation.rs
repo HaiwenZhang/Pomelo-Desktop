@@ -117,3 +117,71 @@ impl BoardViewport {
         cx.notify();
     }
 }
+
+/// Visibility to restore when the adjacent-plane view ends.
+pub(super) struct PlaneView {
+    hidden_layers: BTreeSet<LayerId>,
+    layer_primitives: BTreeMap<LayerId, pomelo_core::display::LayerPrimitives>,
+}
+
+impl BoardViewport {
+    pub(super) fn plane_view_active(&self) -> bool {
+        self.plane_view.is_some()
+    }
+
+    /// Show the selected net's routing layers together with the nearest plane
+    /// layers above and below, planes as outlines so their splits read over the
+    /// traces. Display only; no crossing is judged.
+    pub(super) fn toggle_plane_view(&mut self, cx: &mut Context<Self>) {
+        if let Some(previous) = self.plane_view.take() {
+            let display = Arc::make_mut(&mut self.display);
+            display.hidden_layers = previous.hidden_layers;
+            display.layer_primitives = previous.layer_primitives;
+            self.invalidate_hover();
+            cx.notify();
+            return;
+        }
+        let Some(report) = self.nets.report.as_ref().and_then(|(_, r)| r.clone()) else {
+            self.review.notice = Some(Message::new(Key::PlaneViewNothing));
+            cx.notify();
+            return;
+        };
+        let mut routing = BTreeSet::new();
+        let mut planes = BTreeSet::new();
+        for (layer, above, below) in &report.adjacent_planes {
+            routing.insert(*layer);
+            planes.extend(above.iter().chain(below.iter()).copied());
+        }
+        if routing.is_empty() {
+            self.review.notice = Some(Message::new(Key::PlaneViewNothing));
+            cx.notify();
+            return;
+        }
+        let display = Arc::make_mut(&mut self.display);
+        self.plane_view = Some(PlaneView {
+            hidden_layers: display.hidden_layers.clone(),
+            layer_primitives: display.layer_primitives.clone(),
+        });
+        for layer in self
+            .scene
+            .layers
+            .iter()
+            .filter(|layer| layer.id.is_copper())
+        {
+            if routing.contains(&layer.id) || planes.contains(&layer.id) {
+                display.hidden_layers.remove(&layer.id);
+            } else {
+                display.hidden_layers.insert(layer.id);
+            }
+        }
+        for plane in &planes {
+            display.set_cell_mode(
+                *plane,
+                pomelo_core::display::LayerPrimitive::Copper,
+                pomelo_core::display::CellMode::Outline,
+            );
+        }
+        self.invalidate_hover();
+        cx.notify();
+    }
+}

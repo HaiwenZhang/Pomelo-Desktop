@@ -33,7 +33,7 @@ fn with_shortcut(locale: Locale, key: Key, shortcut: &str) -> SharedString {
 
 /// Measurement kinds behind the toolbar's measure menu, in menu order. Their
 /// names already carry the single-key shortcut.
-const MEASURE_TOOLS: [(ReviewTool, Key); 3] = [
+const MEASURE_TOOLS: [(ReviewTool, Key); 4] = [
     (
         ReviewTool::Measure(MeasureKind::Distance),
         Key::MeasureDistanceTool,
@@ -43,6 +43,7 @@ const MEASURE_TOOLS: [(ReviewTool, Key); 3] = [
         Key::MeasurePolylineTool,
     ),
     (ReviewTool::Clearance, Key::ClearanceTool),
+    (ReviewTool::PinPath, Key::PinPathTool),
 ];
 
 impl BoardViewport {
@@ -170,6 +171,27 @@ impl BoardViewport {
                 .toggled(single)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_single_layer(cx)))
                 .into_any_element(),
+                {
+                    let active = self.plane_view_active();
+                    icon_button(
+                        "canvas-plane-view",
+                        IconName::SquareStack,
+                        text(locale, Key::PlaneViewTool),
+                        cx,
+                    )
+                    .selected(active)
+                    .toggled(active)
+                    .disabled(
+                        !active
+                            && !self
+                                .nets
+                                .report
+                                .as_ref()
+                                .is_some_and(|(_, report)| report.is_some()),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_plane_view(cx)))
+                    .into_any_element()
+                },
                 self.isolate_button(locale, cx),
             ]
         };
@@ -232,6 +254,19 @@ impl BoardViewport {
         if in_3d {
             tools.push(self.isolate_button(locale, cx));
         }
+        let open = self.length_table.open;
+        tools.push(
+            icon_button(
+                "canvas-length-table",
+                IconName::Table,
+                text(locale, Key::LengthTableTool),
+                cx,
+            )
+            .selected(open)
+            .toggled(open)
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_length_table(cx)))
+            .into_any_element(),
+        );
         if !tools.is_empty() {
             items.push(canvas_separator());
             items.extend(tools);

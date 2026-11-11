@@ -27,6 +27,31 @@ impl BoardViewport {
         }
     }
 
+    /// Center the view on a board point typed in the search field, keeping the zoom.
+    pub(super) fn go_to_point(&mut self, point: pomelo_core::model::Point, cx: &mut Context<Self>) {
+        if self.view3d.active {
+            self.record_3d_view();
+            let pivot = self.view3d.camera.pivot();
+            let height = self.view3d.camera.view_height();
+            self.view3d
+                .camera
+                .look_at([point.x, point.y, pivot[2]], height);
+            cx.notify();
+            return;
+        }
+        let previous = self.navigation.camera();
+        let camera = pomelo_core::interaction::Camera {
+            center: point,
+            ..previous
+        };
+        if self.navigation.restore_camera(camera) {
+            self.review.history.record(previous, camera);
+            self.refresh_measure_preview(cx);
+            self.invalidate_hover();
+            cx.notify();
+        }
+    }
+
     pub(super) fn flip_board(&mut self, _: &FlipBoard, _: &mut Window, cx: &mut Context<Self>) {
         if self.view3d.active {
             use pomelo_core::interaction::camera3d::CameraView3d;

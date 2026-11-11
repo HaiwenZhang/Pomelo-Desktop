@@ -57,6 +57,9 @@ impl BoardViewport {
             }
             ReviewTool::BoxSelect => Key::BoxSelectHint,
             ReviewTool::ZoomBox => Key::ZoomBoxHint,
+            ReviewTool::PinPath if review.path_pending => Key::PinPathPending,
+            ReviewTool::PinPath if review.path_first.is_some() => Key::PinPathHintSecond,
+            ReviewTool::PinPath => Key::PinPathHintFirst,
         };
         Some(text(locale, key))
     }

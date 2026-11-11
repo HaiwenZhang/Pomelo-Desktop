@@ -16,6 +16,7 @@ mod labels;
 mod layer_panel;
 mod layer_views;
 mod layout;
+mod length_table;
 mod motion;
 mod navigation;
 mod net_colors;
@@ -24,6 +25,7 @@ mod object_filter;
 mod opacity;
 mod patterns;
 mod picking;
+mod probe;
 mod review;
 mod review_export;
 mod review_overlay;
@@ -96,7 +98,8 @@ actions!(
         NavigateForward,
         NextActiveLayer,
         PreviousActiveLayer,
-        ToggleSingleLayer
+        ToggleSingleLayer,
+        MeasurePinPath
     ]
 );
 
@@ -104,7 +107,11 @@ pub struct BoardViewport {
     view3d: view3d::View3d,
     /// Visibility saved by "isolate selection", restored by the same command.
     isolation: Option<isolation::Isolation>,
+    /// Visibility saved by the adjacent-plane view.
+    plane_view: Option<isolation::PlaneView>,
     nets: net_panel::NetState,
+    probe: probe::ProbeState,
+    length_table: length_table::LengthTable,
     preparation_budget: pomelo_core::memory::MemoryBudget,
     hover_selection: Option<(
         pomelo_core::selection::SelectionTarget,
@@ -464,6 +471,17 @@ impl BoardViewport {
                     secondary: false,
                     shift: false
                 }
+            ) && let Some(point) = pomelo_core::units::parse_coordinates(
+                &input.read(cx).value(),
+                this.display.length_unit,
+            ) {
+                this.go_to_point(point, cx);
+            } else if matches!(
+                event,
+                InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false
+                }
             ) && !this.search_pending
             {
                 let category = this.left_panel.search_category();
@@ -620,7 +638,10 @@ impl BoardViewport {
         let mut viewport = Self {
             view3d: view3d::View3d::default(),
             isolation: None,
+            plane_view: None,
             nets: Default::default(),
+            probe: Default::default(),
+            length_table: Default::default(),
             preparation_budget,
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),
