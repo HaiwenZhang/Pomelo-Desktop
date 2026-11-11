@@ -22,6 +22,17 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Rasterize a snapshot SVG at its declared pixel size and encode it as PNG.
+/// Encode straight-alpha RGBA8 pixels as PNG.
+pub fn encode_png(width: u32, height: u32, rgba: Vec<u8>) -> Result<Vec<u8>, String> {
+    let image = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| "SNAPSHOT_IMAGE_SIZE".to_owned())?;
+    let mut png = Vec::new();
+    image
+        .write_to(&mut io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    Ok(png)
+}
+
 pub fn rasterize_png(svg: &str) -> Result<Vec<u8>, String> {
     use resvg::{tiny_skia, usvg};
     let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).map_err(|e| e.to_string())?;

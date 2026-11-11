@@ -201,9 +201,10 @@ impl BoardViewport {
         }
         // Tool group.
         let mut tools = Vec::new();
-        if !in_3d {
+        {
             let active = MEASURE_TOOLS
                 .iter()
+                .filter(|(tool, _)| !in_3d || matches!(tool, ReviewTool::Measure(_)))
                 .find(|(tool, _)| self.review.tool == Some(*tool));
             let view = cx.entity().downgrade();
             let current = self.review.tool;
@@ -219,7 +220,10 @@ impl BoardViewport {
                 .toggled(active.is_some())
                 .dropdown_menu(move |mut menu, window, _| {
                     menu = menu.min_w(window.rem_size() * 14.0).label(label.clone());
-                    for (tool, key) in MEASURE_TOOLS {
+                    for (tool, key) in MEASURE_TOOLS
+                        .into_iter()
+                        .filter(|(tool, _)| !in_3d || matches!(tool, ReviewTool::Measure(_)))
+                    {
                         let view = view.clone();
                         menu = menu.item(
                             PopupMenuItem::new(text(locale, key))
@@ -235,6 +239,8 @@ impl BoardViewport {
                 })
                 .into_any_element(),
             );
+        }
+        if !in_3d {
             let active = self.review.tool == Some(ReviewTool::BoxSelect);
             tools.push(
                 icon_button(
@@ -254,6 +260,17 @@ impl BoardViewport {
         if in_3d {
             tools.push(self.isolate_button(locale, cx));
         }
+        tools.push(
+            icon_button(
+                "canvas-copy-image",
+                IconName::Copy,
+                text(locale, Key::CopyImageTool),
+                cx,
+            )
+            .disabled(self.review.export.pending)
+            .on_click(cx.listener(|this, _, window, cx| this.copy_view_image(window, cx)))
+            .into_any_element(),
+        );
         let open = self.length_table.open;
         tools.push(
             icon_button(

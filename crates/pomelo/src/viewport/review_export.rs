@@ -62,6 +62,9 @@ fn default_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+type SvgJob = Box<dyn FnOnce(&CancellationToken) -> Result<String, Outcome> + Send>;
+type RasterJob = Box<dyn FnOnce(&CancellationToken) -> Result<Vec<u8>, Outcome> + Send>;
+
 enum Outcome {
     Saved(PathBuf),
     Failed(PathBuf),
@@ -159,16 +162,9 @@ impl BoardViewport {
         });
     }
 
-    fn write_image(
-        &mut self,
-        format: ImageFormat,
-        path: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(frame) = self.image_frame(window.scale_factor()) else {
-            return;
-        };
+    /// SVG of the 2D view, rendered off the UI thread by the returned job.
+    fn svg_job(&self, window: &Window) -> Option<SvgJob> {
+        let frame = self.image_frame(window.scale_factor())?;
         let scene = Arc::clone(&self.scene);
         let source_glyphs = self.texts.clone();
         let source_strokes = self.source_strokes.clone();
@@ -205,10 +201,7 @@ impl BoardViewport {
         let outline_color = rgba(crate::theme::canvas_colors().1);
         let unit = self.display.length_unit;
         let flipped = !self.review.export.scope_board && self.navigation.camera().flipped;
-        let cancel = self.start_export();
-        let worker_cancel = cancel.clone();
-        let worker_path = path.clone();
-        let worker = cx.background_spawn(async move {
+        Some(Box::new(move |cancel: &CancellationToken| {
             let request = SnapshotRequest {
                 scene: &scene,
                 display: &display,
@@ -238,17 +231,79 @@ impl BoardViewport {
                 scale_unit: Some(unit),
                 max_elements: snapshot::MAX_ELEMENTS,
             };
-            let svg = match snapshot::svg(&request, &worker_cancel) {
+            let svg = match snapshot::svg(&request, cancel) {
                 Ok(svg) => svg,
-                Err(snapshot::SnapshotError::Cancelled) => return Outcome::Cancelled,
-                Err(_) => return Outcome::TooLarge,
+                Err(snapshot::SnapshotError::Cancelled) => return Err(Outcome::Cancelled),
+                Err(_) => return Err(Outcome::TooLarge),
             };
-            let bytes = match format {
-                ImageFormat::Svg => svg.into_bytes(),
-                ImageFormat::Png => match crate::services::export::rasterize_png(&svg) {
-                    Ok(bytes) => bytes,
-                    Err(_) => return Outcome::Failed(worker_path),
-                },
+            Ok(svg)
+        }))
+    }
+
+    /// PNG of the 3D view from the CPU rasterizer, matching the screen camera.
+    fn raster_job(&mut self, window: &Window) -> Option<RasterJob> {
+        let scene = self.view3d.scene.clone()?;
+        let z_map = self.z_map_3d()?;
+        let materials = self.materials_for_export();
+        let scale = f64::from(window.scale_factor().max(1.0));
+        let size = self.view3d.size;
+        let width = (size[0] * scale).round().clamp(1.0, 8192.0) as u32;
+        let height = (size[1] * scale).round().clamp(1.0, 8192.0) as u32;
+        let camera = self.view3d.camera;
+        let background = rgba(self.canvas_background());
+        Some(Box::new(move |cancel: &CancellationToken| {
+            let request = pomelo_render::scene::board3d::raster::RasterRequest {
+                camera,
+                z_map,
+                materials: &materials,
+                size: [width, height],
+                background,
+            };
+            match pomelo_render::scene::board3d::raster::rasterize(&scene, &request, cancel) {
+                Ok(Some(rgba)) => crate::services::export::encode_png(width, height, rgba)
+                    .map_err(|_| Outcome::TooLarge),
+                Ok(None) => Err(Outcome::TooLarge),
+                Err(_) => Err(Outcome::Cancelled),
+            }
+        }))
+    }
+
+    fn write_image(
+        &mut self,
+        format: ImageFormat,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cancel = self.start_export();
+        let worker_cancel = cancel.clone();
+        let worker_path = path.clone();
+        let job: RasterJob =
+            if self.view3d.active {
+                let Some(raster) = self.raster_job(window) else {
+                    self.review.export.pending = false;
+                    return;
+                };
+                raster
+            } else {
+                let Some(svg) = self.svg_job(window) else {
+                    self.review.export.pending = false;
+                    return;
+                };
+                Box::new(move |cancel: &CancellationToken| {
+                    let svg = svg(cancel)?;
+                    match format {
+                        ImageFormat::Svg => Ok(svg.into_bytes()),
+                        ImageFormat::Png => crate::services::export::rasterize_png(&svg)
+                            .map_err(|_| Outcome::TooLarge),
+                    }
+                })
+            };
+        let worker = cx.background_spawn(async move {
+            let bytes = match job(&worker_cancel) {
+                Ok(bytes) => bytes,
+                Err(Outcome::TooLarge) => return Outcome::Failed(worker_path),
+                Err(outcome) => return outcome,
             };
             if worker_cancel.is_cancelled() {
                 return Outcome::Cancelled;
@@ -259,6 +314,50 @@ impl BoardViewport {
             }
         });
         self.finish_export(cancel, worker, window, cx);
+    }
+
+    /// Copy the current 2D or 3D view to the clipboard as a PNG.
+    pub(super) fn copy_view_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let job: RasterJob =
+            if self.view3d.active {
+                let Some(raster) = self.raster_job(window) else {
+                    return;
+                };
+                raster
+            } else {
+                let Some(svg) = self.svg_job(window) else {
+                    return;
+                };
+                Box::new(move |cancel: &CancellationToken| {
+                    crate::services::export::rasterize_png(&svg(cancel)?)
+                        .map_err(|_| Outcome::TooLarge)
+                })
+            };
+        let cancel = self.start_export();
+        let worker_cancel = cancel.clone();
+        let worker = cx.background_spawn(async move { job(&worker_cancel) });
+        self.review.export.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = worker.await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                if cancel.is_cancelled() {
+                    return;
+                }
+                this.review.export.pending = false;
+                this.review.export.notice = match result {
+                    Ok(bytes) => {
+                        cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(
+                            gpui_kit::ImageFormat::Png,
+                            bytes,
+                        )));
+                        Some((Message::new(Key::ImageCopied), false))
+                    }
+                    Err(Outcome::Cancelled) => None,
+                    Err(_) => Some((Message::new(Key::ExportTooLarge), true)),
+                };
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     pub(super) fn export_csv(&mut self, window: &mut Window, cx: &mut Context<Self>) {

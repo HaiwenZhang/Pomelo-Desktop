@@ -213,9 +213,11 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.view3d.active {
+        // 3D offers point measurements only; the other tools need the 2D canvas.
+        if self.view3d.active && !matches!(tool, Some(ReviewTool::Measure(_)) | None) {
             return;
         }
+        self.cancel_measure_3d();
         let review = &mut self.review;
         // Selecting the active tool again turns it off.
         let tool = if review.tool == tool { None } else { tool };
@@ -251,6 +253,11 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active && self.cancel_measure_3d() {
+            cx.notify();
+            window.focus(&self.focus, cx);
+            return;
+        }
         if self.review.tool == Some(ReviewTool::BoxSelect) || !self.cancel_review_tool(cx) {
             self.clear_selection(&ClearSelection, window, cx);
         }
@@ -263,6 +270,11 @@ impl BoardViewport {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            self.finish_measure_3d();
+            cx.notify();
+            return;
+        }
         let review = &mut self.review;
         if let Some(active) = review.active.take() {
             let kind = active.kind;
@@ -1132,6 +1144,8 @@ impl BoardViewport {
     }
 
     pub(super) fn clear_measurements(&mut self, cx: &mut Context<Self>) {
+        self.view3d.measurements.clear();
+        self.view3d.measuring = None;
         let review = &mut self.review;
         if matches!(
             review.tool,

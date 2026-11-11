@@ -3,6 +3,7 @@ mod edges;
 mod holes;
 mod paging;
 mod parallel;
+pub mod raster;
 mod round;
 mod spatial;
 use super::solid::{PadSolidSource, PreparedSolid, SolidPrepareError, ViaWallSpan};
@@ -184,6 +185,8 @@ pub struct MaterialOptions<'a> {
     pub selected_solid: bool,
     /// Draw the dielectric slabs between conductor layers.
     pub show_dielectric: bool,
+    /// Highlight group colors, applied before selection colors.
+    pub group_colors: Option<&'a std::collections::BTreeMap<SelectedObject, [f32; 3]>>,
 }
 impl MaterialOptions<'static> {
     /// Default mode with nothing selected.
@@ -200,6 +203,7 @@ impl MaterialOptions<'static> {
             unselected_opacity: 1.0,
             selected_solid: true,
             show_dielectric: false,
+            group_colors: None,
         }
     }
 }
@@ -661,6 +665,12 @@ impl PreparedBoard3d {
                 .unwrap_or_else(|| {
                     super::colors::copper_color(display.color_mode, base, source.net)
                 });
+            if let Some(&[r, g, b]) = options
+                .group_colors
+                .and_then(|colors| colors.get(&source.object))
+            {
+                color[..3].copy_from_slice(&[r, g, b]);
+            }
             let alpha = if matches!(source.object, SelectedObject::Zone(_)) {
                 display.copper_opacity
             } else {

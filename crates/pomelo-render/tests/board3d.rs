@@ -1025,3 +1025,60 @@ fn dielectric_slabs_fill_each_gap_and_are_never_picked() {
         }
     }
 }
+
+#[test]
+fn cpu_raster_draws_visible_copper_and_leaves_hidden_scenes_as_background() {
+    use pomelo_core::interaction::camera3d::{Camera3d, CameraView3d};
+    use pomelo_render::scene::board3d::raster::{RasterRequest, rasterize};
+    let input = source();
+    let cancel = CancellationToken::default();
+    let board = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    let mut camera = Camera3d::default();
+    camera.set_view(CameraView3d::Top);
+    let z_map = ZMap::linear(5.0);
+    assert!(camera.fit(z_map.bounds(board.bounds), [64.0, 64.0], 2.0));
+    let materials = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
+    let background = [0.0, 0.0, 0.0, 1.0];
+    fn request(
+        camera: Camera3d,
+        z_map: ZMap,
+        materials: &[[f32; 4]],
+        background: [f32; 4],
+    ) -> RasterRequest<'_> {
+        RasterRequest {
+            camera,
+            z_map,
+            materials,
+            size: [64, 64],
+            background,
+        }
+    }
+    let image = rasterize(
+        &board,
+        &request(camera, z_map, &materials, background),
+        &cancel,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(image.len(), 64 * 64 * 4);
+    let drawn = image
+        .chunks(4)
+        .filter(|px| px[0] != 0 || px[1] != 0 || px[2] != 0)
+        .count();
+    assert!(drawn > 0, "copper must cover some pixels");
+    let hidden = vec![[0.0; 4]; materials.len()];
+    let empty = rasterize(
+        &board,
+        &request(camera, z_map, &hidden, background),
+        &cancel,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(empty.chunks(4).all(|px| px == [0, 0, 0, 255]));
+}

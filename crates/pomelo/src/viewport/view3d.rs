@@ -1,4 +1,5 @@
 pub(super) mod controls;
+pub(super) mod measure;
 pub(super) mod settings;
 pub(super) mod view_cube;
 
@@ -17,6 +18,7 @@ use std::sync::atomic::Ordering;
 struct MaterialCache {
     display: Arc<pomelo_core::display::BoardDisplay>,
     set: Arc<BTreeSet<SelectedObject>>,
+    groups: Option<Arc<pomelo_render::backend::native::ObjectColors>>,
     hovered: Option<SelectedObject>,
     selected: Option<SelectionTarget>,
     related: Arc<BTreeSet<SelectedObject>>,
@@ -31,7 +33,7 @@ pub(super) struct View3d {
     /// Cameras before and after the current one, for the view history buttons.
     pub history: Vec<Camera3d>,
     pub future: Vec<Camera3d>,
-    scene: Option<Arc<PreparedBoard3d>>,
+    pub scene: Option<Arc<PreparedBoard3d>>,
     pending: bool,
     error: Option<String>,
     task: Option<Task<()>>,
@@ -52,6 +54,9 @@ pub(super) struct View3d {
     pub cube_bounds: Option<Bounds<Pixels>>,
     /// Pointer position of a cube drag and whether it has moved enough to orbit.
     pub cube_drag: Option<(Point<Pixels>, bool)>,
+    /// Measurement in progress and completed 3D measurements.
+    pub measuring: Option<measure::Measure3d>,
+    pub measurements: Vec<measure::Measure3d>,
 }
 impl Default for View3d {
     fn default() -> Self {
@@ -81,6 +86,8 @@ impl Default for View3d {
             transition: None,
             cube_bounds: None,
             cube_drag: None,
+            measuring: None,
+            measurements: Vec::new(),
         }
     }
 }
@@ -324,6 +331,7 @@ impl BoardViewport {
     }
     fn materials_3d(&mut self) -> Arc<Vec<[f32; 4]>> {
         let set = Arc::clone(self.review.set.objects());
+        let groups = self.review.object_colors.clone();
         let v = &mut self.view3d;
         if let Some(cache) = &v.materials
             && Arc::ptr_eq(&cache.display, &self.display)
@@ -331,6 +339,7 @@ impl BoardViewport {
             && Arc::ptr_eq(&cache.related, &self.selected_related_objects)
             && Arc::ptr_eq(&cache.set, &set)
             && cache.hovered == v.hovered
+            && cache.groups.as_ref().map(Arc::as_ptr) == groups.as_ref().map(Arc::as_ptr)
             && cache.settings == v.settings
         {
             return cache.colors.clone();
@@ -361,6 +370,7 @@ impl BoardViewport {
                 unselected_opacity: v.settings.unselected_opacity,
                 selected_solid: v.settings.selected_solid,
                 show_dielectric: v.settings.show_dielectric,
+                group_colors: groups.as_deref(),
             },
         ));
         v.materials = Some(MaterialCache {
@@ -368,11 +378,16 @@ impl BoardViewport {
             selected: self.selected_target,
             related: self.selected_related_objects.clone(),
             set,
+            groups,
             hovered: v.hovered,
             settings: v.settings,
             colors: colors.clone(),
         });
         colors
+    }
+    /// Materials of the current frame for the CPU image path.
+    pub(super) fn materials_for_export(&mut self) -> Arc<Vec<[f32; 4]>> {
+        self.materials_3d()
     }
     /// Object under a canvas position, using the stretch-aware ray split.
     fn pick_3d(
@@ -685,6 +700,7 @@ impl BoardViewport {
                 .size_full()
                 .child(viewport)
                 .children(self.render_stub_overlay(cx))
+                .children(self.render_measure_overlay_3d(locale, cx))
                 .into_any_element(),
             ready,
             geometry_ready: ready,
@@ -747,6 +763,10 @@ impl BoardViewport {
             return;
         }
         let clicked = self.pointer_gesture.take().is_some_and(|g| g.is_click());
+        if clicked && self.measure_click_3d(event.position, event.click_count >= 2, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if clicked && self.view3d.scene.is_some() {
             // Clicking the same spot again steps to the next object behind the last hit.
             let same_spot = self
@@ -762,7 +782,13 @@ impl BoardViewport {
                 self.view3d.cycle = Some((event.position, Vec::new()));
                 object = self.pick_3d_excluding(event.position);
             }
-            if let Some(object) = object {
+            if let Some(object) = object
+                && event.modifiers.shift
+            {
+                // Shift-click edits the selection set, as in 2D.
+                self.review.set.toggle(object);
+                self.review.notice = None;
+            } else if let Some(object) = object {
                 if let Some((_, seen)) = &mut self.view3d.cycle {
                     seen.push(object);
                 }
