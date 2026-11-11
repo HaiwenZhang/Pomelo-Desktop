@@ -57,7 +57,19 @@ gpui_kit::assets::icon_assets!(
         Package,
         ArrowDownAZ,
         ArrowDownWideNarrow,
-        PenLine
+        PenLine,
+        Box,
+        MoveVertical,
+        Focus,
+        Layers2,
+        Copy,
+        ImageDown,
+        Rotate3d,
+        SquareStack,
+        PanelBottom,
+        Table,
+        Route,
+        House
     ]
 );
 pub struct Assets;

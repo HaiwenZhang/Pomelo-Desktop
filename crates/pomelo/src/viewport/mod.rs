@@ -2,6 +2,7 @@
 use crate::panels::focus_scroll::FocusScroll;
 use crate::tooltips::ButtonTooltipExt;
 mod appearance;
+mod canvas_toolbar;
 mod curves;
 mod diagnostics_panel;
 mod frame;
@@ -367,6 +368,12 @@ impl BoardViewport {
             selection,
             selection_anchor: selection.and(self.selected_anchor),
             review: self.review.state.clone(),
+            view3d: pomelo_core::display3d::View3dState {
+                active: self.view3d.active,
+                camera: (self.view3d.initialized || self.view3d.camera_restored)
+                    .then(|| pomelo_core::display3d::Camera3dState::capture(self.view3d.camera)),
+                display: self.view3d.settings,
+            },
         })
     }
 
@@ -696,6 +703,11 @@ impl BoardViewport {
             viewport.validate_review_state(window, cx);
             viewport.selection_mode = state.selection_mode;
             viewport.pick_filter = state.pick_filter;
+            viewport.view3d.settings = state.view3d.display;
+            if let Some(camera) = state.view3d.camera.and_then(|camera| camera.camera()) {
+                viewport.view3d.camera = camera;
+                viewport.view3d.camera_restored = true;
+            }
             viewport.invalidate_hover();
             if let Some(target) = state.selection {
                 viewport.selected_anchor = state.selection_anchor;
@@ -709,7 +721,13 @@ impl BoardViewport {
                 );
             }
         }
-        if std::env::var_os("POMELO_3D_PREVIEW").is_some() {
+        let reopen_3d = prepared
+            .restored_view
+            .as_ref()
+            .is_some_and(|state| state.view3d.active);
+        if (reopen_3d || std::env::var_os("POMELO_3D_PREVIEW").is_some())
+            && pomelo_render::backend::native::SolidRenderer::supported()
+        {
             viewport.toggle_3d(window, cx);
         }
         viewport

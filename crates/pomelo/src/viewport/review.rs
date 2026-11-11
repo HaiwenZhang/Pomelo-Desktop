@@ -1004,6 +1004,9 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) {
         if self.view3d.active {
+            if self.step_3d_history(true) {
+                cx.notify();
+            }
             return;
         }
         self.wheel_history_at = None;
@@ -1024,6 +1027,9 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) {
         if self.view3d.active {
+            if self.step_3d_history(false) {
+                cx.notify();
+            }
             return;
         }
         self.wheel_history_at = None;

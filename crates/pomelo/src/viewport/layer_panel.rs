@@ -541,6 +541,16 @@ impl BoardViewport {
                     .child(layer_rows)
                     .vertical_scrollbar(&self.layer_scroll),
             )
+            .when(self.view3d.active, |panel| {
+                panel.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(self.render_stackup_notice(locale, cx)),
+                )
+            })
             .child(panel_footer(
                 Message::new(Key::SoloLayerHint)
                     .arg(

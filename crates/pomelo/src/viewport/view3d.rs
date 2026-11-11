@@ -1,4 +1,4 @@
-mod controls;
+pub(super) mod controls;
 
 use super::*;
 use pomelo_core::{
@@ -16,15 +16,17 @@ struct MaterialCache {
     display: Arc<pomelo_core::display::BoardDisplay>,
     selected: Option<SelectionTarget>,
     related: Arc<BTreeSet<SelectedObject>>,
-    transparent: bool,
+    settings: pomelo_core::display3d::Display3d,
     colors: Arc<Vec<[f32; 4]>>,
 }
 pub(super) struct View3d {
     pub active: bool,
     pub camera: Camera3d,
     pub size: [f64; 2],
-    pub z_scale: f64,
-    pub transparent: bool,
+    pub settings: pomelo_core::display3d::Display3d,
+    /// Cameras before and after the current one, for the view history buttons.
+    pub history: Vec<Camera3d>,
+    pub future: Vec<Camera3d>,
     scene: Option<Arc<PreparedBoard3d>>,
     pending: bool,
     error: Option<String>,
@@ -32,9 +34,11 @@ pub(super) struct View3d {
     cancel: CancellationToken,
     renderer: Option<Result<GpuPainterHandle<SolidFrame>, String>>,
     telemetry: Arc<SolidTelemetry>,
-    initialized: bool,
+    pub initialized: bool,
     pan_drag: bool,
     materials: Option<MaterialCache>,
+    /// A saved camera was applied; keep it instead of fitting the first scene.
+    pub camera_restored: bool,
 }
 impl Default for View3d {
     fn default() -> Self {
@@ -44,8 +48,9 @@ impl Default for View3d {
             active: false,
             camera,
             size: [0.0; 2],
-            z_scale: 5.0,
-            transparent: false,
+            settings: Default::default(),
+            history: Vec::new(),
+            future: Vec::new(),
             scene: None,
             pending: false,
             error: None,
@@ -56,6 +61,7 @@ impl Default for View3d {
             initialized: false,
             pan_drag: false,
             materials: None,
+            camera_restored: false,
         }
     }
 }
@@ -107,7 +113,8 @@ impl BoardViewport {
                         match result {
                             Ok(scene) => {
                                 this.view3d.scene = Some(Arc::new(scene));
-                                this.view3d.initialized = false;
+                                this.view3d.initialized =
+                                    std::mem::take(&mut this.view3d.camera_restored);
                                 this.view3d.materials = None;
                             }
                             Err(e) => this.view3d.error = Some(e.to_string()),
@@ -131,10 +138,36 @@ impl BoardViewport {
         window.focus(&self.focus, cx);
         cx.notify();
     }
+    /// Record the current camera before a deliberate view change.
+    pub(super) fn record_3d_view(&mut self) {
+        const LIMIT: usize = 50;
+        let v = &mut self.view3d;
+        if v.history.last() != Some(&v.camera) {
+            v.history.push(v.camera);
+            if v.history.len() > LIMIT {
+                v.history.remove(0);
+            }
+        }
+        v.future.clear();
+    }
+    pub(super) fn step_3d_history(&mut self, back: bool) -> bool {
+        let v = &mut self.view3d;
+        let (from, to) = if back {
+            (&mut v.history, &mut v.future)
+        } else {
+            (&mut v.future, &mut v.history)
+        };
+        let Some(camera) = from.pop() else {
+            return false;
+        };
+        to.push(v.camera);
+        v.camera = camera;
+        true
+    }
     pub(super) fn fit_3d(&mut self) -> bool {
         if let Some(scene) = &self.view3d.scene {
             self.view3d.initialized = self.view3d.camera.fit(
-                display_bounds(scene.bounds, self.view3d.z_scale),
+                display_bounds(scene.bounds, self.view3d.settings.z_scale),
                 self.view3d.size,
                 24.0,
             );
@@ -179,11 +212,18 @@ impl BoardViewport {
             bounds.max[0] = xy.max.x;
             bounds.max[1] = xy.max.y;
         }
-        self.view3d.camera.fit(
-            display_bounds(bounds, self.view3d.z_scale),
+        let previous = self.view3d.camera;
+        let moved = self.view3d.camera.fit(
+            display_bounds(bounds, self.view3d.settings.z_scale),
             self.view3d.size,
             24.0,
-        )
+        );
+        if moved && previous != self.view3d.camera {
+            let located = std::mem::replace(&mut self.view3d.camera, previous);
+            self.record_3d_view();
+            self.view3d.camera = located;
+        }
+        moved
     }
     fn materials_3d(&mut self) -> Arc<Vec<[f32; 4]>> {
         let v = &mut self.view3d;
@@ -191,7 +231,7 @@ impl BoardViewport {
             && Arc::ptr_eq(&cache.display, &self.display)
             && cache.selected == self.selected_target
             && Arc::ptr_eq(&cache.related, &self.selected_related_objects)
-            && cache.transparent == v.transparent
+            && cache.settings == v.settings
         {
             return cache.colors.clone();
         }
@@ -208,7 +248,8 @@ impl BoardViewport {
         } else {
             None
         };
-        let mut colors = scene.materials(&self.scene, &self.display, v.transparent, selected, net);
+        let transparent = v.settings.mode == pomelo_core::display3d::RenderMode3d::Wireframe;
+        let mut colors = scene.materials(&self.scene, &self.display, transparent, selected, net);
         for (i, source) in scene.sources.iter().enumerate() {
             if colors[i + 1][3] > 0.0 && self.selected_related_objects.contains(&source.object) {
                 colors[i + 1] = [1.0, 0.35, 0.05, 1.0];
@@ -219,7 +260,7 @@ impl BoardViewport {
             display: self.display.clone(),
             selected: self.selected_target,
             related: self.selected_related_objects.clone(),
-            transparent: v.transparent,
+            settings: v.settings,
             colors: colors.clone(),
         });
         colors
@@ -263,7 +304,7 @@ impl BoardViewport {
                 scene,
                 camera: self.view3d.camera,
                 materials,
-                z_scale: self.view3d.z_scale,
+                z_scale: self.view3d.settings.z_scale,
             };
             canvas(
                 move |bounds, _, cx| {
@@ -356,15 +397,11 @@ impl BoardViewport {
                 ))
                 .into_any_element()
         };
-        let controls = self.render_3d_controls(locale, cx);
-        let note = self.render_3d_note(locale);
         frame::CanvasPresentation {
             viewport: div()
                 .relative()
                 .size_full()
                 .child(viewport)
-                .child(controls)
-                .child(note)
                 .into_any_element(),
             ready,
             geometry_ready: ready,
@@ -435,10 +472,10 @@ impl BoardViewport {
                 if let Some(mut ray) = self.view3d.camera.pick_ray(
                     [f64::from(p.x), f64::from(p.y)],
                     self.view3d.size,
-                    display_bounds(scene.bounds, self.view3d.z_scale),
+                    display_bounds(scene.bounds, self.view3d.settings.z_scale),
                 ) {
-                    ray.origin[2] /= self.view3d.z_scale;
-                    ray.direction[2] /= self.view3d.z_scale;
+                    ray.origin[2] /= self.view3d.settings.z_scale;
+                    ray.direction[2] /= self.view3d.settings.z_scale;
                     if let Some(object) = scene.pick(ray, &materials, self.pick_filter) {
                         let target = pomelo_core::selection::canvas_target(
                             &self.scene,

@@ -99,8 +99,7 @@ impl Render for BoardViewport {
         } = self.render_canvas(layer_order, panels, window, cx);
         let grid = self.render_grid();
         let review_overlay = self.render_review_overlay(locale, cx);
-        let (review_tools, history_tools) = self.render_review_tools(locale, cx);
-        let canvas_view_controls = self.render_canvas_view_controls(history_tools, locale, cx);
+        let canvas_view_controls = self.render_canvas_toolbar(locale, cx);
         let status_bar = self.render_status_bar(ready, pointer_coordinates, locale, cx);
         let theme = cx.theme();
         let mut view = div()
@@ -347,22 +346,6 @@ impl Render for BoardViewport {
                                         .when(!self.view3d.active, |canvas| {
                                             canvas.child(axes_indicator(locale))
                                         })
-                                        .when(!self.view3d.active, |canvas| {
-                                            canvas.child(
-                                                div()
-                                                    .absolute()
-                                                    .top_3()
-                                                    .left_4()
-                                                    .right_4()
-                                                    .flex()
-                                                    .justify_end()
-                                                    .child(
-                                                        canvas_bar(review_tools)
-                                                            .flex_wrap()
-                                                            .max_w_full(),
-                                                    ),
-                                            )
-                                        })
                                         .child(
                                             div()
                                                 .absolute()
@@ -497,61 +480,6 @@ impl Render for BoardViewport {
 }
 
 impl BoardViewport {
-    /// Zoom, fit, flip and view history, floating over the bottom of the board.
-    fn render_canvas_view_controls(
-        &self,
-        history: Vec<AnyElement>,
-        locale: pomelo_core::i18n::Locale,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        if self.view3d.active {
-            return self.render_3d_navigation(locale, cx);
-        }
-        let button = |id: &'static str, icon: IconName, key: Key, cx: &App| {
-            Button::new(id)
-                .custom(crate::theme::canvas_toolbar_button(cx))
-                .small()
-                .size_8()
-                .icon(icon)
-                .accessibility_label(text(locale, key))
-                .native_tooltip(text(locale, key))
-        };
-        let mut controls = vec![
-            button("zoom-out", IconName::Minus, Key::ZoomOut, cx)
-                .on_click(cx.listener(|this, _, _, cx| this.zoom(1.0 / 1.2, cx)))
-                .into_any_element(),
-            div()
-                .min_w_12()
-                .text_center()
-                .text_xs()
-                .child(
-                    Message::new(Key::ZoomPercent)
-                        .arg("percent", self.navigation.zoom_percent().round() as u64)
-                        .display(locale),
-                )
-                .into_any_element(),
-            button("zoom-in", IconName::Plus, Key::ZoomIn, cx)
-                .on_click(cx.listener(|this, _, _, cx| this.zoom(1.2, cx)))
-                .into_any_element(),
-            canvas_separator(),
-            button("canvas-fit", IconName::Scan, Key::FitBoard, cx)
-                .on_click(cx.listener(|this, _, window, cx| this.fit_board(&FitBoard, window, cx)))
-                .into_any_element(),
-            button("flip-board", IconName::FlipHorizontal2, Key::FlipBoard, cx)
-                .selected(self.navigation.camera().flipped)
-                .toggled(self.navigation.camera().flipped)
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.flip_board(&FlipBoard, window, cx)),
-                )
-                .into_any_element(),
-        ];
-        if !history.is_empty() {
-            controls.push(canvas_separator());
-            controls.extend(history);
-        }
-        controls
-    }
-
     fn render_status_bar(
         &self,
         ready: bool,
@@ -606,6 +534,34 @@ impl BoardViewport {
                         .child(coordinates),
                 )
             })
+            .when(self.view3d.active, |bar| {
+                let mode = super::view3d::controls::RENDER_MODES
+                    .iter()
+                    .find(|(mode, _, _)| *mode == self.view3d.settings.mode)
+                    .map_or(Key::RenderModeDefault, |(_, key, _)| *key);
+                bar.child(
+                    Message::new(Key::StatusView3d)
+                        .arg("mode", text(locale, mode))
+                        .arg(
+                            "scale",
+                            super::view3d::controls::format_scale(self.view3d.settings.z_scale),
+                        )
+                        .display(locale),
+                )
+            })
+            .when_some(
+                self.display
+                    .active_layer
+                    .filter(|_| !self.view3d.active)
+                    .and_then(|id| self.scene.layers.iter().find(|layer| layer.id == id)),
+                |bar, layer| {
+                    bar.child(
+                        Message::new(Key::StatusActiveLayer)
+                            .arg("layer", layer.display_name(locale))
+                            .display(locale),
+                    )
+                },
+            )
             .right(
                 TabBar::new("length-unit")
                     .segmented()
@@ -655,7 +611,7 @@ pub(super) fn canvas_bar(children: Vec<AnyElement>) -> Div {
         .children(children)
 }
 
-fn canvas_separator() -> AnyElement {
+pub(super) fn canvas_separator() -> AnyElement {
     div()
         // A one-pixel divider is a hairline, not spacing.
         .w(px(1.0))

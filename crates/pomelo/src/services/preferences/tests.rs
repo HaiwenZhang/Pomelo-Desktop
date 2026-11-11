@@ -163,6 +163,7 @@ fn view_entry(path: PathBuf) -> ViewEntry {
             )),
             selection_anchor: None,
             review: Default::default(),
+            view3d: Default::default(),
         },
     }
 }

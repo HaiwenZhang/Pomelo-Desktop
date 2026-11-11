@@ -4,7 +4,13 @@ use super::*;
 impl BoardViewport {
     pub(crate) fn fit_board(&mut self, _: &FitBoard, _: &mut Window, cx: &mut Context<Self>) {
         if self.view3d.active {
+            let previous = self.view3d.camera;
             if self.fit_3d() {
+                if previous != self.view3d.camera {
+                    self.view3d.camera = previous;
+                    self.record_3d_view();
+                    self.fit_3d();
+                }
                 cx.notify();
             }
             return;
@@ -23,6 +29,7 @@ impl BoardViewport {
 
     pub(super) fn flip_board(&mut self, _: &FlipBoard, _: &mut Window, cx: &mut Context<Self>) {
         if self.view3d.active {
+            self.record_3d_view();
             self.view3d.camera.orbit(0.0, std::f64::consts::PI);
             cx.notify();
             return;
