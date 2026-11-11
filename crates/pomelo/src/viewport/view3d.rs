@@ -432,6 +432,104 @@ impl BoardViewport {
             .into_iter()
             .find_map(|ray| scene.pick(ray, &materials, self.pick_filter))
     }
+    /// Screen-space dashed lines over the unused part of the selected net's vias.
+    fn render_stub_overlay(&self, cx: &App) -> Option<AnyElement> {
+        if !self.view3d.settings.show_stubs {
+            return None;
+        }
+        let report = self.nets.report.as_ref()?.1.as_ref()?;
+        let scene = self.view3d.scene.as_ref()?;
+        let z_map = self.z_map_3d()?;
+        let size = self.view3d.size;
+        let matrix = self.view3d.camera.clip_matrix(
+            size,
+            z_map.bounds(scene.bounds),
+            [scene.origin.x, scene.origin.y, 0.0],
+        )?;
+        let index: BTreeMap<_, _> = scene
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+        let preview = scene.preview;
+        let pitch = if scene.layers.len() > 1 {
+            (preview.board_mm - preview.copper_mm) / (scene.layers.len() - 1) as f64
+        } else {
+            0.0
+        };
+        let top = |i: usize| preview.board_mm * 0.5 - pitch * i as f64;
+        let project = |x: f64, y: f64, z: f64| {
+            let p = [
+                (x - scene.origin.x) as f32,
+                (y - scene.origin.y) as f32,
+                z_map.apply(z) as f32,
+                1.0,
+            ];
+            let clip: [f32; 4] =
+                std::array::from_fn(|row| (0..4).map(|col| matrix[col][row] * p[col]).sum());
+            let w = if clip[3].abs() > f32::EPSILON {
+                clip[3]
+            } else {
+                1.0
+            };
+            (
+                (clip[0] / w * 0.5 + 0.5) * size[0] as f32,
+                (0.5 - clip[1] / w * 0.5) * size[1] as f32,
+            )
+        };
+        let mut lines = Vec::new();
+        for via in &report.vias {
+            for (from, to) in &via.stubs {
+                let (Some(&a), Some(&b)) = (index.get(from), index.get(to)) else {
+                    continue;
+                };
+                let (za, zb) = if b > a {
+                    (top(a) - preview.copper_mm, top(b) - preview.copper_mm)
+                } else {
+                    (top(a), top(b))
+                };
+                lines.push((
+                    project(via.at.x, via.at.y, za),
+                    project(via.at.x, via.at.y, zb),
+                ));
+            }
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        let color = cx.theme().danger;
+        Some(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    for ((ax, ay), (bx, by)) in &lines {
+                        let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                        if !length.is_finite() || length < 1.0 {
+                            continue;
+                        }
+                        let (dx, dy) = ((bx - ax) / length, (by - ay) / length);
+                        let mut t = 0.0;
+                        while t < length {
+                            let end = (t + 6.0).min(length);
+                            let mut path = gpui::PathBuilder::stroke(px(2.0));
+                            path.move_to(bounds.origin + point(px(ax + dx * t), px(ay + dy * t)));
+                            path.line_to(
+                                bounds.origin + point(px(ax + dx * end), px(ay + dy * end)),
+                            );
+                            if let Ok(path) = path.build() {
+                                window.paint_path(path, color);
+                            }
+                            t += 10.0;
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .size_full()
+            .into_any_element(),
+        )
+    }
     /// Track the object under the pointer for the hover preview.
     pub(super) fn hover_3d(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         if !self.view3d.settings.hover_preview || self.pointer_gesture.is_some() {
@@ -586,6 +684,7 @@ impl BoardViewport {
                 .relative()
                 .size_full()
                 .child(viewport)
+                .children(self.render_stub_overlay(cx))
                 .into_any_element(),
             ready,
             geometry_ready: ready,

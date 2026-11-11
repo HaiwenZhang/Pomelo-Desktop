@@ -5,6 +5,8 @@ pub mod clearance;
 pub mod export;
 pub mod highlight;
 pub mod measure;
+pub mod net_groups;
+pub mod net_report;
 pub mod selection_set;
 pub mod views;
 pub mod visibility;

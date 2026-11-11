@@ -19,6 +19,7 @@ mod layout;
 mod motion;
 mod navigation;
 mod net_colors;
+mod net_panel;
 mod object_filter;
 mod opacity;
 mod patterns;
@@ -103,6 +104,7 @@ pub struct BoardViewport {
     view3d: view3d::View3d,
     /// Visibility saved by "isolate selection", restored by the same command.
     isolation: Option<isolation::Isolation>,
+    nets: net_panel::NetState,
     preparation_budget: pomelo_core::memory::MemoryBudget,
     hover_selection: Option<(
         pomelo_core::selection::SelectionTarget,
@@ -618,6 +620,7 @@ impl BoardViewport {
         let mut viewport = Self {
             view3d: view3d::View3d::default(),
             isolation: None,
+            nets: Default::default(),
             preparation_budget,
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),

@@ -25,6 +25,7 @@ base64.workspace = true
 chrono.workspace = true
 futures.workspace = true
 resvg.workspace = true
+regex.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 rfd.workspace = true

@@ -4906,6 +4906,7 @@ dependencies = [
  "pomelo-core",
  "pomelo-import",
  "pomelo-render",
+ "regex",
  "resvg 0.48.1",
  "rfd",
  "serde",

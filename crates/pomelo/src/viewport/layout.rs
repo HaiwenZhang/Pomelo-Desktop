@@ -8,6 +8,7 @@ use gpui_kit::component::{
 impl Render for BoardViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = i18n::current(cx);
+        self.ensure_net_report(cx);
         let panel_budget = window.viewport_size().width.as_f32()
             - crate::workbench::panel_layout::MIN_CANVAS_WIDTH
             - crate::workbench::panel_layout::PANEL_FRAME_WIDTH;

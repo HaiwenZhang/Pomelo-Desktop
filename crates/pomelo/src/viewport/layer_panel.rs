@@ -806,11 +806,26 @@ impl BoardViewport {
         let count = rows.len();
         let highlighted = self.entity_highlight.min(count.saturating_sub(1));
         let sort = self.entity_sort;
-        let highlight: Arc<str> = if self.entity_filter.is_empty() {
+        let highlight: Arc<str> = if self.entity_filter.is_empty() || self.nets.regex {
             query.to_lowercase().into()
         } else {
             self.entity_filter.clone().into()
         };
+        let net_tools = (category == SearchCategory::Net).then(|| {
+            let entries: &[SearchEntry] = if use_index {
+                self.search.entries()
+            } else {
+                &self.search_results
+            };
+            let listed = rows
+                .iter()
+                .filter_map(|index| match entries[*index].target {
+                    pomelo_core::search::SearchTarget::Net(net) => Some(net),
+                    _ => None,
+                })
+                .collect();
+            self.render_net_tools(locale, listed, cx)
+        });
         panel
             .child(
                 div()
@@ -834,6 +849,7 @@ impl BoardViewport {
                             .aria_label(text(locale, Key::ListFilter)),
                     ),
             )
+            .children(net_tools)
             .child(
                 div()
                     .flex()
@@ -955,6 +971,26 @@ impl BoardViewport {
                                         .items_center()
                                         .w_full()
                                         .child(div().flex_1().min_w_0().child(row))
+                                        .child({
+                                            let visible = this.display.net_visible(net);
+                                            let label = text(
+                                                locale,
+                                                if visible { Key::HideNet } else { Key::ShowNet },
+                                            );
+                                            Button::new(("net-visible", u64::from(net.0)))
+                                                .ghost()
+                                                .small()
+                                                .icon(if visible {
+                                                    IconName::Eye
+                                                } else {
+                                                    IconName::EyeOff
+                                                })
+                                                .accessibility_label(label.clone())
+                                                .native_tooltip(label)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.toggle_net_visibility(net, cx)
+                                                }))
+                                        })
                                         .child(
                                             Button::new(("net-colors", u64::from(net.0)))
                                                 .ghost()
@@ -1018,13 +1054,32 @@ impl BoardViewport {
             } else {
                 &self.search_results
             };
+            // Regex mode falls back to plain text while the expression is incomplete.
+            let pattern = (self.nets.regex && !self.entity_filter.is_empty())
+                .then(|| {
+                    regex::RegexBuilder::new(&self.entity_filter)
+                        .case_insensitive(true)
+                        .size_limit(1 << 20)
+                        .build()
+                        .ok()
+                })
+                .flatten();
             let mut rows: Vec<_> = entries
                 .iter()
                 .enumerate()
                 .filter(|(_, entry)| {
                     entry.target.category() == category
-                        && (self.entity_filter.is_empty()
-                            || entry.name.to_lowercase().contains(&self.entity_filter))
+                        && match &pattern {
+                            Some(pattern) => pattern.is_match(&entry.name),
+                            None => {
+                                self.entity_filter.is_empty()
+                                    || entry.name.to_lowercase().contains(&self.entity_filter)
+                            }
+                        }
+                        && match entry.target {
+                            pomelo_core::search::SearchTarget::Net(net) => self.net_in_filter(net),
+                            _ => true,
+                        }
                 })
                 .map(|(index, _)| index)
                 .collect();
