@@ -17,6 +17,7 @@ pub(crate) struct SolidDriver {
     composite_layout: BindGroupLayout,
     opaque: RenderPipeline,
     transparent: RenderPipeline,
+    edges: RenderPipeline,
     composite: RenderPipeline,
     targets: Option<Targets>,
 }
@@ -220,6 +221,37 @@ impl SolidDriver {
         };
         let opaque = geometry(false);
         let transparent = geometry(true);
+        // Feature edges share the opaque target and depth, drawn as lines.
+        let edges = raw.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Solid edges"),
+            layout: Some(&geometry_pipeline),
+            vertex: VertexState {
+                module: &module,
+                entry_point: Some("edge_vertex"),
+                compilation_options: Default::default(),
+                buffers: &buffers,
+            },
+            fragment: Some(FragmentState {
+                module: &module,
+                entry_point: Some("solid_edge"),
+                compilation_options: Default::default(),
+                targets: &opaque_targets,
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(DepthStencilState {
+                format: TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let composite = raw.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("Solid composite"),
             layout: Some(&composite_pipeline),
@@ -253,6 +285,7 @@ impl SolidDriver {
             composite_layout,
             opaque,
             transparent,
+            edges,
             composite,
             targets: None,
         })
@@ -367,6 +400,7 @@ impl SolidDriver {
                 },
             })
         };
+        let edge_pipeline = &self.edges;
         let encode = |encoder: &mut CommandEncoder, transparent: bool| {
             let colors = if transparent {
                 vec![
@@ -422,6 +456,30 @@ impl SolidDriver {
                     0..page.instances.len() as u32,
                 );
                 calls += 1;
+            }
+            if !transparent && !draw.edges.is_empty() {
+                pass.set_pipeline(edge_pipeline);
+                pass.set_bind_group(0, &geometry, &[]);
+                for &id in draw.edges {
+                    if !draw.visible[id] {
+                        continue;
+                    }
+                    let page = &draw.scene.pages[id];
+                    let (Some(mesh), Some(instances)) =
+                        (&draw.meshes[page.mesh], &draw.instances[id])
+                    else {
+                        continue;
+                    };
+                    pass.set_vertex_buffer(0, mesh.vertices.raw.slice(..));
+                    pass.set_vertex_buffer(1, instances.raw.slice(..));
+                    pass.set_index_buffer(mesh.indices.raw.slice(..), IndexFormat::Uint32);
+                    pass.draw_indexed(
+                        draw.scene.meshes[page.mesh].edges.clone(),
+                        0,
+                        0..page.instances.len() as u32,
+                    );
+                    calls += 1;
+                }
             }
             calls
         };

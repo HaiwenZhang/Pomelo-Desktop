@@ -197,7 +197,12 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) {
         if self.view3d.active {
-            self.move_3d_drag(event, cx);
+            self.pointer_position = Some(event.position);
+            if self.pointer_gesture.is_some() {
+                self.move_3d_drag(event, cx);
+            } else {
+                self.hover_3d(event.position, cx);
+            }
             return;
         }
         self.review.free_measure = event.modifiers.alt;

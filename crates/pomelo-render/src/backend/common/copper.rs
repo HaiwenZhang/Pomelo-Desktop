@@ -450,7 +450,9 @@ impl Pipeline {
             }];
             let page = &cache.pages[page_index];
             let overlay = frame.object_highlight(batch.selected_object, batch.net, None);
-            if frame.pass != board::OverlayPass::Base && overlay.is_none() {
+            if (frame.pass != board::OverlayPass::Base && overlay.is_none())
+                || overlay.is_some_and(|color| color[3] <= 0.0)
+            {
                 continue;
             }
             let zone = matches!(

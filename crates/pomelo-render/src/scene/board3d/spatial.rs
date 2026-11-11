@@ -161,7 +161,7 @@ impl SpatialIndex3d {
         &self,
         camera: Camera3d,
         viewport: [f64; 2],
-        scale: f64,
+        scale: super::ZMap,
         mut visit: impl FnMut(usize),
     ) {
         if !self.nodes.is_empty() {
@@ -173,14 +173,11 @@ impl SpatialIndex3d {
         node: usize,
         camera: Camera3d,
         viewport: [f64; 2],
-        scale: f64,
+        scale: super::ZMap,
         visit: &mut impl FnMut(usize),
     ) {
         let node = &self.nodes[node];
-        let mut bounds = node.bounds;
-        bounds.min[2] *= scale;
-        bounds.max[2] *= scale;
-        if !camera.intersects(bounds, viewport) {
+        if !camera.intersects(scale.bounds(node.bounds), viewport) {
             return;
         }
         if let Some([left, right]) = node.children {
@@ -214,7 +211,7 @@ mod tests {
                 .unwrap();
         let camera = Camera3d::new([20.0, 20.0, 0.0], [0.0, 0.0, 0.0, 1.0], 15.0).unwrap();
         let mut candidates = std::collections::BTreeSet::new();
-        index.visit_frustum(camera, [100.0; 2], 5.0, |id| {
+        index.visit_frustum(camera, [100.0; 2], super::super::ZMap::linear(5.0), |id| {
             candidates.insert(id);
         });
         assert!(candidates.len() < 64);

@@ -46,6 +46,28 @@ const MEASURE_TOOLS: [(ReviewTool, Key); 3] = [
 ];
 
 impl BoardViewport {
+    fn isolate_button(&self, locale: Locale, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.isolation_active();
+        icon_button(
+            "canvas-isolate",
+            IconName::Focus,
+            text(
+                locale,
+                if active {
+                    Key::IsolateEnd
+                } else {
+                    Key::IsolateSelection
+                },
+            ),
+            cx,
+        )
+        .selected(active)
+        .toggled(active)
+        .disabled(!active && self.selected_target.is_none() && self.review.set.is_empty())
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_isolation(cx)))
+        .into_any_element()
+    }
+
     /// Fit the selection when there is one, otherwise the whole board.
     pub(super) fn fit_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(target) = self.selected_target {
@@ -148,6 +170,7 @@ impl BoardViewport {
                 .toggled(single)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_single_layer(cx)))
                 .into_any_element(),
+                self.isolate_button(locale, cx),
             ]
         };
         if !display.is_empty() {
@@ -205,6 +228,9 @@ impl BoardViewport {
                 }))
                 .into_any_element(),
             );
+        }
+        if in_3d {
+            tools.push(self.isolate_button(locale, cx));
         }
         if !tools.is_empty() {
             items.push(canvas_separator());

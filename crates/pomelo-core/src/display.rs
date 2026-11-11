@@ -648,6 +648,10 @@ impl BoardDisplay {
     pub fn layer_visible(&self, layer: LayerId) -> bool {
         !self.hidden_layers.contains(&layer)
     }
+    /// Unconnected objects (net zero) are never hidden by net visibility.
+    pub fn net_visible(&self, net: NetId) -> bool {
+        net.0 == 0 || !self.hidden_nets.contains(&net)
+    }
     /// Via drills require at least one visible source pad layer; pin drills have no scope.
     pub fn drill_visible(&self, scope: Option<&[LayerId]>) -> bool {
         self.show_drills && self.drill_scope_visible(scope)

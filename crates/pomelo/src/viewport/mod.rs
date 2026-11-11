@@ -11,6 +11,7 @@ mod gpu_trace;
 mod grid;
 mod hover;
 mod inspector_panel;
+mod isolation;
 mod labels;
 mod layer_panel;
 mod layer_views;
@@ -100,6 +101,8 @@ actions!(
 
 pub struct BoardViewport {
     view3d: view3d::View3d,
+    /// Visibility saved by "isolate selection", restored by the same command.
+    isolation: Option<isolation::Isolation>,
     preparation_budget: pomelo_core::memory::MemoryBudget,
     hover_selection: Option<(
         pomelo_core::selection::SelectionTarget,
@@ -594,6 +597,7 @@ impl BoardViewport {
         .detach();
         let mut viewport = Self {
             view3d: view3d::View3d::default(),
+            isolation: None,
             preparation_budget,
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),
@@ -729,6 +733,14 @@ impl BoardViewport {
             .restored_view
             .as_ref()
             .is_some_and(|state| state.view3d.active);
+        // Validation hook alongside POMELO_3D_PREVIEW: start in a given display mode.
+        if let Ok(mode) = std::env::var("POMELO_3D_MODE") {
+            viewport.view3d.settings.mode = match mode.as_str() {
+                "wireframe" => pomelo_core::display3d::RenderMode3d::Wireframe,
+                "solid" => pomelo_core::display3d::RenderMode3d::Solid,
+                _ => pomelo_core::display3d::RenderMode3d::Default,
+            };
+        }
         if (reopen_3d || std::env::var_os("POMELO_3D_PREVIEW").is_some())
             && pomelo_render::backend::native::SolidRenderer::supported()
         {

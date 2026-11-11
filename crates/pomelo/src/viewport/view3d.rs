@@ -1,4 +1,5 @@
 pub(super) mod controls;
+pub(super) mod settings;
 pub(super) mod view_cube;
 
 use super::*;
@@ -8,13 +9,15 @@ use pomelo_core::{
     task::CancellationToken,
 };
 use pomelo_render::{
-    backend::native::{SolidFrame, SolidRenderer, SolidTelemetry, display_bounds},
+    backend::native::{SolidFrame, SolidRenderer, SolidTelemetry},
     scene::board3d::{PreparedBoard3d, PreviewStackup},
 };
 use std::sync::atomic::Ordering;
 
 struct MaterialCache {
     display: Arc<pomelo_core::display::BoardDisplay>,
+    set: Arc<BTreeSet<SelectedObject>>,
+    hovered: Option<SelectedObject>,
     selected: Option<SelectionTarget>,
     related: Arc<BTreeSet<SelectedObject>>,
     settings: pomelo_core::display3d::Display3d,
@@ -40,6 +43,9 @@ pub(super) struct View3d {
     materials: Option<MaterialCache>,
     /// A saved camera was applied; keep it instead of fitting the first scene.
     pub camera_restored: bool,
+    pub hovered: Option<SelectedObject>,
+    /// Click position and the objects already selected there, nearest first.
+    pub cycle: Option<(Point<Pixels>, Vec<SelectedObject>)>,
     /// Frame the first 3D scene around the 2D focus once it has been fitted.
     pub follow_2d: bool,
     pub transition: Option<view_cube::Transition>,
@@ -69,6 +75,8 @@ impl Default for View3d {
             pan_drag: false,
             materials: None,
             camera_restored: false,
+            hovered: None,
+            cycle: None,
             follow_2d: false,
             transition: None,
             cube_bounds: None,
@@ -216,7 +224,13 @@ impl BoardViewport {
     pub(super) fn fit_3d(&mut self) -> bool {
         if let Some(scene) = &self.view3d.scene {
             self.view3d.initialized = self.view3d.camera.fit(
-                display_bounds(scene.bounds, self.view3d.settings.z_scale),
+                scene
+                    .z_map(
+                        self.view3d.settings.z_scale,
+                        self.view3d.settings.stretch
+                            == pomelo_core::display3d::ZStretch::Dielectric,
+                    )
+                    .bounds(scene.bounds),
                 self.view3d.size,
                 24.0,
             );
@@ -262,11 +276,14 @@ impl BoardViewport {
             bounds.max[1] = xy.max.y;
         }
         let previous = self.view3d.camera;
-        let moved = self.view3d.camera.fit(
-            display_bounds(bounds, self.view3d.settings.z_scale),
-            self.view3d.size,
-            24.0,
+        let z_map = scene.z_map(
+            self.view3d.settings.z_scale,
+            self.view3d.settings.stretch == pomelo_core::display3d::ZStretch::Dielectric,
         );
+        let moved = self
+            .view3d
+            .camera
+            .fit(z_map.bounds(bounds), self.view3d.size, 24.0);
         if moved && previous != self.view3d.camera {
             let located = std::mem::replace(&mut self.view3d.camera, previous);
             self.record_3d_view();
@@ -274,12 +291,23 @@ impl BoardViewport {
         }
         moved
     }
+    /// Current height map of the 3D view.
+    pub(super) fn z_map_3d(&self) -> Option<pomelo_render::scene::board3d::ZMap> {
+        let scene = self.view3d.scene.as_ref()?;
+        Some(scene.z_map(
+            self.view3d.settings.z_scale,
+            self.view3d.settings.stretch == pomelo_core::display3d::ZStretch::Dielectric,
+        ))
+    }
     fn materials_3d(&mut self) -> Arc<Vec<[f32; 4]>> {
+        let set = Arc::clone(self.review.set.objects());
         let v = &mut self.view3d;
         if let Some(cache) = &v.materials
             && Arc::ptr_eq(&cache.display, &self.display)
             && cache.selected == self.selected_target
             && Arc::ptr_eq(&cache.related, &self.selected_related_objects)
+            && Arc::ptr_eq(&cache.set, &set)
+            && cache.hovered == v.hovered
             && cache.settings == v.settings
         {
             return cache.colors.clone();
@@ -297,22 +325,99 @@ impl BoardViewport {
         } else {
             None
         };
-        let transparent = v.settings.mode == pomelo_core::display3d::RenderMode3d::Wireframe;
-        let mut colors = scene.materials(&self.scene, &self.display, transparent, selected, net);
-        for (i, source) in scene.sources.iter().enumerate() {
-            if colors[i + 1][3] > 0.0 && self.selected_related_objects.contains(&source.object) {
-                colors[i + 1] = [1.0, 0.35, 0.05, 1.0];
-            }
-        }
-        let colors = Arc::new(colors);
+        let colors = Arc::new(scene.materials(
+            &self.scene,
+            &self.display,
+            &pomelo_render::scene::board3d::MaterialOptions {
+                mode: v.settings.mode,
+                selected,
+                selected_net: net,
+                related: &self.selected_related_objects,
+                secondary: &set,
+                hovered: v.hovered.filter(|_| v.settings.hover_preview),
+                unselected_opacity: v.settings.unselected_opacity,
+                selected_solid: v.settings.selected_solid,
+            },
+        ));
         v.materials = Some(MaterialCache {
             display: self.display.clone(),
             selected: self.selected_target,
             related: self.selected_related_objects.clone(),
+            set,
+            hovered: v.hovered,
             settings: v.settings,
             colors: colors.clone(),
         });
         colors
+    }
+    /// Object under a canvas position, using the stretch-aware ray split.
+    fn pick_3d(
+        &mut self,
+        position: Point<Pixels>,
+    ) -> Option<pomelo_core::selection::SelectedObject> {
+        let materials = self.materials_3d();
+        let scene = self.view3d.scene.clone()?;
+        let bounds = self.bounds?;
+        let z_map = self.z_map_3d()?;
+        let p = position - bounds.origin;
+        let ray = self.view3d.camera.pick_ray(
+            [f64::from(p.x), f64::from(p.y)],
+            self.view3d.size,
+            z_map.bounds(scene.bounds),
+        )?;
+        z_map
+            .model_rays(ray)
+            .into_iter()
+            .find_map(|ray| scene.pick(ray, &materials, self.pick_filter))
+    }
+    /// Pick while ignoring the objects already visited by click cycling.
+    fn pick_3d_excluding(
+        &mut self,
+        position: Point<Pixels>,
+    ) -> Option<pomelo_core::selection::SelectedObject> {
+        let seen = self
+            .view3d
+            .cycle
+            .as_ref()
+            .map(|(_, seen)| seen.clone())
+            .unwrap_or_default();
+        if seen.is_empty() {
+            return self.pick_3d(position);
+        }
+        let scene = self.view3d.scene.clone()?;
+        let mut materials = (*self.materials_3d()).clone();
+        let count = scene.sources.len() + 1;
+        for (i, source) in scene.sources.iter().enumerate() {
+            if seen.contains(&source.object) {
+                materials[i + 1][3] = 0.0;
+                if let Some(edge) = materials.get_mut(count + i + 1) {
+                    edge[3] = 0.0;
+                }
+            }
+        }
+        let bounds = self.bounds?;
+        let z_map = self.z_map_3d()?;
+        let p = position - bounds.origin;
+        let ray = self.view3d.camera.pick_ray(
+            [f64::from(p.x), f64::from(p.y)],
+            self.view3d.size,
+            z_map.bounds(scene.bounds),
+        )?;
+        z_map
+            .model_rays(ray)
+            .into_iter()
+            .find_map(|ray| scene.pick(ray, &materials, self.pick_filter))
+    }
+    /// Track the object under the pointer for the hover preview.
+    pub(super) fn hover_3d(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if !self.view3d.settings.hover_preview || self.pointer_gesture.is_some() {
+            return;
+        }
+        let hovered = self.pick_3d(position);
+        if hovered != self.view3d.hovered {
+            self.view3d.hovered = hovered;
+            cx.notify();
+        }
     }
     pub(super) fn render_canvas_3d(
         &mut self,
@@ -357,6 +462,8 @@ impl BoardViewport {
                 camera: self.view3d.camera,
                 materials,
                 z_scale: self.view3d.settings.z_scale,
+                dielectric_only: self.view3d.settings.stretch
+                    == pomelo_core::display3d::ZStretch::Dielectric,
             };
             canvas(
                 move |bounds, _, cx| {
@@ -517,34 +624,38 @@ impl BoardViewport {
             return;
         }
         let clicked = self.pointer_gesture.take().is_some_and(|g| g.is_click());
-        if clicked {
-            let materials = self.materials_3d();
-            if let Some(scene) = self.view3d.scene.clone()
-                && let Some(bounds) = self.bounds
-            {
-                let p = event.position - bounds.origin;
-                if let Some(mut ray) = self.view3d.camera.pick_ray(
-                    [f64::from(p.x), f64::from(p.y)],
-                    self.view3d.size,
-                    display_bounds(scene.bounds, self.view3d.settings.z_scale),
-                ) {
-                    ray.origin[2] /= self.view3d.settings.z_scale;
-                    ray.direction[2] /= self.view3d.settings.z_scale;
-                    if let Some(object) = scene.pick(ray, &materials, self.pick_filter) {
-                        let target = pomelo_core::selection::canvas_target(
-                            &self.scene,
-                            object,
-                            self.selection_mode,
-                            &CancellationToken::default(),
-                        )
-                        .ok();
-                        if let Some(target) = target {
-                            self.prepare_target(target, false, window, cx);
-                        }
-                    } else {
-                        self.clear_selection(&ClearSelection, window, cx);
-                    }
+        if clicked && self.view3d.scene.is_some() {
+            // Clicking the same spot again steps to the next object behind the last hit.
+            let same_spot = self
+                .view3d
+                .cycle
+                .as_ref()
+                .is_some_and(|(at, _)| (*at - event.position).magnitude() < 3.0);
+            if !same_spot {
+                self.view3d.cycle = Some((event.position, Vec::new()));
+            }
+            let mut object = self.pick_3d_excluding(event.position);
+            if object.is_none() && same_spot {
+                self.view3d.cycle = Some((event.position, Vec::new()));
+                object = self.pick_3d_excluding(event.position);
+            }
+            if let Some(object) = object {
+                if let Some((_, seen)) = &mut self.view3d.cycle {
+                    seen.push(object);
                 }
+                let target = pomelo_core::selection::canvas_target(
+                    &self.scene,
+                    object,
+                    self.selection_mode,
+                    &CancellationToken::default(),
+                )
+                .ok();
+                if let Some(target) = target {
+                    self.prepare_target(target, false, window, cx);
+                }
+            } else {
+                self.view3d.cycle = None;
+                self.clear_selection(&ClearSelection, window, cx);
             }
         }
         cx.stop_propagation();

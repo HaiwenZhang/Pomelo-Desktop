@@ -157,6 +157,7 @@ fn dense_round_instances_gpu_profile() {
             scene: scene.clone(),
             camera,
             z_scale: 1.,
+            dielectric_only: false,
         };
         let mut pipeline = SolidPipeline::new(&gpu.device, &scene).unwrap();
         for _ in 0..200 {

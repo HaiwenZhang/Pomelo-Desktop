@@ -3,7 +3,7 @@ use super::metal::SolidPipeline;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use super::solid_pipeline::SolidPipeline;
 use super::{NativeGpuContext, NativeGpuRenderer};
-use crate::scene::board3d::PreparedBoard3d;
+use crate::scene::board3d::{PreparedBoard3d, ZMap};
 use pomelo_core::{geometry3d::Bounds3, interaction::camera3d::Camera3d};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, atomic::AtomicU64};
@@ -11,8 +11,20 @@ use std::sync::{Arc, atomic::AtomicU64};
 pub struct SolidFrame {
     pub scene: Arc<PreparedBoard3d>,
     pub camera: Camera3d,
+    /// Face materials for slot 0 and every source, then edge materials in the same order.
     pub materials: Arc<Vec<[f32; 4]>>,
     pub z_scale: f64,
+    /// Keep copper thickness while the Z factor stretches the gaps.
+    pub dielectric_only: bool,
+}
+impl SolidFrame {
+    pub fn z_map(&self) -> ZMap {
+        self.scene.z_map(self.z_scale, self.dielectric_only)
+    }
+    /// Index of the first edge material.
+    pub(crate) fn edge_offset(&self) -> usize {
+        self.scene.sources.len() + 1
+    }
 }
 #[derive(Default)]
 pub struct SolidTelemetry {
@@ -48,7 +60,12 @@ impl NativeGpuRenderer for SolidRenderer {
     type Snapshot = SolidFrame;
     fn draw(&mut self, context: &NativeGpuContext<'_>, frame: &SolidFrame) -> anyhow::Result<()> {
         anyhow::ensure!(
-            frame.materials.len() == frame.scene.sources.len() + 1,
+            // Edge materials are optional; without them no edges are drawn.
+            [1, 2].contains(&(frame.materials.len() / (frame.scene.sources.len() + 1)))
+                && frame
+                    .materials
+                    .len()
+                    .is_multiple_of(frame.scene.sources.len() + 1),
             "SOLID_MATERIAL_COUNT"
         );
         anyhow::ensure!(
@@ -100,13 +117,15 @@ pub(crate) struct SolidUniforms {
     pub viewport: [f32; 4],
     pub canvas: [f32; 4],
     pub parameters: [f32; 4],
+    /// x: edge material offset bits; y: 1 for dielectric-only Z stretch.
+    pub extra: [f32; 4],
+    /// Uniform preview stack for dielectric-only stretch: pitch, copper, top, layers.
+    pub stretch: [f32; 4],
 }
-const _: () = assert!(size_of::<SolidUniforms>() == 112);
+const _: () = assert!(size_of::<SolidUniforms>() == 144);
+/// Linear display bounds; stretch-aware callers use [`ZMap::bounds`].
 pub fn display_bounds(bounds: Bounds3, z_scale: f64) -> Bounds3 {
-    Bounds3 {
-        min: [bounds.min[0], bounds.min[1], bounds.min[2] * z_scale],
-        max: [bounds.max[0], bounds.max[1], bounds.max[2] * z_scale],
-    }
+    ZMap::linear(z_scale).bounds(bounds)
 }
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn validated() -> anyhow::Result<(naga::Module, naga::valid::ModuleInfo)> {
@@ -180,7 +199,7 @@ pub(crate) fn metal_source() -> anyhow::Result<String> {
     Ok(msl::write_string(&module, &info, &options, &msl::PipelineOptions::default())?.0)
 }
 #[cfg(any(test, target_os = "windows"))]
-pub(crate) fn hlsl_source() -> anyhow::Result<(String, [String; 5])> {
+pub(crate) fn hlsl_source() -> anyhow::Result<(String, [String; 7])> {
     use naga::back::hlsl;
     let (module, info) = validated()?;
     let options = hlsl::Options {
@@ -205,13 +224,15 @@ pub(crate) fn hlsl_source() -> anyhow::Result<(String, [String; 5])> {
     let mut text = String::new();
     let reflection = hlsl::Writer::new(&mut text, &options, &hlsl::PipelineOptions::default())
         .write(&module, &info, None)?;
-    let mut entries = [const { String::new() }; 5];
+    let mut entries = [const { String::new() }; 7];
     for (output, wanted) in entries.iter_mut().zip([
         "solid_vertex",
         "solid_opaque",
         "solid_transparent",
         "composite_vertex",
         "composite_fragment",
+        "edge_vertex",
+        "solid_edge",
     ]) {
         let index = module
             .entry_points
@@ -243,7 +264,7 @@ mod tests {
                 &source,
                 s!("solid test"),
                 PCSTR(entry.as_ptr().cast()),
-                if i == 0 || i == 3 {
+                if i == 0 || i == 3 || i == 5 {
                     s!("vs_5_0")
                 } else {
                     s!("ps_5_0")
@@ -255,7 +276,7 @@ mod tests {
     #[test]
     fn solid_shader_validates_with_opaque_transparent_and_composite_entries() {
         let (module, _) = super::validated().unwrap();
-        assert_eq!(module.entry_points.len(), 5);
+        assert_eq!(module.entry_points.len(), 7);
         #[cfg(target_os = "macos")]
         assert!(super::metal_source().unwrap().contains("solid_transparent"));
     }

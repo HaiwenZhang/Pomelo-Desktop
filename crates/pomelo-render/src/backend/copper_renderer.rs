@@ -787,8 +787,9 @@ impl NativeGpuRenderer for BoardRenderer {
         use super::board::{OverlayPass, TraceScope};
         use pomelo_core::display::{CellMode, DisplayCategory as Category, LayerPrimitive};
         let mut base = frame.traces.base();
-        base.net_colors = (!frame.display.appearance.hide_net_colors
+        base.net_colors = ((!frame.display.appearance.hide_net_colors
             && !frame.display.appearance.nets.is_empty())
+            || !frame.display.hidden_nets.is_empty())
         .then(|| Arc::clone(&frame.display));
         base.opacity = frame.display.global_opacity;
         base.object_filter = frame.display.object_filter;

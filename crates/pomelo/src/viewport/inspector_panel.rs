@@ -230,9 +230,14 @@ impl BoardViewport {
             );
         }
         let net_colors = self.net_color_controls(locale, window, cx);
+        let settings_3d = self
+            .view3d
+            .active
+            .then(|| self.render_3d_settings(locale, cx));
         div()
             .flex()
             .flex_col()
+            .children(settings_3d)
             .children(net_colors)
             .children(crate::panels::display::controls(
                 locale,

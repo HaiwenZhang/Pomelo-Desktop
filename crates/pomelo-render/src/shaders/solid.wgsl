@@ -3,6 +3,10 @@ struct Frame {
     viewport: vec4f,
     canvas: vec4f,
     parameters: vec4f,
+    // x: bit pattern of the first edge material index; y: display Z map mode.
+    extra: vec4f,
+    // Dielectric-only stretch: pitch, copper thickness, top surface, stack size.
+    stretch: vec4f,
 }
 @group(0) @binding(0) var<uniform> u: Frame;
 struct Materials { colors: array<vec4f> }
@@ -22,14 +26,32 @@ struct Surface {
     @location(0) lighting_position: vec4f,
     @location(1) @interpolate(flat) owner: u32,
 }
-@vertex fn solid_vertex(v: Vertex) -> Surface {
+// Display height of a model z. Dielectric-only mode keeps each copper layer's
+// thickness and multiplies only the gaps; otherwise every height scales.
+fn display_z(z: f32) -> f32 {
+    let scale = u.parameters.x;
+    if u.extra.y < 0.5 || u.stretch.x <= 0.0 { return z*scale; }
+    let pitch = u.stretch.x;
+    let copper = u.stretch.y;
+    let top = u.stretch.z;
+    let count = u.stretch.w;
+    // Depth below the top surface, split into whole pitches and the remainder.
+    let depth = clamp(top-z,0.0,pitch*(count-1.0)+copper);
+    let layers = min(floor(depth/pitch),count-1.0);
+    let within = depth-layers*pitch;
+    let metal = layers*copper+min(within,copper);
+    let gap = depth-metal;
+    let outside = (top-z)-depth;
+    return top*scale-(metal+gap*scale+outside*scale);
+}
+fn transform(v: Vertex) -> Surface {
     let c = v.transform.z;
     let s = v.transform.w;
     var x = v.position.x;
     if v.instance_owner.y == 1u {
         x += sign(x)*bitcast<f32>(v.instance_owner.z);
     }
-    let local = vec3f(c*x-s*v.position.y,s*x+c*v.position.y,v.position.z*u.parameters.x);
+    let local = vec3f(c*x-s*v.position.y,s*x+c*v.position.y,display_z(v.position.z));
     let p = local+vec3f(v.transform.xy,0.0);
     var o: Surface;
     o.position = u.matrix*vec4f(p,1.0);
@@ -38,6 +60,21 @@ struct Surface {
     o.lighting_position = vec4f(local,f32(v.instance_owner.w));
     o.owner = select(v.owner.x,v.instance_owner.x,v.instance_owner.x != 0u);
     return o;
+}
+@vertex fn solid_vertex(v: Vertex) -> Surface {
+    return transform(v);
+}
+// Edges read their own material slot and sit slightly in front of their faces.
+@vertex fn edge_vertex(v: Vertex) -> Surface {
+    var o = transform(v);
+    o.owner = o.owner+bitcast<u32>(u.extra.x);
+    o.position.z = o.position.z-0.0004*o.position.w;
+    return o;
+}
+@fragment fn solid_edge(i: Surface) -> @location(0) vec4f {
+    let color = materials.colors[i.owner];
+    if color.a <= 0.0 { discard; }
+    return vec4f(color.rgb,1.0);
 }
 // Preserve flat caps and authored corners. Round instances use a continuous radial
 // side normal without splitting the welded cap/wall vertices at normal seams.

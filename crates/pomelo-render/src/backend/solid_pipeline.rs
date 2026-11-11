@@ -7,7 +7,7 @@ use super::{
     NativeGpuContext,
     common::{Device, Rect},
     solid_cache::{GeometryCache, cache_target, system_memory, upload_memory},
-    solid_renderer::{SolidFrame, SolidUniforms, display_bounds},
+    solid_renderer::{SolidFrame, SolidUniforms},
 };
 use crate::scene::board3d::{Instance3d, PreparedBoard3d, Vertex3d};
 use anyhow::{Context as _, ensure};
@@ -36,6 +36,8 @@ pub(crate) struct SolidDraw<'a, B = Buffer> {
     pub material: &'a B,
     pub opaque: &'a [usize],
     pub transparent: &'a [usize],
+    /// Pages with at least one source drawing its feature edges.
+    pub edges: &'a [usize],
     pub visible: &'a [bool],
 }
 pub(crate) struct SolidPipeline {
@@ -58,6 +60,7 @@ pub(crate) struct SolidPipeline {
     visible_mask: Vec<bool>,
     opaque_batches: Vec<usize>,
     transparent_batches: Vec<usize>,
+    edge_batches: Vec<usize>,
 }
 impl SolidPipeline {
     pub fn new(device: &Device<'_>, scene: &PreparedBoard3d) -> anyhow::Result<Self> {
@@ -101,6 +104,7 @@ impl SolidPipeline {
             visible_mask: vec![],
             opaque_batches: vec![],
             transparent_batches: vec![],
+            edge_batches: vec![],
         })
     }
     fn evict_to(&mut self, target: usize) {
@@ -265,7 +269,20 @@ impl SolidPipeline {
             self.active_mask.fill(false);
             self.opaque_batches.clear();
             self.transparent_batches.clear();
+            self.edge_batches.clear();
+            let edge_offset = frame.edge_offset();
             for (i, batch) in frame.scene.pages.iter().enumerate() {
+                if !frame.scene.meshes[batch.mesh].edges.is_empty()
+                    && batch.sources.iter().any(|id| {
+                        frame
+                            .materials
+                            .get(edge_offset + *id as usize)
+                            .is_some_and(|m| m[3] > 0.0)
+                    })
+                {
+                    self.edge_batches.push(i);
+                    self.active_mask[i] = true;
+                }
                 if batch
                     .sources
                     .iter()
@@ -290,7 +307,7 @@ impl SolidPipeline {
                 f64::from(context.bounds.size.width.0),
                 f64::from(context.bounds.size.height.0),
             ],
-            frame.z_scale,
+            frame.z_map(),
             &mut self.visible,
         )?;
         self.visible_mask.clear();
@@ -300,7 +317,8 @@ impl SolidPipeline {
         }
         self.memory_pressure();
         self.upload_visible(device, &frame.scene)?;
-        let bounds = display_bounds(frame.scene.bounds, frame.z_scale);
+        let z_map = frame.z_map();
+        let bounds = z_map.bounds(frame.scene.bounds);
         let matrix = frame
             .camera
             .clip_matrix(
@@ -335,6 +353,13 @@ impl SolidPipeline {
                         / f64::from(context.bounds.size.width.0),
                 ) / frame.camera.view_height()) as f32,
             ],
+            extra: [
+                f32::from_bits(frame.edge_offset() as u32),
+                z_map.uniforms().0,
+                0.0,
+                0.0,
+            ],
+            stretch: z_map.uniforms().1,
         };
 
         let x = clip.origin.x.0.floor().max(0.0) as i32;
@@ -365,6 +390,7 @@ impl SolidPipeline {
                 material: self.materials.as_ref().context("SOLID_MATERIALS")?,
                 opaque: &self.opaque_batches,
                 transparent: &self.transparent_batches,
+                edges: &self.edge_batches,
                 visible: &self.visible_mask,
             },
         )

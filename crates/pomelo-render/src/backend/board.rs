@@ -249,7 +249,8 @@ impl<S: InstanceSource> TraceFrame<S> {
             .as_ref()
             .is_some_and(|colors| !colors.is_empty())
             || self.net_colors.as_ref().is_some_and(|display| {
-                !display.appearance.hide_net_colors && !display.appearance.nets.is_empty()
+                (!display.appearance.hide_net_colors && !display.appearance.nets.is_empty())
+                    || !display.hidden_nets.is_empty()
             })
     }
 
@@ -281,6 +282,14 @@ impl<S: InstanceSource> TraceFrame<S> {
                 || self.hovered_object.is_some_and(|(id, _)| id == object);
             return (hovered && !self.selected(object, net, track))
                 .then_some([0.63, 1.0, 0.85, 0.9]);
+        }
+        // Hidden nets keep their instances but draw nothing in every pass.
+        if self
+            .net_colors
+            .as_ref()
+            .is_some_and(|display| !display.net_visible(net))
+        {
+            return Some([0.0; 4]);
         }
         if self.pass == OverlayPass::Base
             && let Some([r, g, b]) = self

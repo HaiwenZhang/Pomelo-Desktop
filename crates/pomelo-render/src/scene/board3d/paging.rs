@@ -93,6 +93,7 @@ impl Builder<'_> {
             vertices,
             indices,
             round_lods: vec![],
+            edges: 0..0,
         })
     }
 
@@ -427,11 +428,14 @@ impl Builder<'_> {
             group.vertices.shrink_to_fit();
             group.indices.shrink_to_fit();
             self.cancel.check().map_err(|e| Self::error(e.into()))?;
-            meshes.push(Mesh3d {
+            let mut prepared = Mesh3d {
                 vertices: group.vertices,
                 indices: group.indices,
                 round_lods: group.round_lods,
-            });
+                edges: 0..0,
+            };
+            prepared.add_edges();
+            meshes.push(prepared);
             if !group.shared {
                 pages
                     .try_reserve(1)

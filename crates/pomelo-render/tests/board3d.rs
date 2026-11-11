@@ -9,7 +9,7 @@ use pomelo_core::{
     selection::SelectedObject,
     task::CancellationToken,
 };
-use pomelo_render::scene::board3d::{PreparedBoard3d, PreviewStackup};
+use pomelo_render::scene::board3d::{MaterialOptions, PreparedBoard3d, PreviewStackup, ZMap};
 
 #[test]
 fn solid_via_pads_share_meshes_while_their_body_profiles_remain_distinct() {
@@ -267,7 +267,8 @@ fn all_via_profiles_are_solid_and_do_not_cut_zones_or_traces() {
             &CancellationToken::default(),
         )
         .unwrap();
-        let materials = solid.materials(&input, &BoardDisplay::default(), false, None, None);
+        let materials =
+            solid.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
         let ray = |x, y| PickRay3d {
             origin: [x, y, 10.0],
             direction: [0.0, 0.0, -1.0],
@@ -328,7 +329,8 @@ fn all_via_profiles_are_solid_and_do_not_cut_zones_or_traces() {
             &CancellationToken::default(),
         )
         .unwrap();
-        let materials = blind.materials(&input, &BoardDisplay::default(), false, None, None);
+        let materials =
+            blind.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
         assert_eq!(
             blind.pick(ray(1.5, 1.5), &materials, Default::default()),
             Some(SelectedObject::Segment(ObjectId(1))),
@@ -355,7 +357,7 @@ fn pin_holes_remain_cut_out_of_the_3d_preview() {
         &CancellationToken::default(),
     )
     .unwrap();
-    let materials = solid.materials(&input, &BoardDisplay::default(), false, None, None);
+    let materials = solid.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
     assert!(
         solid
             .pick(
@@ -400,7 +402,7 @@ fn whole_board_can_exceed_page_limits_and_zone_parts_preserve_triangles_and_hole
         paged
             .meshes
             .iter()
-            .all(|m| m.vertices.len() <= 24 && m.indices.len() <= 36)
+            .all(|m| m.vertices.len() <= 24 && m.triangle_index_count() <= 36)
     );
     input.zones = vec![square_zone(999, 0.0, 20.0, true)];
     input.bounds.max = Point::new(20.0, 20.0);
@@ -430,7 +432,7 @@ fn whole_board_can_exceed_page_limits_and_zone_parts_preserve_triangles_and_hole
         original.mesh.indices.len(),
         "paging must not add boundary walls or drop triangles"
     );
-    let colors = board.materials(&input, &BoardDisplay::default(), false, None, None);
+    let colors = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
     let ray = |x, y| PickRay3d {
         origin: [x, y, 10.0],
         direction: [0.0, 0.0, -1.0],
@@ -472,7 +474,7 @@ fn repeated_pads_and_vias_use_shared_geometry_and_keep_source_identity() {
         100
     );
     assert!((board.bounds.max[2] - 0.8).abs() < 1e-9 && (board.bounds.min[2] + 0.8).abs() < 1e-9);
-    let materials = board.materials(&source, &BoardDisplay::default(), false, None, None);
+    let materials = board.materials(&source, &BoardDisplay::default(), &MaterialOptions::plain());
     let ray = PickRay3d {
         origin: [2.0, 0.0, 10.0],
         direction: [0.0, 0.0, -1.0],
@@ -487,7 +489,7 @@ fn repeated_pads_and_vias_use_shared_geometry_and_keep_source_identity() {
     assert_eq!(
         board.pick(
             ray,
-            &board.materials(&source, &display, false, None, None),
+            &board.materials(&source, &display, &MaterialOptions::plain()),
             Default::default()
         ),
         None
@@ -503,9 +505,10 @@ fn repeated_pads_and_vias_use_shared_geometry_and_keep_source_identity() {
             &board.materials(
                 &source,
                 &display,
-                false,
-                Some(SelectedObject::Segment(ObjectId(1))),
-                None
+                &MaterialOptions {
+                    selected: Some(SelectedObject::Segment(ObjectId(1))),
+                    ..MaterialOptions::plain()
+                }
             ),
             Default::default()
         ),
@@ -562,7 +565,7 @@ fn straight_traces_share_capsules_under_a_bounded_budget_and_pick_stretched_ends
     assert_eq!(board.meshes.len(), 1);
     assert!(board.vertex_count() < 256);
     assert!(board.upload_bytes() < 1024 * 1024);
-    let materials = board.materials(&input, &BoardDisplay::default(), false, None, None);
+    let materials = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
     for (i, segment) in input.segments.iter().enumerate().take(3) {
         let delta = Point::new(segment.b.x - segment.a.x, segment.b.y - segment.a.y);
         let length = segment.a.distance(segment.b);
@@ -618,7 +621,7 @@ fn paged_frustum_results_match_bruteforce_and_reduce_local_work() {
         let mut camera = Camera3d::new([10.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0], 10.0).unwrap();
         camera.set_view(direction);
         board
-            .visible_pages(camera, [100.0; 2], 5.0, &mut visible)
+            .visible_pages(camera, [100.0; 2], ZMap::linear(5.0), &mut visible)
             .unwrap();
         assert!(visible.len() < board.pages.len() / 2);
         let expected: std::collections::BTreeSet<_> = board
@@ -800,7 +803,7 @@ fn parallel_preparation_preserves_geometry_ownership_and_empty_layer_warnings() 
         assert_ne!(serial.sources[1].object, parallel.sources[1].object);
     }
     let materials = |scene: &PreparedBoard3d| {
-        scene.materials(&input, &BoardDisplay::default(), false, None, None)
+        scene.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain())
     };
     for [x, y] in [
         [0.1, 0.1],

@@ -228,7 +228,7 @@ pub fn controls(
 }
 
 /// Two columns of short switches; each column keeps its own trailing lane.
-fn switch_grid(switches: Vec<AnyElement>) -> AnyElement {
+pub fn switch_grid(switches: Vec<AnyElement>) -> AnyElement {
     div()
         .grid()
         .grid_cols(2)
@@ -261,7 +261,7 @@ pub fn section(title: String, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
 }
 
 /// One immediate setting: its label leads and the switch holds the trailing lane.
-fn setting_switch(
+pub fn setting_switch(
     id: &'static str,
     label: String,
     accessible_name: String,

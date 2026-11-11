@@ -310,6 +310,7 @@ fn solid_depth_holes_and_order_independent_transparency_pixels() {
                     camera,
                     materials,
                     z_scale: 1.0,
+                    dielectric_only: false,
                 },
             )
             .unwrap();
