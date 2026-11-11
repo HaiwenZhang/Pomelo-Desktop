@@ -1,5 +1,5 @@
 //! Immutable, GPU-ready conductor geometry. Preview heights are explicit assumptions.
-mod edges;
+pub(super) mod edges;
 mod holes;
 mod paging;
 mod parallel;
@@ -92,6 +92,12 @@ impl Mesh3d {
             })
     }
     /// Append feature edges of the full-resolution triangles.
+    /// Append edges already computed for this mesh's vertices.
+    pub(crate) fn append_edges(&mut self, lines: Vec<u32>) {
+        let start = self.indices.len() as u32;
+        self.indices.extend(lines);
+        self.edges = start..self.indices.len() as u32;
+    }
     pub(crate) fn add_edges(&mut self, generators: bool) {
         let fine = self.fine_index_count();
         let edges = edges::feature_edges(&self.vertices, &self.indices[..fine], generators);
@@ -821,6 +827,9 @@ struct Group {
     bounds: Option<Bounds3>,
     shared: bool,
     round_lods: Vec<RoundLod3d>,
+    /// Feature edges of static sources, computed per source before tiling so
+    /// tile and page seams never read as outlines. Unused for shared prototypes.
+    edge_lines: Vec<u32>,
 }
 impl Group {
     fn allocation_bytes(&self) -> usize {
@@ -829,6 +838,7 @@ impl Group {
             + self.instances.capacity() * size_of::<Instance3d>()
             + self.sources.capacity() * 4
             + self.round_lods.capacity() * size_of::<RoundLod3d>()
+            + self.edge_lines.capacity() * 4
     }
 }
 struct Builder<'a> {
@@ -905,6 +915,7 @@ impl Builder<'_> {
             bounds: None,
             shared: false,
             round_lods: vec![],
+            edge_lines: vec![],
         });
         Ok(self.groups.len() - 1)
     }

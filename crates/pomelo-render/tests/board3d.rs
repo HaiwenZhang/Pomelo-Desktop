@@ -1082,3 +1082,75 @@ fn cpu_raster_draws_visible_copper_and_leaves_hidden_scenes_as_background() {
     .unwrap();
     assert!(empty.chunks(4).all(|px| px == [0, 0, 0, 255]));
 }
+
+#[test]
+fn large_zones_split_into_tiles_outline_only_their_boundary() {
+    // A zone with a grid of holes triangulates into many triangles across tiles.
+    let square = |x: f64, y: f64, s: f64| {
+        vec![
+            Point::new(x, y),
+            Point::new(x + s, y),
+            Point::new(x + s, y + s),
+            Point::new(x, y + s),
+        ]
+    };
+    let mut rings = vec![square(-60.0, -60.0, 120.0)];
+    let holes: Vec<(f64, f64)> = (0..6)
+        .flat_map(|i| (0..6).map(move |j| (-50.0 + 18.0 * i as f64, -50.0 + 18.0 * j as f64)))
+        .collect();
+    rings.extend(holes.iter().map(|(x, y)| square(*x, *y, 4.0)));
+    let mut input = source();
+    input.segments.clear();
+    input.pins.clear();
+    input.vias.clear();
+    input.zones = vec![pomelo_core::model::Zone {
+        id: ObjectId(900),
+        layer: LayerId(0),
+        net: NetId(1),
+        kind: pomelo_core::model::ZoneKind::Static,
+        paths: vec![],
+        mesh: pomelo_core::copper::CopperMesh::build(
+            &rings,
+            &[],
+            &pomelo_core::copper::MeshLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap(),
+    }];
+    input.bounds = pomelo_core::model::Bounds {
+        min: Point::new(-70.0, -70.0),
+        max: Point::new(70.0, 70.0),
+    };
+    let board = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    assert!(board.meshes.len() > 1, "the zone must be split into tiles");
+    let on_ring = |x: f64, y: f64| {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let on_square = |sx: f64, sy: f64, s: f64| {
+            ((near(x, sx) || near(x, sx + s)) && y >= sy - 1e-3 && y <= sy + s + 1e-3)
+                || ((near(y, sy) || near(y, sy + s)) && x >= sx - 1e-3 && x <= sx + s + 1e-3)
+        };
+        on_square(-60.0, -60.0, 120.0) || holes.iter().any(|(hx, hy)| on_square(*hx, *hy, 4.0))
+    };
+    let mut lines = 0;
+    for mesh in &board.meshes {
+        let edges = &mesh.indices[mesh.edges.start as usize..mesh.edges.end as usize];
+        for line in edges.chunks(2) {
+            // Ring vertices are shared by interior diagonals; test the middle of the edge.
+            let a = mesh.vertices[line[0] as usize].position;
+            let b = mesh.vertices[line[1] as usize].position;
+            let (x, y) = (
+                f64::from(a[0] + b[0]) * 0.5 + board.origin.x,
+                f64::from(a[1] + b[1]) * 0.5 + board.origin.y,
+            );
+            assert!(on_ring(x, y), "interior edge through ({x}, {y})");
+            lines += 1;
+        }
+    }
+    assert!(lines > 0);
+}

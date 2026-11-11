@@ -208,6 +208,26 @@ impl Builder<'_> {
         )?;
         let mesh = self.weld(&solid, id, true)?;
         drop(solid);
+        // Edges of the whole source, each owned by one triangle that uses it.
+        let lines = super::edges::feature_edges(&mesh.vertices, &mesh.indices, false);
+        let mut owned: HashMap<u32, Vec<[u32; 2]>> = HashMap::new();
+        {
+            let mut by_edge: HashMap<(u32, u32), u32> = HashMap::new();
+            for (t, triangle) in mesh.indices.as_chunks::<3>().0.iter().enumerate() {
+                for (a, b) in [
+                    (triangle[0], triangle[1]),
+                    (triangle[1], triangle[2]),
+                    (triangle[2], triangle[0]),
+                ] {
+                    by_edge.entry((a.min(b), a.max(b))).or_insert(t as u32);
+                }
+            }
+            for line in lines.as_chunks::<2>().0 {
+                if let Some(&t) = by_edge.get(&(line[0].min(line[1]), line[0].max(line[1]))) {
+                    owned.entry(t).or_default().push(*line);
+                }
+            }
+        }
         let mut tiles: BTreeMap<[i64; 2], Vec<u32>> = BTreeMap::new();
         for (i, triangle) in mesh.indices.as_chunks::<3>().0.iter().enumerate() {
             if i.is_multiple_of(1024) {
@@ -215,9 +235,9 @@ impl Builder<'_> {
             }
             let bounds = self.triangle_bounds(&mesh, triangle, true);
             let bin = tiles.entry(self.tile(bounds.center())).or_default();
-            bin.try_reserve(3)
+            bin.try_reserve(1)
                 .map_err(|_| Self::error(SolidError::Allocation))?;
-            bin.extend(triangle);
+            bin.push(i as u32);
         }
         for (tile, indices) in tiles {
             let mut remap = HashMap::new();
@@ -227,10 +247,11 @@ impl Builder<'_> {
                 self.static_group(layer, tile)?
             };
             let mut start = self.groups[group].indices.len() as u32;
-            for (i, triangle) in indices.as_chunks::<3>().0.iter().enumerate() {
+            for (i, &t) in indices.iter().enumerate() {
                 if i.is_multiple_of(1024) {
                     self.cancel.check().map_err(|e| Self::error(e.into()))?;
                 }
+                let triangle = &mesh.indices[t as usize * 3..t as usize * 3 + 3];
                 if !self.triangle_fits(group, triangle, &remap) {
                     self.part(id, group, start)?;
                     group = self.static_group(layer, tile)?;
@@ -241,6 +262,17 @@ impl Builder<'_> {
                     }
                 }
                 self.triangle(&mesh, triangle, group, &mut remap, true)?;
+                if let Some(lines) = owned.get(&t) {
+                    let g = &mut self.groups[group];
+                    g.edge_lines
+                        .try_reserve(lines.len() * 2)
+                        .map_err(|_| Self::error(SolidError::Allocation))?;
+                    for [a, b] in lines {
+                        if let (Some(&a), Some(&b)) = (remap.get(a), remap.get(b)) {
+                            g.edge_lines.extend([a, b]);
+                        }
+                    }
+                }
             }
             self.part(id, group, start)?;
         }
@@ -434,8 +466,12 @@ impl Builder<'_> {
                 round_lods: group.round_lods,
                 edges: 0..0,
             };
-            // Shared prototypes sit at their origin, so round walls get generators.
-            prepared.add_edges(group.shared);
+            if group.shared {
+                // Shared prototypes sit at their origin, so round walls get generators.
+                prepared.add_edges(true);
+            } else {
+                prepared.append_edges(group.edge_lines);
+            }
             meshes.push(prepared);
             if !group.shared {
                 pages

@@ -136,11 +136,19 @@ pub(super) fn render(state: State<'_>, commands: Commands, cx: &App) -> AnyEleme
                         })
                         .aria_label(text(
                             locale,
-                            if view3d { Key::OrbitTool } else { Key::SelectTool },
+                            if view3d {
+                                Key::OrbitTool
+                            } else {
+                                Key::SelectTool
+                            },
                         ))
                         .native_tooltip(text(
                             locale,
-                            if view3d { Key::OrbitTool } else { Key::SelectTool },
+                            if view3d {
+                                Key::OrbitTool
+                            } else {
+                                Key::SelectTool
+                            },
                         )),
                 )
                 .child(
