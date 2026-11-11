@@ -1,152 +1,203 @@
 <p align="center">
-  <img src="crates/pomelo/assets/pomelo.svg" width="120" alt="Pomelo logo">
+  <img src="crates/pomelo/assets/pomelo.svg" width="112" alt="Pomelo のロゴ">
 </p>
 
-<h1 align="center">Pomelo Desktop · PCB Viewer</h1>
+<h1 align="center">Pomelo Desktop</h1>
 
 <p align="center">
-  <strong>すべての接続を、レイヤーごとに見渡す。</strong><br>
-  GPUI と GPUI Kit を使った、ローカルで動作する読み取り専用 PCB ビューアーです。
+  <strong>どんな PCB も開いて、2D と 3D で全レイヤーを見渡す。</strong><br>
+  レイアウト技術者と SI/PI 技術者のための、無料でオープンソースの高速 PCB ビューアー。<br>
+  Allegro・Altium・ODB++・PADS・KiCad・HFSS EDB のファイルを Rust でネイティブに読み込みます。ベンダーツールもアップロードも不要です。
+</p>
+
+<p align="center">
+  <a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest"><img src="https://img.shields.io/github/v/release/HaiwenZhang/Pomelo-Desktop?label=download&color=58752c" alt="最新リリース"></a>
+  <a href="https://github.com/HaiwenZhang/Pomelo-Desktop/actions/workflows/ci.yml"><img src="https://github.com/HaiwenZhang/Pomelo-Desktop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows・macOS・Linux">
+  <img src="https://img.shields.io/badge/GPU-D3D11%20%7C%20Metal%20%7C%20Vulkan-58752c" alt="D3D11・Metal・Vulkan">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README_zh-CN.md">简体中文</a> · <a href="README_zh-TW.md">繁體中文</a> · 日本語 · <a href="README_ko.md">한국어</a></p>
 
-<p align="center"><a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases">リリースをダウンロード</a></p>
+![Pomelo の 3D 表示で見た 8 層 LPDDR4 基板。左にレイヤーマトリクス、右に 3D 表示設定](images/pcb-example-3d.png)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows, macOS, Linux">
-  <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI_Kit-58752c" alt="Rust + GPUI Kit">
-  <img src="https://img.shields.io/badge/rendering-D3D11%20%7C%20Metal%20%7C%20wgpu-58752c" alt="D3D11, Metal, wgpu">
-  <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
-</p>
+<p align="center"><a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest"><b>⬇ Windows・macOS・Linux 版をダウンロード</b></a> · <a href="#ソースからビルド">ソースからビルド</a> · <a href="#できること">機能</a></p>
 
-![Pomelo Desktop PCB ビューアーで表示した多層基板](images/pcb-example-en.png)
+## Pomelo を選ぶ理由
 
-## 基板をより見やすく
+同僚や取引先、過去のプロジェクトから基板ファイルが届いて、ただ**見たい**だけのことがあります。ネットを追う、ビアを確かめる、BGA の下に何が通っているか見る。普通はそのために大きな EDA ツールを入れ、ライセンスを探し、あるいは設計を誰かのクラウドにアップロードすることになります。
 
-- **設計データはローカルに。** 基板ファイルをアップロードせずに読み込み、表示できます。元のファイルは変更しません。
-- **ネイティブ GPU 描画。** 共通の WGSL シェーダーで配線、円弧、パッド、ビア、銅箔と穴、図形、MSDF による基板テキストを描画します。naga が D3D11 用の HLSL と Metal 用の MSL に変換し、wgpu は WGSL を直接使用します。
-- **接続を追跡。** ネットや部品を検索し、結果に移動して選択したオブジェクトの属性を確認できます。
-- **表示を調整。** レイヤーの管理、レイヤー別・ネット別の色分け、銅箔の不透明度、パッドの塗りつぶし、ラベルを設定できます。
-- **複数の基板を扱う。** 複数ドキュメント、最近使ったファイル、表示設定の保存に対応しています。
-- **言語とテーマを選ぶ。** 英語、簡体字中国語、繁体字中国語、日本語、韓国語の UI と、ライト・ダークテーマを利用できます。
+Pomelo はファイルを手元のコンピューターで直接開き、GPU で描画します。
 
-> **開発中：** 互換性、描画精度、性能、各プラットフォームの安定性には追加検証が必要です。読み取り専用で、基板の編集や DRC は行いません。[開発情報](docs/development-progress.md)を参照してください。
+- **ネイティブ読み込み、ベンダーツール不要。** インポーターはすべて Rust 製です。Cadence・Altium・Ansys のソフトウェアを呼び出さず、JavaScript エンジンも使いません。
+- **設計データは手元に。** ファイルがコンピューターの外に出ることはなく、Pomelo が元ファイルに書き込むこともありません。
+- **実際の大規模基板でも快適。** 配線・円弧・パッド・穴あき銅箔・基板文字を、共通の WGSL シェーダーから D3D11・Metal・Vulkan でネイティブに描画します。数百万オブジェクトの基板でも滑らかに操作できます。
+- **2D と 3D を同じウィンドウで。** ワンクリックで切り替えても、位置・選択・レイヤー設定はそのままです。
+
+## できること
+
+### 2D でレイアウトをレビュー
+
+- **すばやく探す**：ネットや部品を検索、または `x, y` を入力して座標へジャンプ。
+- **全レイヤーを管理**：導体層ごとのマトリクスで銅箔・配線・パッド・ビア・部品をそれぞれ塗り・輪郭・非表示に切り替え。レイヤーごとの不透明度、表示ビューの保存、PageUp/PageDown で切り替える単層モード。
+- **測定**：2 点間距離、折れ線、オブジェクト間クリアランス、配線とビアに沿ったピン間経路長。
+- **ネットを読み解く**：層ごとの配線長、各ビアが実際につなぐ層、ビアスタブ、上下の最寄りリファレンスプレーン、全ピンを検査カード 1 枚で確認。
+- **長さを比べる**：ネット長テーブルで選択ネットと差動ペアやバスを並べ、層ごとの長さと差分を表示。CSV でコピーできます。
+- **下にあるものを見る**：積層プローブがポインター下の各導体層の内容を一覧表示。隣接プレーン表示は配線の上下のプレーンを重ねて見せます。
+- **結果を共有**：ハイライトグループ、名前付きビュー、表示履歴、PNG/SVG 書き出し、クリップボードへのコピー。
+
+### 3D で積層を確認
+
+- **3 つの表示モード**：標準（レイヤーの不透明度に従う）、内部が見えるワイヤーフレーム、ソリッド。
+- **必要に応じた Z 伸長**：誘電体の層間だけを広げて銅は実際の厚さのまま、または全体を伸長。表示のみで測定値は変わりません。
+- **CAD と同じ操作感**：9 つの標準方向を持つビューキューブ、ポインター位置を中心とした回転、右・中ドラッグで移動、ポインター位置でズーム。
+- **信号に集中**：ネットや部品と、それが通る層だけを分離表示。未選択のオブジェクトは薄くなり、ビアスタブは別に示します。
+- **3D 測定**：パッド中心・ビア中心・配線端・層表面にスナップし、ΔX・ΔY・ΔZ を表示。
+- **大規模設計にも対応**：3D は表示中の層だけを生成し、層を表示すると自動で追加します。メモリが足りないときは失敗せずに細部を落とし、何を簡略化したかを表示します。
+
+![2D 表示でネットを選択した 14 層 DDR5 基板](images/pcb-example-en.png)
+
+### 毎日使いやすく
+
+- タブによる複数基板、サムネイル付きの最近使ったファイル、基板ごとの表示状態を再オープン時に復元。
+- 日本語・English・简体中文・繁體中文・한국어 の UI、ライト／ダークテーマ。
+- 推定したグループ（差動ペア・バス・電源と GND）や仮定の積層厚は必ずその旨を表示します。Pomelo は事実と仮定を示すもので、DRC は行いません。
 
 ## 対応形式
 
-`.brd`、`.PcbDoc`、ODB++ アーカイブ（`.tgz`、`.tar`、`.tar.gz`）、`.pcb`、`.kicad_pcb`、`edb.def` に対応します。読み込み範囲はファイルのバージョンと保存済みデータに依存し、未対応の内容は診断として表示します。
-
-すべての形式は `crates/pomelo-import` の Rust 実装で読み込み、JavaScript エンジンや Node.js は使用しません。
-
-## クイックスタート
-
-Git と、リポジトリで固定された Rust **1.98.1** が必要です。依存関係のバージョンは `Cargo.lock` に記録されています。
-
-| プラットフォーム | ビルドと実行の要件 |
+| ツール | ファイル |
 | --- | --- |
-| Windows x64 | MSVC C++ ビルドツール、Windows SDK、Direct3D 11 対応 GPU とドライバー |
-| macOS | Metal 対応 Mac、Xcode Command Line Tools |
-| Linux | fontconfig、FreeType、xkbcommon、Wayland/X11、ALSA、OpenSSL の開発パッケージと Vulkan 対応ドライバー |
+| Cadence Allegro | `.brd`、`.mcm` |
+| Altium Designer | `.PcbDoc` |
+| ODB++ | `.tgz`、`.tar`、`.tar.gz` |
+| PADS | `.pcb` |
+| KiCad | `.kicad_pcb` |
+| Ansys HFSS 3D Layout / EDB | `edb.def` |
 
-以下のコマンドは各プラットフォームで使用できます。macOS のアプリ操作では Ctrl の代わりに Cmd を使用します。
+読み込める範囲はファイルのバージョンと保存データによって異なります。まだ読めない内容は黙って捨てずに診断パネルに表示します。[Issue で教えてください](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)。診断情報を添えていただけると助かります。
 
-```powershell
-git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
-cd Pomelo-Desktop
-cargo run -p pomelo --locked
+## インストール
+
+[Releases](https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest) からお使いのプラットフォーム用パッケージをダウンロードしてください。
+
+| プラットフォーム | パッケージ |
+| --- | --- |
+| Windows 10/11（x64・ARM64） | `.exe` インストーラー |
+| macOS 14+（Apple シリコン・Intel） | `.dmg` または `.app.zip` |
+| Ubuntu 24.04+（amd64・arm64） | `.deb` または `.tar.gz` |
+
+macOS 版は ad-hoc 署名です。初回はアプリを右クリックして「開く」を選んでください。
+
+**Ctrl+O**（macOS は ⌘O）、ウィンドウへのドラッグ＆ドロップ、またはコマンドラインで基板を開きます。
+
+```sh
+pomelo --locale ja --encoding auto "board.brd"
 ```
 
-**Ctrl+O**、ドラッグ＆ドロップ、または起動時のファイルパス指定で基板を開きます。アプリのメニューまたはツールバーから表示言語を選択できます。
-
-```powershell
-cargo run -p pomelo --locked -- --locale ja --encoding windows-1252 "example.brd"
-```
-
-`--locale` は `en`、`zh-CN`、`zh-TW`、`ja`、`ko` に対応し、今回の起動だけに適用されます。保存済みの言語設定は変更しません。`--encoding` は `auto`、`utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252` に対応し、既定値は `auto` です。自動判定が不正確な場合は明示的に指定してください。表示言語とファイルの文字コードは独立しています。文字コード指定は同じプロセスで開くファイルに適用され、`--` 以降の引数はファイルパスとして扱われます。
+`--locale` は `en`・`zh-CN`・`zh-TW`・`ja`・`ko` を受け付け、その起動にのみ適用されます。`--encoding`（`auto`・`utf-8`・`gbk`・`shift_jis`・`big5`・`windows-1252`）は古いファイルの名前が正しく表示されない場合に使います。`--` 以降の引数はファイルパスとして扱います。
 
 ## ショートカット
 
 | 操作 | キー |
 | --- | --- |
-| ファイルを開く | `Ctrl+O` |
-| ドキュメントを閉じる | `Ctrl+W` |
-| ドキュメントを再読み込み | `Ctrl+R` |
-| 次／前のドキュメント | `Ctrl+Tab / Ctrl+Shift+Tab` |
+| 開く / 閉じる / 再読み込み | `Ctrl+O` / `Ctrl+W` / `Ctrl+R` |
+| 検索、または `x, y` へジャンプ | `Ctrl+K` |
 | 基板全体を表示 | `F2` |
-| 検索にフォーカス | `Ctrl+K` |
-| 設定 | `Ctrl+,` |
-| 左／右パネルの切り替え | `Ctrl+B / Ctrl+Shift+B` |
+| 基板を反転 | `B` |
+| 単層モード / アクティブ層の切替 | `L` / `PageUp` `PageDown` |
+| 距離 / 折れ線 / クリアランスを測定 | `M` / `P` / `C` |
+| ピン間経路長 | `Shift+L` |
+| 範囲選択 / 範囲ズーム | `S` / `Z` |
+| 次の重なったオブジェクト | `N`（2D）、もう一度クリック（3D） |
+| 表示履歴を戻る / 進む | `Alt+←` / `Alt+→` |
+| 左 / 右パネルの切替 | `Ctrl+B` / `Ctrl+Shift+B` |
+| 3D：回転 / 移動 / ズーム | 左ドラッグ / 右または中ドラッグ / ホイール |
 
-## ビルドと開発
+macOS では Ctrl の代わりに ⌘ を使います。
 
-依存関係のバージョンと取得元は `Cargo.toml` と `Cargo.lock` に記録されています。[GPUI 依存関係](docs/gpui-dependencies.md)と [GPU バックエンド](docs/native-gpu-backends.md)を参照してください。
+## ソースからビルド
 
-```powershell
-cargo build -p pomelo --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo run -p pomelo-import --bin pcb_inspect --locked -- --help
+Git と、リポジトリで固定された Rust **1.98.1** ツールチェーンが必要です（`rustup` が自動でインストールします）。
+
+| プラットフォーム | 追加で必要なもの |
+| --- | --- |
+| Windows | MSVC C++ ビルドツール、Windows SDK、Direct3D 11 対応 GPU |
+| macOS | Xcode Command Line Tools、Metal 対応の Mac |
+| Linux | fontconfig・FreeType・xkbcommon・Wayland/X11・ALSA・OpenSSL の開発パッケージと Vulkan ドライバー |
+
+```sh
+git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
+cd Pomelo-Desktop
+cargo run -p pomelo --release --locked
 ```
 
-### Release パッケージ
+CI で使うチェック：
 
-| プラットフォーム／構成 | 形式 | コマンド |
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+`cargo run -p pomelo-import --bin pcb_inspect --locked -- --help` でコマンドラインからファイルを調べられます。
+
+<details>
+<summary>リリースパッケージ</summary>
+
+| プラットフォーム | パッケージ | コマンド |
 | --- | --- | --- |
-| Windows x64 | `.exe` | `scripts\build-windows.bat` |
-| Windows ARM64 | `.exe` | `scripts\build-windows.bat --arch arm64` |
-| macOS arm64 / x64 | `.dmg`, `.app.zip` | `scripts/build-macos.sh` |
-| Ubuntu 24.04+ amd64 / arm64 | `.deb`, `.tar.gz` | `scripts/build-ubuntu.sh` |
+| Windows x64 / ARM64 | `.exe` | `scripts\build-windows.bat`（`--arch arm64`） |
+| macOS arm64 / x64 | `.dmg`、`.app.zip` | `scripts/build-macos.sh` |
+| Ubuntu 24.04+ amd64 / arm64 | `.deb`、`.tar.gz` | `scripts/build-ubuntu.sh` |
 
-Rust と各 OS のビルド依存関係が必要です。macOS は ImageMagick、Windows は Inno Setup 6、Ubuntu は `dpkg-dev` と `desktop-file-utils` も必要です。出力先は `dist` です。
+macOS のパッケージ作成には ImageMagick、Windows には Inno Setup 6、Ubuntu には `dpkg-dev` と `desktop-file-utils` が必要です。出力先は `dist` です。スクリプトは `--offline`・`--toolchain NAME`・`--output-dir PATH`・`--binary PATH` を受け付けます。macOS は既定で ad-hoc 署名（`MACOS_SIGNING_IDENTITY` でキーチェーンの署名 ID を指定）、最小バージョンは macOS 14.0 です。Ubuntu 版は ABI の基準を保つため 24.04 でビルドします。
 
-Shell スクリプトは `--offline`、`--toolchain NAME`、`--output-dir PATH`、既存バイナリ用の `--binary PATH` に対応します。正式ビルドは `cargo build --release --locked` を使用し、Python は不要です。
+ワークスペースのバージョンと一致する `vX.Y.Z` タグをプッシュすると[リリースワークフロー](.github/workflows/release.yml)が全プラットフォームをビルドし、パッケージと `SHA256SUMS` を公開します。
 
-Ubuntu Release は 24.04 でビルドして ABI 基準を維持し、CI で 26.04 へのインストールと実行も確認します。新しい Ubuntu でのローカルビルドは、新しいライブラリを要求する場合があります。
+</details>
 
-macOS は既定でアドホック署名、最低 macOS 14.0 です。`MACOS_SIGNING_IDENTITY` でキーチェーンの署名 ID を指定できます。Apple の公証は未設定です。
+## 仕組み
 
-[Release ワークフロー](.github/workflows/release.yml)：`vX.Y.Z` タグを push すると全 OS をビルドし、検証後にパッケージと `SHA256SUMS` を公開します。タグは `Cargo.toml` の workspace バージョンと一致させてください。手動実行は Actions アーティファクトのみ生成します。
-
-## プロジェクト構成とドキュメント
-
-| 場所 | 内容 |
+| クレート | 役割 |
 | --- | --- |
-| [crates/pomelo-core](crates/pomelo-core) | 基板モデル、検索、選択、国際化 |
-| [crates/pomelo-import](crates/pomelo-import) | ファイル読み込みと診断 |
-| [crates/pomelo-render](crates/pomelo-render) | シーン準備、D3D11・Metal・wgpu 描画 |
-| [crates/pomelo](crates/pomelo) | GPUI デスクトップアプリとドキュメント管理 |
-| [locales](locales) | 5 言語の UI リソース |
-| [docs](docs) | 一般的な開発情報 |
+| [pomelo-import](crates/pomelo-import) | 各形式のネイティブ Rust リーダーと構造化された診断 |
+| [pomelo-core](crates/pomelo-core) | 基板モデル、検索、選択、ネット解析、レビューツール、多言語対応 |
+| [pomelo-render](crates/pomelo-render) | 2D/3D のシーン準備と、共通 WGSL シェーダーによる D3D11・Metal・wgpu レンダラー（naga で HLSL と MSL に変換） |
+| [pomelo](crates/pomelo) | [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) と [GPUI Kit](https://github.com/longbridge/gpui-kit) で作ったデスクトップアプリ |
 
-- [ドキュメント](docs/README.md)
-- [開発状況と検証範囲](docs/development-progress.md)
-- [i18n](docs/i18n.md)
-- [GPU](docs/native-gpu-backends.md)
+設計資料は [docs](docs/README.md) にあります。[2D/3D 統合ビューアー計画](docs/viewer-2d-3d-unified-ui-plan.md)、[3D 描画設計](docs/pcb-3d-rendering-design.md)、[GPU バックエンド](docs/native-gpu-backends.md) など。
 
-## 開発計画
+## 状況とロードマップ
 
-以下は開発予定または追加実装が必要な機能であり、提供済みの機能ではありません。
+Pomelo は活発に開発中です。形式の互換性、表示精度、各プラットフォームでの安定性はまだ検証中のため、数値に頼る前に元のツールと照らし合わせてください。
 
-| 分野 | 計画内容 |
-| --- | --- |
-| 日常のレビュー | 2 点・折れ線測定、オブジェクト間距離、複数選択、保存可能なハイライトグループ |
-| 表示と出力 | 名前付きビュー、移動履歴、表示設定、スクリーンショット、軽量なローカル出力 |
-| 設計情報 | 属性検索、層別パッド構造、物理積層、ネットグループ、接続構造、指定経路長 |
-| 継続的な改善 | ファイル互換性、大規模シーンの性能、各 OS の安定性、キーボード操作、5 言語の UI |
+次の予定：
 
-優先順位と範囲は[機能計画](docs/viewer-review-capabilities-plan.md)、実装と検証条件は[開発設計](docs/viewer-review-development-design.md)を参照してください。
+- 元ファイルの実際の積層厚と材料の読み込み、マルチゾーン積層
+- 3D のクリップ面と断面
+- 連動する 2D/3D 分割表示
+- パッケージ高さと 3D モデルによる部品表示
+- 1 層だけでも巨大な基板向けの領域単位の 3D 読み込み
 
-読み取り専用の表示とレビューを対象とし、元の設計の編集や DRC は行いません。
+Pomelo はあくまでビューアーです。設計の編集、配線、DRC は行いません。
 
 ## 貢献
 
-ファイル互換性、描画精度、性能、翻訳、ドキュメントへの貢献を歓迎します。[不具合の報告](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)には、元のツールとファイルのバージョン、OS と GPU の情報、再現手順、インポート診断を添えてください。小さなサンプルや比較画像が役立ちます。共有前に機密の設計データを除去してください。解析や幾何処理の変更には対象を絞った回帰テストを、表示変更にはスクリーンショットを添え、5 言語の README を同期してください。
+開ける基板ファイルが 1 つ増えるたびに、みんなが助かります。始めやすいところ：
+
+- **形式の互換性**：[Issue を作成](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)し、元のツールとバージョン、OS と GPU、期待した結果、インポート診断を書いてください。小さなサンプルや元ツールのスクリーンショットがあると助かります。共有前に機密データは取り除いてください。
+- **描画と性能**：見た目の変更には前後のスクリーンショット、大規模基板の変更には所要時間を添えてください。
+- **翻訳**：UI の文言はすべて [locales](locales) にあります。5 つの README は同期して管理しています。
+
+パーサーやジオメトリの変更には、対象を絞った回帰テストを付けてください。[開発状況](docs/development-progress.md)と[検証ガイド](docs/validation-guide.md)も参照してください。
+
+基板をちょっと見るためだけに EDA ツールを入れずに済んだなら、**⭐ を付けていただけると他の人も見つけやすくなります。**
 
 ## ライセンス
 
-Copyright (c) 2026 HaiwenZhang。プロジェクトのコードには [Apache License 2.0](LICENSE)（`Apache-2.0`）が適用されます。同梱フォントにはそれぞれのライセンスが適用されます。[Source Han Sans](assets/fonts/source-han-sans/README.md)を参照してください。
+Copyright (c) 2026 HaiwenZhang。プロジェクトのコードは [Apache License 2.0](LICENSE) で提供されます。同梱フォントはそれぞれのライセンスに従います。[Source Han Sans](assets/fonts/source-han-sans/README.md) を参照してください。
 
 ## 謝辞
 
-Pomelo Desktop の GPU アクセラレーション対応 UI フレームワークと UI コンポーネントを提供する [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) および [GPUI Kit](https://github.com/longbridge/gpui-kit) プロジェクトに感謝します。
+[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) と [GPUI Kit](https://github.com/longbridge/gpui-kit) の上に作られています。
