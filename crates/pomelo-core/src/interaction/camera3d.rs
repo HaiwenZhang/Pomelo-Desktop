@@ -10,25 +10,136 @@ pub struct Camera3d {
     view_height: f64,
 }
 
+/// Standard viewing directions. Side and oblique views keep board +Z up on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CameraView3d {
     Top,
     Bottom,
+    Front,
+    Back,
+    Left,
+    Right,
     Isometric,
+    Dimetric,
+    Trimetric,
 }
 
 impl CameraView3d {
-    fn orientation(self) -> [f64; 4] {
+    pub const ALL: [Self; 9] = [
+        Self::Top,
+        Self::Bottom,
+        Self::Front,
+        Self::Back,
+        Self::Left,
+        Self::Right,
+        Self::Isometric,
+        Self::Dimetric,
+        Self::Trimetric,
+    ];
+
+    pub fn orientation(self) -> [f64; 4] {
+        const Z_UP: [f64; 3] = [0.0, 0.0, 1.0];
         match self {
             Self::Top => [0.0, 0.0, 0.0, 1.0],
             Self::Bottom => [0.0, 1.0, 0.0, 0.0],
+            Self::Front => frame([0.0, -1.0, 0.0], Z_UP),
+            Self::Back => frame([0.0, 1.0, 0.0], Z_UP),
+            Self::Left => frame([-1.0, 0.0, 0.0], Z_UP),
+            Self::Right => frame([1.0, 0.0, 0.0], Z_UP),
             Self::Isometric => {
                 let (sy, cy) = (std::f64::consts::FRAC_PI_4 * 0.5).sin_cos();
                 let (sp, cp) = ((1.0_f64 / 3.0_f64.sqrt()).asin() * 0.5).sin_cos();
                 product([0.0, sy, 0.0, cy], [sp, 0.0, 0.0, cp])
             }
+            // Two equally foreshortened axes, viewed from the front right.
+            Self::Dimetric => frame(from_azimuth(45.0, 20.705), Z_UP),
+            // Three different foreshortenings.
+            Self::Trimetric => frame(from_azimuth(30.0, 25.0), Z_UP),
         }
     }
+}
+
+/// Direction toward the camera for an azimuth measured from front (-Y) toward +X.
+fn from_azimuth(azimuth_deg: f64, elevation_deg: f64) -> [f64; 3] {
+    let (sa, ca) = azimuth_deg.to_radians().sin_cos();
+    let (se, ce) = elevation_deg.to_radians().sin_cos();
+    [ce * sa, -ce * ca, se]
+}
+
+/// Camera-to-world rotation whose back axis is `back` and whose up axis is `up`
+/// made orthogonal to it.
+fn frame(back: [f64; 3], up: [f64; 3]) -> [f64; 4] {
+    let length = |v: [f64; 3]| dot(v, v).sqrt();
+    let b = back.map(|v| v / length(back));
+    let projected = std::array::from_fn::<_, 3, _>(|i| up[i] - b[i] * dot(up, b));
+    let u = projected.map(|v| v / length(projected));
+    let r = cross(u, b);
+    // Columns of the rotation matrix are right, up and back.
+    let m = |row: usize, column: usize| [r, u, b][column][row];
+    let trace = m(0, 0) + m(1, 1) + m(2, 2);
+    let q = if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        [
+            (m(2, 1) - m(1, 2)) / s,
+            (m(0, 2) - m(2, 0)) / s,
+            (m(1, 0) - m(0, 1)) / s,
+            0.25 * s,
+        ]
+    } else if m(0, 0) > m(1, 1) && m(0, 0) > m(2, 2) {
+        let s = (1.0 + m(0, 0) - m(1, 1) - m(2, 2)).sqrt() * 2.0;
+        [
+            0.25 * s,
+            (m(0, 1) + m(1, 0)) / s,
+            (m(0, 2) + m(2, 0)) / s,
+            (m(2, 1) - m(1, 2)) / s,
+        ]
+    } else if m(1, 1) > m(2, 2) {
+        let s = (1.0 + m(1, 1) - m(0, 0) - m(2, 2)).sqrt() * 2.0;
+        [
+            (m(0, 1) + m(1, 0)) / s,
+            0.25 * s,
+            (m(1, 2) + m(2, 1)) / s,
+            (m(0, 2) - m(2, 0)) / s,
+        ]
+    } else {
+        let s = (1.0 + m(2, 2) - m(0, 0) - m(1, 1)).sqrt() * 2.0;
+        [
+            (m(0, 2) + m(2, 0)) / s,
+            (m(1, 2) + m(2, 1)) / s,
+            0.25 * s,
+            (m(1, 0) - m(0, 1)) / s,
+        ]
+    };
+    normalized(q).unwrap_or([0.0, 0.0, 0.0, 1.0])
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Shortest-arc interpolation between two orientations, `t` in 0..=1.
+pub fn slerp(a: [f64; 4], b: [f64; 4], t: f64) -> [f64; 4] {
+    let mut cosine: f64 = a.iter().zip(b).map(|(a, b)| a * b).sum();
+    let b = if cosine < 0.0 {
+        cosine = -cosine;
+        b.map(|v| -v)
+    } else {
+        b
+    };
+    let t = t.clamp(0.0, 1.0);
+    let (wa, wb) = if cosine > 1.0 - 1e-9 {
+        (1.0 - t, t)
+    } else {
+        let angle = cosine.clamp(-1.0, 1.0).acos();
+        let sine = angle.sin();
+        (((1.0 - t) * angle).sin() / sine, (t * angle).sin() / sine)
+    };
+    let q = std::array::from_fn(|i| a[i] * wa + b[i] * wb);
+    normalized(q).unwrap_or(b)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -99,6 +210,30 @@ impl Camera3d {
     /// Change viewing direction without discarding the current focus or zoom.
     pub fn set_view(&mut self, view: CameraView3d) {
         self.orientation = view.orientation();
+    }
+
+    pub fn set_orientation(&mut self, orientation: [f64; 4]) -> bool {
+        let Some(orientation) = normalized(orientation) else {
+            return false;
+        };
+        self.orientation = orientation;
+        true
+    }
+
+    /// Re-center on a board point and show `view_height` millimetres vertically.
+    pub fn look_at(&mut self, pivot: [f64; 3], view_height: f64) -> bool {
+        if !pivot.into_iter().all(f64::is_finite) || !view_height.is_finite() || view_height <= 0.0
+        {
+            return false;
+        }
+        self.pivot = pivot;
+        self.view_height = view_height;
+        true
+    }
+
+    /// Screen right, screen up and toward-viewer directions in world space.
+    pub fn axes(self) -> [[f64; 3]; 3] {
+        self.basis()
     }
 
     pub fn is_view(self, view: CameraView3d) -> bool {
@@ -421,6 +556,56 @@ mod tests {
             }
         }
         assert!(!camera.intersects(BOARD, [0.0; 2]));
+    }
+
+    #[test]
+    fn side_and_oblique_views_keep_board_up_and_look_toward_the_board() {
+        let up = |view: CameraView3d| {
+            let mut camera = Camera3d::default();
+            camera.set_view(view);
+            camera.axes()
+        };
+        for (view, back) in [
+            (CameraView3d::Front, [0.0, -1.0, 0.0]),
+            (CameraView3d::Back, [0.0, 1.0, 0.0]),
+            (CameraView3d::Left, [-1.0, 0.0, 0.0]),
+            (CameraView3d::Right, [1.0, 0.0, 0.0]),
+        ] {
+            let [right, screen_up, toward] = up(view);
+            close(toward, back);
+            close(screen_up, [0.0, 0.0, 1.0]);
+            close(cross(screen_up, toward), right);
+        }
+        for view in [CameraView3d::Dimetric, CameraView3d::Trimetric] {
+            let [_, screen_up, toward] = up(view);
+            assert!(toward[2] > 0.0 && screen_up[2] > 0.0);
+            assert!(dot(screen_up, toward).abs() < 1e-9);
+        }
+        let mut distinct = 0;
+        for (i, a) in CameraView3d::ALL.iter().enumerate() {
+            let mut camera = Camera3d::default();
+            camera.set_view(*a);
+            assert!(camera.is_view(*a));
+            distinct += CameraView3d::ALL[i + 1..]
+                .iter()
+                .filter(|b| !camera.is_view(**b))
+                .count();
+        }
+        assert_eq!(distinct, 9 * 8 / 2);
+    }
+
+    #[test]
+    fn slerp_reaches_both_ends_and_stays_normalized() {
+        let a = CameraView3d::Top.orientation();
+        let b = CameraView3d::Front.orientation();
+        let close4 = |x: [f64; 4], y: [f64; 4]| {
+            let d: f64 = x.iter().zip(y).map(|(x, y)| x * y).sum();
+            assert!(d.abs() > 1.0 - 1e-9);
+        };
+        close4(slerp(a, b, 0.0), a);
+        close4(slerp(a, b, 1.0), b);
+        let mid = slerp(a, b, 0.5);
+        assert!((mid.iter().map(|v| v * v).sum::<f64>() - 1.0).abs() < 1e-9);
     }
 
     #[test]

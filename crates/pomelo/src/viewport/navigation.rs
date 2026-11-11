@@ -29,9 +29,18 @@ impl BoardViewport {
 
     pub(super) fn flip_board(&mut self, _: &FlipBoard, _: &mut Window, cx: &mut Context<Self>) {
         if self.view3d.active {
-            self.record_3d_view();
-            self.view3d.camera.orbit(0.0, std::f64::consts::PI);
-            cx.notify();
+            use pomelo_core::interaction::camera3d::CameraView3d;
+            // Flipping swaps top and bottom; other views turn over in place.
+            if self.view3d.camera.is_view(CameraView3d::Top) {
+                self.set_standard_view_3d(CameraView3d::Bottom, cx);
+            } else if self.view3d.camera.is_view(CameraView3d::Bottom) {
+                self.set_standard_view_3d(CameraView3d::Top, cx);
+            } else {
+                self.record_3d_view();
+                self.view3d.transition = None;
+                self.view3d.camera.orbit(0.0, std::f64::consts::PI);
+                cx.notify();
+            }
             return;
         }
         self.wheel_history_at = None;

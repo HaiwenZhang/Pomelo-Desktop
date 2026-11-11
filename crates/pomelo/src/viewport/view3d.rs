@@ -1,4 +1,5 @@
 pub(super) mod controls;
+pub(super) mod view_cube;
 
 use super::*;
 use pomelo_core::{
@@ -39,6 +40,12 @@ pub(super) struct View3d {
     materials: Option<MaterialCache>,
     /// A saved camera was applied; keep it instead of fitting the first scene.
     pub camera_restored: bool,
+    /// Frame the first 3D scene around the 2D focus once it has been fitted.
+    pub follow_2d: bool,
+    pub transition: Option<view_cube::Transition>,
+    pub cube_bounds: Option<Bounds<Pixels>>,
+    /// Pointer position of a cube drag and whether it has moved enough to orbit.
+    pub cube_drag: Option<(Point<Pixels>, bool)>,
 }
 impl Default for View3d {
     fn default() -> Self {
@@ -62,6 +69,10 @@ impl Default for View3d {
             pan_drag: false,
             materials: None,
             camera_restored: false,
+            follow_2d: false,
+            transition: None,
+            cube_bounds: None,
+            cube_drag: None,
         }
     }
 }
@@ -86,6 +97,11 @@ impl BoardViewport {
         self.review.active = None;
         if self.view3d.active {
             self.view3d.error = None;
+            if self.view3d.initialized {
+                self.follow_2d_camera();
+            } else if !self.view3d.camera_restored {
+                self.view3d.follow_2d = true;
+            }
             if self.view3d.renderer.is_none() {
                 self.view3d.renderer = Some(
                     window
@@ -124,6 +140,10 @@ impl BoardViewport {
                 }));
             }
         } else {
+            self.view3d.transition = None;
+            if self.view3d.initialized {
+                self.follow_3d_camera();
+            }
             self.view3d.renderer = None;
             self.view3d.telemetry.frames.store(0, Ordering::Relaxed);
             self.view3d
@@ -163,6 +183,35 @@ impl BoardViewport {
         to.push(v.camera);
         v.camera = camera;
         true
+    }
+    /// Keep the board point and zoom of the 2D view when switching to 3D. A 2D
+    /// view showing more than the fitted 3D view keeps the fitted framing.
+    fn follow_2d_camera(&mut self) {
+        let camera = self.navigation.camera();
+        let size = self.navigation.size();
+        if !self.navigation.has_view() || size.y <= 0.0 || camera.pixels_per_mm <= 0.0 {
+            return;
+        }
+        let pivot = self.view3d.camera.pivot();
+        let height = (size.y / camera.pixels_per_mm).min(self.view3d.camera.view_height());
+        self.view3d
+            .camera
+            .look_at([camera.center.x, camera.center.y, pivot[2]], height);
+    }
+    /// Return to 2D at the 3D focus and zoom.
+    fn follow_3d_camera(&mut self) {
+        let size = self.navigation.size();
+        let height = self.view3d.camera.view_height();
+        if !self.navigation.has_view() || size.y <= 0.0 || height <= 0.0 {
+            return;
+        }
+        let pivot = self.view3d.camera.pivot();
+        let camera = pomelo_core::interaction::Camera {
+            center: pomelo_core::model::Point::new(pivot[0], pivot[1]),
+            pixels_per_mm: size.y / height,
+            ..self.navigation.camera()
+        };
+        self.navigation.restore_camera(camera);
     }
     pub(super) fn fit_3d(&mut self) -> bool {
         if let Some(scene) = &self.view3d.scene {
@@ -271,6 +320,9 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) -> frame::CanvasPresentation {
         let locale = i18n::current(cx);
+        if self.advance_3d_transition() {
+            _window.request_animation_frame();
+        }
         let materials = self.materials_3d();
         let renderer = self
             .view3d
@@ -312,8 +364,9 @@ impl BoardViewport {
                         this.bounds = Some(bounds);
                         this.view3d.size =
                             [f64::from(bounds.size.width), f64::from(bounds.size.height)];
-                        if !this.view3d.initialized {
-                            this.fit_3d();
+                        if !this.view3d.initialized && this.fit_3d() && this.view3d.follow_2d {
+                            this.view3d.follow_2d = false;
+                            this.follow_2d_camera();
                         }
                         snapshot.camera = this.view3d.camera;
                     });
@@ -439,6 +492,7 @@ impl BoardViewport {
             && let Some(delta) = g.advance(event.position)
         {
             let delta = [f64::from(delta.x), f64::from(delta.y)];
+            self.view3d.transition = None;
             if self.view3d.pan_drag {
                 self.view3d.camera.pan(delta, self.view3d.size);
             } else {

@@ -100,6 +100,10 @@ impl Render for BoardViewport {
         let grid = self.render_grid();
         let review_overlay = self.render_review_overlay(locale, cx);
         let canvas_view_controls = self.render_canvas_toolbar(locale, cx);
+        let view_cube = self
+            .view3d
+            .active
+            .then(|| self.render_view_cube(locale, cx));
         let status_bar = self.render_status_bar(ready, pointer_coordinates, locale, cx);
         let theme = cx.theme();
         let mut view = div()
@@ -345,6 +349,11 @@ impl Render for BoardViewport {
                                         )
                                         .when(!self.view3d.active, |canvas| {
                                             canvas.child(axes_indicator(locale))
+                                        })
+                                        .when_some(view_cube, |canvas, cube| {
+                                            canvas.child(
+                                                div().absolute().top_3().right_4().child(cube),
+                                            )
                                         })
                                         .child(
                                             div()
