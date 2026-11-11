@@ -301,6 +301,23 @@ impl Render for BoardViewport {
                                                     MouseButton::Middle,
                                                     cx.listener(Self::start_pan),
                                                 )
+                                                // Right-drag pans the 3D view only.
+                                                .on_mouse_down(
+                                                    MouseButton::Right,
+                                                    cx.listener(|this, event, window, cx| {
+                                                        if this.view3d.active {
+                                                            this.start_3d_drag(event, window, cx);
+                                                        }
+                                                    }),
+                                                )
+                                                .on_mouse_up(
+                                                    MouseButton::Right,
+                                                    cx.listener(|this, event, window, cx| {
+                                                        if this.view3d.active {
+                                                            this.stop_3d_drag(event, window, cx);
+                                                        }
+                                                    }),
+                                                )
                                                 .on_mouse_move(cx.listener(Self::move_pan))
                                                 .on_hover(cx.listener(
                                                     |this, hovered: &bool, _, cx| {

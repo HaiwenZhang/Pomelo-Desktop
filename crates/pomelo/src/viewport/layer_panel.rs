@@ -204,6 +204,8 @@ impl BoardViewport {
             });
         }
         self.input_locale = Some(locale);
+        // Below this width the matrix would leave no room for layer names.
+        self.layer_matrix = left_panel_width >= px(240.0);
         let layers = self.grouped_layers(locale);
         let layer_order = Arc::new(
             self.display
@@ -370,6 +372,7 @@ impl BoardViewport {
                 members: Arc::new(members.iter().map(|(id, _, _)| *id).collect()),
             });
             if group == LayerGroup::Copper
+                && self.layer_matrix
                 && (filtering || !self.collapsed_layer_groups.contains(&group))
             {
                 items.push(LayerItem::Matrix(Arc::new(
@@ -679,7 +682,7 @@ impl BoardViewport {
                 at_top: list_order.last() == Some(&id),
                 expanded,
                 active: self.display.active_layer == Some(id),
-                cells: self.is_conductor(id).then(|| {
+                cells: (self.layer_matrix && self.is_conductor(id)).then(|| {
                     LayerPrimitive::MATRIX.map(|kind| self.display.cell_mode(id, kind))
                 }),
                 opacity: self

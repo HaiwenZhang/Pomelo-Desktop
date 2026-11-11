@@ -434,7 +434,8 @@ impl Builder<'_> {
                 round_lods: group.round_lods,
                 edges: 0..0,
             };
-            prepared.add_edges();
+            // Shared prototypes sit at their origin, so round walls get generators.
+            prepared.add_edges(group.shared);
             meshes.push(prepared);
             if !group.shared {
                 pages

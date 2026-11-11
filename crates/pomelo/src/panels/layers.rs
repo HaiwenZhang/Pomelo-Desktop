@@ -195,6 +195,36 @@ pub fn matrix_labels(kind: LayerPrimitive) -> (MessageKey, MessageKey) {
 /// Opacity choices offered from a layer's menu.
 pub const OPACITY_STEPS: [f32; 5] = [1.0, 0.7, 0.5, 0.3, 0.1];
 
+/// Width of one matrix column, shared by headings and cells so they line up.
+const CELL: f32 = 18.0;
+
+/// A clickable matrix slot; a plain element keeps the full width for its content.
+fn matrix_slot(
+    id: impl Into<ElementId>,
+    label: String,
+    kind: LayerPrimitive,
+    handler: std::rc::Rc<CellHandler>,
+    cx: &App,
+) -> Stateful<Div> {
+    let hover = cx.theme().list_hover;
+    let tooltip: SharedString = label.into();
+    div()
+        .id(id.into())
+        .w(px(CELL))
+        .h_5()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+        })
+        .on_click(move |event, window, cx| handler(&(kind, event.modifiers().alt), window, cx))
+}
+
 /// One matrix cell: filled square, outlined square or an empty slot.
 fn cell_button(
     id: impl Into<ElementId>,
@@ -203,7 +233,7 @@ fn cell_button(
     locale: Locale,
     handler: std::rc::Rc<CellHandler>,
     cx: &App,
-) -> Button {
+) -> Stateful<Div> {
     let theme = cx.theme();
     let (name, _) = matrix_labels(kind);
     let state = match mode {
@@ -215,25 +245,19 @@ fn cell_button(
         .arg("name", text(locale, name))
         .arg("state", text(locale, state))
         .display(locale);
-    Button::new(id)
-        .ghost()
-        .xsmall()
-        .size_4()
-        .flex_shrink_0()
-        .accessibility_label(label.clone())
-        .native_tooltip(label)
-        .child(
-            div()
-                .size_2p5()
-                .rounded_sm()
-                .border_1()
-                .border_color(match mode {
-                    CellMode::Hidden => theme.border,
-                    _ => theme.primary,
-                })
-                .when(mode == CellMode::Fill, |square| square.bg(theme.primary)),
-        )
-        .on_click(move |event, window, cx| handler(&(kind, event.modifiers().alt), window, cx))
+    let border = match mode {
+        CellMode::Hidden => theme.muted_foreground.opacity(0.5),
+        _ => theme.primary,
+    };
+    let fill = theme.primary;
+    matrix_slot(id, label, kind, handler, cx).child(
+        div()
+            .size_2p5()
+            .rounded_sm()
+            .border_1()
+            .border_color(border)
+            .when(mode == CellMode::Fill, |square| square.bg(fill)),
+    )
 }
 
 /// Column headings above the conductor layers; a click applies to the whole column.
@@ -273,29 +297,27 @@ pub fn matrix_header(
                             .zip(columns)
                             .map(|(kind, mode)| {
                                 let (name, short) = matrix_labels(kind);
-                                let handler = handler.clone();
                                 let label = Message::new(MessageKey::MatrixColumnHint)
                                     .arg("name", text(locale, name))
                                     .display(locale);
-                                Button::new(("matrix-column", kind as u32))
-                                    .ghost()
-                                    .xsmall()
-                                    .size_4()
-                                    .flex_shrink_0()
-                                    .accessibility_label(label.clone())
-                                    .native_tooltip(label)
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .when(mode == CellMode::Hidden, |label| {
-                                                label
-                                                    .text_color(theme.muted_foreground.opacity(0.6))
-                                            })
-                                            .child(text(locale, short)),
-                                    )
-                                    .on_click(move |event, window, cx| {
-                                        handler(&(kind, event.modifiers().alt), window, cx)
-                                    })
+                                matrix_slot(
+                                    ("matrix-column", kind as u32),
+                                    label,
+                                    kind,
+                                    handler.clone(),
+                                    cx,
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(if mode == CellMode::Hidden {
+                                            theme.muted_foreground
+                                        } else {
+                                            theme.foreground
+                                        })
+                                        .child(text(locale, short)),
+                                )
                             }),
                     ),
                 )

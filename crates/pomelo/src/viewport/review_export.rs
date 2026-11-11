@@ -278,27 +278,27 @@ impl BoardViewport {
         let cancel = self.start_export();
         let worker_cancel = cancel.clone();
         let worker_path = path.clone();
-        let job: RasterJob =
-            if self.view3d.active {
-                let Some(raster) = self.raster_job(window) else {
-                    self.review.export.pending = false;
-                    return;
-                };
-                raster
-            } else {
-                let Some(svg) = self.svg_job(window) else {
-                    self.review.export.pending = false;
-                    return;
-                };
-                Box::new(move |cancel: &CancellationToken| {
-                    let svg = svg(cancel)?;
-                    match format {
-                        ImageFormat::Svg => Ok(svg.into_bytes()),
-                        ImageFormat::Png => crate::services::export::rasterize_png(&svg)
-                            .map_err(|_| Outcome::TooLarge),
-                    }
-                })
+        let job: RasterJob = if self.view3d.active {
+            let Some(raster) = self.raster_job(window) else {
+                self.review.export.pending = false;
+                return;
             };
+            raster
+        } else {
+            let Some(svg) = self.svg_job(window) else {
+                self.review.export.pending = false;
+                return;
+            };
+            Box::new(move |cancel: &CancellationToken| {
+                let svg = svg(cancel)?;
+                match format {
+                    ImageFormat::Svg => Ok(svg.into_bytes()),
+                    ImageFormat::Png => {
+                        crate::services::export::rasterize_png(&svg).map_err(|_| Outcome::TooLarge)
+                    }
+                }
+            })
+        };
         let worker = cx.background_spawn(async move {
             let bytes = match job(&worker_cancel) {
                 Ok(bytes) => bytes,
@@ -318,21 +318,19 @@ impl BoardViewport {
 
     /// Copy the current 2D or 3D view to the clipboard as a PNG.
     pub(super) fn copy_view_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let job: RasterJob =
-            if self.view3d.active {
-                let Some(raster) = self.raster_job(window) else {
-                    return;
-                };
-                raster
-            } else {
-                let Some(svg) = self.svg_job(window) else {
-                    return;
-                };
-                Box::new(move |cancel: &CancellationToken| {
-                    crate::services::export::rasterize_png(&svg(cancel)?)
-                        .map_err(|_| Outcome::TooLarge)
-                })
+        let job: RasterJob = if self.view3d.active {
+            let Some(raster) = self.raster_job(window) else {
+                return;
             };
+            raster
+        } else {
+            let Some(svg) = self.svg_job(window) else {
+                return;
+            };
+            Box::new(move |cancel: &CancellationToken| {
+                crate::services::export::rasterize_png(&svg(cancel)?).map_err(|_| Outcome::TooLarge)
+            })
+        };
         let cancel = self.start_export();
         let worker_cancel = cancel.clone();
         let worker = cx.background_spawn(async move { job(&worker_cancel) });

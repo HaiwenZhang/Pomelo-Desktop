@@ -41,12 +41,16 @@ impl BoardViewport {
         let settings = self.view3d.settings;
         let scroll = &self.inspector_focus.scroll;
         let theme = cx.theme();
+        // Label and control share a line when there is room and stack otherwise.
         let row = |label: Key, control: AnyElement| {
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .justify_between()
-                .gap_3()
+                .gap_x_3()
+                .gap_y_1()
+                .py_0p5()
                 .min_h_8()
                 .child(
                     div()

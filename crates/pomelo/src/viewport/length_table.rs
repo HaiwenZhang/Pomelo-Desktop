@@ -180,6 +180,8 @@ impl BoardViewport {
         let theme = cx.theme();
         let unit = self.display.length_unit;
         let layers = self.table_layers();
+        // Net name, total, layers, vias and delta at their minimum widths.
+        let table_width = 160.0 + 72.0 * (layers.len() + 3) as f32 + 24.0;
         let reference = match self.selected_target {
             Some(pomelo_core::selection::SelectionTarget::Net(net)) => Some(net),
             _ => self.selected_related_net,
@@ -201,7 +203,7 @@ impl BoardViewport {
         let cell = |content: String, strong: bool| {
             div()
                 .flex_1()
-                .min_w_16()
+                .min_w(px(64.0))
                 .truncate()
                 .text_right()
                 .when(strong, |c| c.font_weight(FontWeight::SEMIBOLD))
@@ -347,30 +349,45 @@ impl BoardViewport {
                                 ),
                         ),
                 )
-                .child(header)
                 .child(
+                    // Many layer columns scroll sideways instead of squeezing the numbers.
                     div()
-                        .id("length-table-rows")
+                        .id("length-table-scroll")
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .children(body)
-                        .when(self.length_table.rows.is_empty(), |list| {
-                            list.child(
-                                div()
-                                    .p_3()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(text(
-                                        locale,
-                                        if self.length_table.pending {
-                                            Key::NetReportPending
-                                        } else {
-                                            Key::LengthTableEmpty
-                                        },
-                                    )),
-                            )
-                        }),
+                        .overflow_x_scroll()
+                        .child(
+                            div()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .min_w(px(table_width))
+                                .child(header)
+                                .child(
+                                    div()
+                                        .id("length-table-rows")
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_y_scroll()
+                                        .children(body)
+                                        .when(self.length_table.rows.is_empty(), |list| {
+                                            list.child(
+                                                div()
+                                                    .p_3()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(text(
+                                                        locale,
+                                                        if self.length_table.pending {
+                                                            Key::NetReportPending
+                                                        } else {
+                                                            Key::LengthTableEmpty
+                                                        },
+                                                    )),
+                                            )
+                                        }),
+                                ),
+                        ),
                 )
                 .into_any_element(),
         )

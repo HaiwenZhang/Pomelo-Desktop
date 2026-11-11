@@ -110,6 +110,8 @@ pub struct BoardViewport {
     /// Visibility saved by the adjacent-plane view.
     plane_view: Option<isolation::PlaneView>,
     nets: net_panel::NetState,
+    /// The left panel is wide enough to show the layer matrix.
+    layer_matrix: bool,
     probe: probe::ProbeState,
     length_table: length_table::LengthTable,
     preparation_budget: pomelo_core::memory::MemoryBudget,
@@ -640,6 +642,7 @@ impl BoardViewport {
             isolation: None,
             plane_view: None,
             nets: Default::default(),
+            layer_matrix: true,
             probe: Default::default(),
             length_table: Default::default(),
             preparation_budget,

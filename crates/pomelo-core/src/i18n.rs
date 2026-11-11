@@ -234,6 +234,8 @@ message_keys! {
     Preparing3d => "view.3d_preparing" [],
     Preview3dUnavailable => "view.3d_unavailable" [],
     Preview3dFailed => "view.3d_failed" [],
+    OrbitTool => "view.orbit_tool" [],
+    PanTool3d => "view.pan_tool_3d" [],
     Measure3dLabel => "view.measure_3d_label" ["distance", "dx", "dy", "dz"],
     Measure3dLabelAssumed => "view.measure_3d_label_assumed" ["distance", "dx", "dy", "dz"],
     ImageCopied => "view.image_copied" [],

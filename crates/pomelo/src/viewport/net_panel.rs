@@ -490,6 +490,7 @@ impl BoardViewport {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .justify_end()
                     .gap_1()

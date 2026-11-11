@@ -92,9 +92,9 @@ impl Mesh3d {
             })
     }
     /// Append feature edges of the full-resolution triangles.
-    pub(crate) fn add_edges(&mut self) {
+    pub(crate) fn add_edges(&mut self, generators: bool) {
         let fine = self.fine_index_count();
-        let edges = edges::feature_edges(&self.vertices, &self.indices[..fine]);
+        let edges = edges::feature_edges(&self.vertices, &self.indices[..fine], generators);
         let start = self.indices.len() as u32;
         self.indices.extend(edges);
         self.edges = start..self.indices.len() as u32;

@@ -21,7 +21,7 @@ impl Default for PanelPreferences {
         Self {
             left_collapsed: false,
             right_collapsed: false,
-            left_width: 256.0,
+            left_width: 288.0,
             right_width: 288.0,
         }
     }

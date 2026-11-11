@@ -46,11 +46,11 @@ impl CameraView3d {
             Self::Back => frame([0.0, 1.0, 0.0], Z_UP),
             Self::Left => frame([-1.0, 0.0, 0.0], Z_UP),
             Self::Right => frame([1.0, 0.0, 0.0], Z_UP),
-            Self::Isometric => {
-                let (sy, cy) = (std::f64::consts::FRAC_PI_4 * 0.5).sin_cos();
-                let (sp, cp) = ((1.0_f64 / 3.0_f64.sqrt()).asin() * 0.5).sin_cos();
-                product([0.0, sy, 0.0, cy], [sp, 0.0, 0.0, cp])
-            }
+            // Equal foreshortening of all three axes from the front right, board +Z up.
+            Self::Isometric => frame(
+                from_azimuth(45.0, (1.0_f64 / 3.0_f64.sqrt()).asin().to_degrees()),
+                Z_UP,
+            ),
             // Two equally foreshortened axes, viewed from the front right.
             Self::Dimetric => frame(from_azimuth(45.0, 20.705), Z_UP),
             // Three different foreshortenings.
@@ -244,6 +244,27 @@ impl Camera3d {
             .sum::<f64>()
             .abs()
             > 1.0 - 1e-12
+    }
+
+    /// Orbit about a world point, which keeps its place on screen.
+    pub fn orbit_around(&mut self, center: [f64; 3], yaw: f64, pitch: f64) -> bool {
+        if !center.into_iter().all(f64::is_finite) {
+            return self.orbit(yaw, pitch);
+        }
+        let [r, u, b] = self.basis();
+        let offset = subtract(self.pivot, center);
+        let local = [dot(offset, r), dot(offset, u), dot(offset, b)];
+        if !self.orbit(yaw, pitch) {
+            return false;
+        }
+        let [r, u, b] = self.basis();
+        let pivot = std::array::from_fn(|i| {
+            center[i] + r[i] * local[0] + u[i] * local[1] + b[i] * local[2]
+        });
+        if pivot.into_iter().all(f64::is_finite) {
+            self.pivot = pivot;
+        }
+        true
     }
 
     /// Rotate about current screen up/right axes, without Euler-angle poles.
@@ -592,6 +613,28 @@ mod tests {
                 .count();
         }
         assert_eq!(distinct, 9 * 8 / 2);
+    }
+
+    #[test]
+    fn orbiting_around_a_point_keeps_it_fixed_on_screen() {
+        let mut camera = Camera3d::new([1.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0], 20.0).unwrap();
+        camera.set_view(CameraView3d::Isometric);
+        let center = [4.0, -3.0, 0.5];
+        let screen = |camera: Camera3d| {
+            let [r, u, _] = camera.axes();
+            let v = subtract(center, camera.pivot());
+            [dot(v, r), dot(v, u)]
+        };
+        let before = screen(camera);
+        assert!(camera.orbit_around(center, 0.4, -0.3));
+        let after = screen(camera);
+        assert!((before[0] - after[0]).abs() < 1e-9 && (before[1] - after[1]).abs() < 1e-9);
+        let [_, up, _] = {
+            let mut iso = Camera3d::default();
+            iso.set_view(CameraView3d::Isometric);
+            iso.axes()
+        };
+        assert!(up[2] > 0.8, "isometric keeps board +Z up");
     }
 
     #[test]

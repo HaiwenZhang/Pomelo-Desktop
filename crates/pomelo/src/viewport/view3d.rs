@@ -57,6 +57,8 @@ pub(super) struct View3d {
     /// Measurement in progress and completed 3D measurements.
     pub measuring: Option<measure::Measure3d>,
     pub measurements: Vec<measure::Measure3d>,
+    /// Display-space point the current orbit turns around.
+    pub orbit_center: Option<[f64; 3]>,
 }
 impl Default for View3d {
     fn default() -> Self {
@@ -88,6 +90,7 @@ impl Default for View3d {
             cube_drag: None,
             measuring: None,
             measurements: Vec::new(),
+            orbit_center: None,
         }
     }
 }
@@ -545,6 +548,36 @@ impl BoardViewport {
             .into_any_element(),
         )
     }
+    /// Display-space point under the pointer: the surface of the object hit, or
+    /// the board's mid plane when nothing is under it.
+    pub(super) fn pointer_anchor_3d(&mut self, position: Point<Pixels>) -> Option<[f64; 3]> {
+        let scene = self.view3d.scene.clone()?;
+        let bounds = self.bounds?;
+        let z_map = self.z_map_3d()?;
+        let local = position - bounds.origin;
+        let ray = self.view3d.camera.pick_ray(
+            [f64::from(local.x), f64::from(local.y)],
+            self.view3d.size,
+            z_map.bounds(scene.bounds),
+        )?;
+        let model_z = self
+            .pick_3d(position)
+            .and_then(|object| scene.sources.iter().find(|s| s.object == object))
+            .map_or(0.0, |source| {
+                0.5 * (source.bounds.min[2] + source.bounds.max[2])
+            });
+        let z = z_map.apply(model_z);
+        if ray.direction[2].abs() < 1e-9 {
+            return None;
+        }
+        let t = (z - ray.origin[2]) / ray.direction[2];
+        let point = [
+            ray.origin[0] + ray.direction[0] * t,
+            ray.origin[1] + ray.direction[1] * t,
+            z,
+        ];
+        point.into_iter().all(f64::is_finite).then_some(point)
+    }
     /// Track the object under the pointer for the hover preview.
     pub(super) fn hover_3d(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         if !self.view3d.settings.hover_preview || self.pointer_gesture.is_some() {
@@ -716,8 +749,15 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
-        self.view3d.pan_drag =
-            self.pan_tool || event.modifiers.shift || event.button == MouseButton::Middle;
+        self.view3d.pan_drag = self.pan_tool
+            || event.modifiers.shift
+            || matches!(event.button, MouseButton::Middle | MouseButton::Right);
+        // Orbit about the surface under the pointer, so that point stays put.
+        self.view3d.orbit_center = if self.view3d.pan_drag {
+            None
+        } else {
+            self.pointer_anchor_3d(event.position)
+        };
         self.pointer_gesture = Some(gesture::PointerGesture::new(
             event.position,
             event.button,
@@ -742,9 +782,11 @@ impl BoardViewport {
             if self.view3d.pan_drag {
                 self.view3d.camera.pan(delta, self.view3d.size);
             } else {
-                self.view3d
-                    .camera
-                    .orbit(-delta[0] * 0.008, -delta[1] * 0.008);
+                let (yaw, pitch) = (-delta[0] * 0.008, -delta[1] * 0.008);
+                match self.view3d.orbit_center {
+                    Some(center) => self.view3d.camera.orbit_around(center, yaw, pitch),
+                    None => self.view3d.camera.orbit(yaw, pitch),
+                };
             }
             cx.notify();
         }
@@ -762,7 +804,11 @@ impl BoardViewport {
         {
             return;
         }
-        let clicked = self.pointer_gesture.take().is_some_and(|g| g.is_click());
+        // Only a left click selects or measures; right and middle clicks just end a pan.
+        let clicked = self
+            .pointer_gesture
+            .take()
+            .is_some_and(|g| g.is_click() && g.button == MouseButton::Left);
         if clicked && self.measure_click_3d(event.position, event.click_count >= 2, cx) {
             cx.stop_propagation();
             return;

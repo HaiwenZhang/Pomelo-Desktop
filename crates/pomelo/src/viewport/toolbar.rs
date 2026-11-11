@@ -126,17 +126,34 @@ pub(super) fn render(state: State<'_>, commands: Commands, cx: &App) -> AnyEleme
                 .small()
                 .flex_shrink_0()
                 .selected_index(usize::from(pan_tool))
+                // In 3D the first tool orbits with the left button; clicks still select.
                 .child(
                     Tab::new()
-                        .icon(IconName::MousePointer2)
-                        .aria_label(text(locale, Key::SelectTool))
-                        .native_tooltip(text(locale, Key::SelectTool)),
+                        .icon(if view3d {
+                            IconName::Rotate3d
+                        } else {
+                            IconName::MousePointer2
+                        })
+                        .aria_label(text(
+                            locale,
+                            if view3d { Key::OrbitTool } else { Key::SelectTool },
+                        ))
+                        .native_tooltip(text(
+                            locale,
+                            if view3d { Key::OrbitTool } else { Key::SelectTool },
+                        )),
                 )
                 .child(
                     Tab::new()
                         .icon(IconName::Hand)
-                        .aria_label(text(locale, Key::PanTool))
-                        .native_tooltip(text(locale, Key::PanTool)),
+                        .aria_label(text(
+                            locale,
+                            if view3d { Key::PanTool3d } else { Key::PanTool },
+                        ))
+                        .native_tooltip(text(
+                            locale,
+                            if view3d { Key::PanTool3d } else { Key::PanTool },
+                        )),
                 )
                 .on_click(move |index, window, cx| (commands.tool)(&(*index == 1), window, cx)),
         )
