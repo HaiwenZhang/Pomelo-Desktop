@@ -59,6 +59,11 @@ pub(super) struct View3d {
     pub measurements: Vec<measure::Measure3d>,
     /// Display-space point the current orbit turns around.
     pub orbit_center: Option<[f64; 3]>,
+    /// Conductor layers in the prepared scene, and the request that produced it.
+    pub prepared_layers: BTreeSet<pomelo_core::model::LayerId>,
+    pub requested_layers: Option<BTreeSet<pomelo_core::model::LayerId>>,
+    pub detail: pomelo_render::scene::board3d::Detail3d,
+    pub renderer_stale: bool,
 }
 impl Default for View3d {
     fn default() -> Self {
@@ -91,6 +96,10 @@ impl Default for View3d {
             measuring: None,
             measurements: Vec::new(),
             orbit_center: None,
+            prepared_layers: BTreeSet::new(),
+            requested_layers: None,
+            detail: Default::default(),
+            renderer_stale: false,
         }
     }
 }
@@ -152,6 +161,36 @@ impl BoardViewport {
         cx.notify();
     }
     /// Prepare the 3D scene in the background with the current stack assumption.
+    /// Conductor layers the 3D scene should contain: the visible ones, or the
+    /// active or top layer when none is visible.
+    fn requested_3d_layers(&self) -> BTreeSet<pomelo_core::model::LayerId> {
+        let conductors: Vec<_> = self
+            .scene
+            .layers
+            .iter()
+            .filter(|l| {
+                l.id.is_copper() && l.function != pomelo_core::model::LayerFunction::Dielectric
+            })
+            .map(|l| l.id)
+            .collect();
+        let visible: BTreeSet<_> = conductors
+            .iter()
+            .copied()
+            .filter(|id| self.display.layer_visible(*id))
+            .collect();
+        if !visible.is_empty() {
+            return visible;
+        }
+        self.display
+            .active_layer
+            .filter(|id| conductors.contains(id))
+            .or(conductors.first().copied())
+            .into_iter()
+            .collect()
+    }
+
+    /// Prepare the visible conductor layers in the background. When memory runs
+    /// short the preparation steps down in detail instead of failing.
     pub(super) fn start_3d_preparation(&mut self, cx: &mut Context<Self>) {
         let settings = self.view3d.settings;
         let stackup = PreviewStackup {
@@ -160,23 +199,62 @@ impl BoardViewport {
             dielectric: true,
             ..PreviewStackup::default()
         };
+        let requested = self.requested_3d_layers();
+        let all: BTreeSet<_> = self
+            .scene
+            .layers
+            .iter()
+            .filter(|l| {
+                l.id.is_copper() && l.function != pomelo_core::model::LayerFunction::Dielectric
+            })
+            .map(|l| l.id)
+            .collect();
+        self.view3d.requested_layers = Some(requested.clone());
         self.view3d.pending = true;
         self.view3d.error = None;
+        self.view3d.cancel.cancel();
         self.view3d.cancel = CancellationToken::default();
+        // The previous scene's memory is released before a larger one is built.
+        if self.view3d.scene.take().is_some() {
+            self.view3d.camera_restored |= self.view3d.initialized;
+            self.view3d.materials = None;
+            // The GPU painter still holds the old scene; replace it on the next frame.
+            self.view3d.renderer_stale = true;
+        }
         let cancel = self.view3d.cancel.clone();
         let source = self.scene.clone();
         let budget = self.preparation_budget.clone();
         let worker = cx.background_spawn(async move {
-            pomelo_render::preparation_memory::PreparationMemory::new(budget)
-                .prepare_board3d(&source, stackup, &cancel)
+            use pomelo_render::scene::board3d::{DETAIL_LADDER, layer_subset, out_of_memory};
+            let mut last = None;
+            for detail in DETAIL_LADDER {
+                let layers = detail.layers(&source, &requested);
+                let subset;
+                let board = if layers == all {
+                    source.as_ref()
+                } else {
+                    subset = layer_subset(&source, &layers);
+                    &subset
+                };
+                match pomelo_render::preparation_memory::PreparationMemory::new(budget.clone())
+                    .prepare_board3d(board, detail.stackup(stackup), &cancel)
+                {
+                    Ok(scene) => return Ok((scene, detail, layers)),
+                    Err(error) if out_of_memory(&error) => last = Some(error),
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(last.expect("the detail ladder is not empty"))
         });
         self.view3d.task = Some(cx.spawn(async move |this, cx| {
             let result = worker.await;
             let _ = this.update(cx, |this, cx| {
                 this.view3d.pending = false;
                 match result {
-                    Ok(scene) => {
+                    Ok((scene, detail, layers)) => {
                         this.view3d.scene = Some(Arc::new(scene));
+                        this.view3d.detail = detail;
+                        this.view3d.prepared_layers = layers;
                         this.view3d.initialized = std::mem::take(&mut this.view3d.camera_restored);
                         this.view3d.materials = None;
                     }
@@ -186,6 +264,23 @@ impl BoardViewport {
             });
         }));
     }
+
+    /// Rebuild when a layer that is not in the 3D scene becomes visible. Hiding
+    /// layers needs no rebuild: their objects simply stop drawing.
+    pub(super) fn ensure_3d_layers(&mut self, cx: &mut Context<Self>) {
+        if !self.view3d.active || self.view3d.pending || self.view3d.scene.is_none() {
+            return;
+        }
+        let requested = self.requested_3d_layers();
+        let missing = requested
+            .iter()
+            .any(|id| !self.view3d.prepared_layers.contains(id));
+        // A request that already had to be reduced is not retried until it changes.
+        if missing && self.view3d.requested_layers.as_ref() != Some(&requested) {
+            self.start_3d_preparation(cx);
+        }
+    }
+
     /// Rebuild the 3D scene after the stack assumption changed.
     pub(super) fn reprepare_3d(&mut self, cx: &mut Context<Self>) {
         self.view3d.cancel.cancel();
@@ -595,6 +690,15 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) -> frame::CanvasPresentation {
         let locale = i18n::current(cx);
+        if std::mem::take(&mut self.view3d.renderer_stale) && self.view3d.renderer.is_some() {
+            self.view3d.renderer = Some(
+                _window
+                    .register_gpu_painter(pomelo_render::backend::native::painter(
+                        SolidRenderer::new(self.view3d.telemetry.clone()),
+                    ))
+                    .map_err(|e| format!("{e:#}")),
+            );
+        }
         if self.advance_3d_transition() {
             _window.request_animation_frame();
         }

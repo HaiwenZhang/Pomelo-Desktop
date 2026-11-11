@@ -1389,3 +1389,163 @@ mod z_map_tests {
         assert_eq!(ZMap::linear(5.0).model_rays(ray).len(), 1);
     }
 }
+
+/// Conductor-layer subset of a board for 3D preparation. Every layer stays in the
+/// stack so heights do not move; only objects on `layers` are kept. Vias stay when
+/// any of their pads is kept, so barrels still join the shown layers.
+pub fn layer_subset(
+    board: &BoardScene,
+    layers: &std::collections::BTreeSet<LayerId>,
+) -> BoardScene {
+    let pin_pads =
+        |pads: &[pomelo_core::model::Pad]| pads.iter().any(|p| layers.contains(&p.layer));
+    BoardScene {
+        layers: board.layers.clone(),
+        special_layers: Vec::new(),
+        nets: BTreeMap::new(),
+        segments: board
+            .segments
+            .iter()
+            .filter(|s| layers.contains(&s.layer))
+            .cloned()
+            .collect(),
+        pins: board
+            .pins
+            .iter()
+            .filter(|p| pin_pads(&p.pads))
+            .map(|p| pomelo_core::model::Pin {
+                pads: p
+                    .pads
+                    .iter()
+                    .filter(|pad| layers.contains(&pad.layer))
+                    .cloned()
+                    .collect(),
+                ..p.clone()
+            })
+            .collect(),
+        components: Vec::new(),
+        vias: board
+            .vias
+            .iter()
+            .filter(|v| pin_pads(&v.pads))
+            .cloned()
+            .collect(),
+        zones: board
+            .zones
+            .iter()
+            .filter(|z| layers.contains(&z.layer))
+            .cloned()
+            .collect(),
+        outline: board.outline.clone(),
+        texts: Vec::new(),
+        drawing_layers: Vec::new(),
+        drawings: Vec::new(),
+        bounds: board.bounds,
+        diagnostics: Vec::new(),
+    }
+}
+
+/// How much a prepared 3D scene was simplified to fit in memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Detail3d {
+    /// Every requested layer at full curve precision.
+    #[default]
+    Full,
+    /// Coarser circles and arcs, without dielectric slabs.
+    Coarse,
+    /// Only the outermost requested layers, coarse.
+    OuterOnly,
+}
+
+/// Detail levels tried in order when memory runs out.
+pub const DETAIL_LADDER: [Detail3d; 3] = [Detail3d::Full, Detail3d::Coarse, Detail3d::OuterOnly];
+
+impl Detail3d {
+    pub fn stackup(self, preview: PreviewStackup) -> PreviewStackup {
+        match self {
+            Self::Full => preview,
+            Self::Coarse | Self::OuterOnly => PreviewStackup {
+                chord_mm: preview.chord_mm.max(0.02),
+                dielectric: false,
+                ..preview
+            },
+        }
+    }
+    /// Layers kept at this level, in stack order.
+    pub fn layers(
+        self,
+        board: &BoardScene,
+        requested: &std::collections::BTreeSet<LayerId>,
+    ) -> std::collections::BTreeSet<LayerId> {
+        if self != Self::OuterOnly {
+            return requested.clone();
+        }
+        let ordered: Vec<_> = board
+            .layers
+            .iter()
+            .map(|l| l.id)
+            .filter(|id| requested.contains(id))
+            .collect();
+        ordered
+            .first()
+            .into_iter()
+            .chain(ordered.last())
+            .copied()
+            .collect()
+    }
+}
+
+/// Whether a preparation failure means "does not fit", so a lower detail may work.
+pub fn out_of_memory(error: &SolidPrepareError) -> bool {
+    matches!(
+        error,
+        SolidPrepareError::Scene(SolidError::Limit { .. } | SolidError::Allocation)
+            | SolidPrepareError::Geometry {
+                source: SolidError::Limit { .. } | SolidError::Allocation,
+                ..
+            }
+    )
+}
+
+#[cfg(test)]
+mod subset_tests {
+    use super::*;
+
+    #[test]
+    fn outer_only_keeps_the_first_and_last_requested_layers() {
+        let layer = |id: u32| pomelo_core::model::Layer {
+            id: LayerId(id),
+            name: String::new(),
+            function: LayerFunction::Conductor,
+            color: String::new(),
+            source_flags: None,
+        };
+        let board = BoardScene {
+            layers: (0..6).map(layer).collect(),
+            special_layers: vec![],
+            nets: Default::default(),
+            segments: vec![],
+            pins: vec![],
+            components: vec![],
+            vias: vec![],
+            zones: vec![],
+            outline: vec![],
+            texts: vec![],
+            drawing_layers: vec![],
+            drawings: vec![],
+            bounds: pomelo_core::model::Bounds::from_points([Point::new(0.0, 0.0)]).unwrap(),
+            diagnostics: vec![],
+        };
+        let requested = [1, 2, 4].map(LayerId).into_iter().collect();
+        assert_eq!(
+            Detail3d::OuterOnly.layers(&board, &requested),
+            [1, 4].map(LayerId).into_iter().collect()
+        );
+        assert_eq!(Detail3d::Coarse.layers(&board, &requested), requested);
+        let coarse = Detail3d::Coarse.stackup(PreviewStackup {
+            dielectric: true,
+            ..Default::default()
+        });
+        assert!(coarse.chord_mm >= 0.02 && !coarse.dielectric);
+    }
+}

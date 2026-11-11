@@ -9,6 +9,7 @@ impl Render for BoardViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = i18n::current(cx);
         self.ensure_net_report(cx);
+        self.ensure_3d_layers(cx);
         self.ensure_length_table(cx);
         let length_table = self.render_length_table(locale, cx);
         let panel_budget = window.viewport_size().width.as_f32()

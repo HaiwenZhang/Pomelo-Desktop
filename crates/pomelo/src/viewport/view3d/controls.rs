@@ -160,6 +160,39 @@ impl BoardViewport {
                     .child(text(locale, Key::StackupAssumed)),
             )
             .child(div().text_color(theme.muted_foreground).child(details))
+            .when(self.view3d.scene.is_some(), |note| {
+                let total = self
+                    .scene
+                    .layers
+                    .iter()
+                    .filter(|l| {
+                        l.id.is_copper()
+                            && l.function != pomelo_core::model::LayerFunction::Dielectric
+                    })
+                    .count();
+                note.child(
+                    div().text_color(theme.muted_foreground).child(
+                        Message::new(Key::Prepared3dLayers)
+                            .arg("prepared", self.view3d.prepared_layers.len())
+                            .arg("total", total)
+                            .display(locale),
+                    ),
+                )
+            })
+            .when(
+                self.view3d.detail != pomelo_render::scene::board3d::Detail3d::Full,
+                |note| {
+                    note.child(div().text_color(theme.warning).child(text(
+                        locale,
+                        if self.view3d.detail == pomelo_render::scene::board3d::Detail3d::OuterOnly
+                        {
+                            Key::Reduced3dOuterOnly
+                        } else {
+                            Key::Reduced3dCoarse
+                        },
+                    )))
+                },
+            )
             .when(warnings > 0, |note| {
                 note.child(
                     div().text_color(theme.warning).child(
