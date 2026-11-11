@@ -218,6 +218,7 @@ fn hardware_die_pads_follow_etch_visibility_and_priority_without_reupload() {
                                 traces: state != "pins-only",
                                 pads: state != "etch-only",
                                 vias: true,
+                                ..LayerPrimitives::default()
                             },
                         );
                         if state == "promoted-etch" {

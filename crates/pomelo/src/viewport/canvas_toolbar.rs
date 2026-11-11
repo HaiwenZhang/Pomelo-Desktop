@@ -134,7 +134,21 @@ impl BoardViewport {
         let display = if in_3d {
             self.render_3d_display_tools(locale, cx)
         } else {
-            Vec::new()
+            let single = self.display.shadow.enabled;
+            vec![
+                icon_button(
+                    "canvas-single-layer",
+                    IconName::Layers2,
+                    Message::new(Key::SingleLayerTool)
+                        .arg("shortcut", "L")
+                        .display(locale),
+                    cx,
+                )
+                .selected(single)
+                .toggled(single)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_single_layer(cx)))
+                .into_any_element(),
+            ]
         };
         if !display.is_empty() {
             items.push(canvas_separator());

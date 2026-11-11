@@ -6,6 +6,7 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 use pomelo_core::{
+    display::{CellMode, LayerPrimitive},
     model::LayerId,
     search::{SearchCategory, SearchEntry},
 };
@@ -15,6 +16,7 @@ use pomelo_core::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum LayerListKey {
     Group(LayerGroup),
+    Matrix,
     Layer(LayerId),
 }
 
@@ -45,13 +47,51 @@ enum LayerItem {
         visible: usize,
         members: Arc<Vec<LayerId>>,
     },
+    /// Column headings of the conductor layer matrix.
+    Matrix(Arc<Vec<LayerId>>),
     Layer {
         id: LayerId,
         label: String,
     },
 }
 
+/// Plain click shows or hides a cell; Alt switches a shown cell between fill and outline.
+fn next_mode(current: CellMode, alt: bool) -> CellMode {
+    match (current, alt) {
+        (CellMode::Hidden, false) => CellMode::Fill,
+        (_, false) => CellMode::Hidden,
+        (CellMode::Fill, true) => CellMode::Outline,
+        (_, true) => CellMode::Fill,
+    }
+}
+
+/// A column reads as filled or outlined only when every layer agrees; otherwise hidden
+/// wins if any layer hides it, so one click shows the whole column.
+fn column_mode(
+    display: &pomelo_core::display::BoardDisplay,
+    members: &[LayerId],
+    kind: LayerPrimitive,
+) -> CellMode {
+    let mode = |id: &LayerId| display.primitives(*id).mode(kind);
+    let mut modes = members.iter().map(mode);
+    let Some(first) = modes.next() else {
+        return CellMode::Hidden;
+    };
+    if modes.all(|mode| mode == first) {
+        first
+    } else if members.iter().any(|id| mode(id) == CellMode::Hidden) {
+        CellMode::Hidden
+    } else {
+        CellMode::Fill
+    }
+}
+
 impl BoardViewport {
+    fn is_conductor(&self, id: LayerId) -> bool {
+        self.scene.layers.iter().any(|layer| {
+            layer.id == id && layer.function != pomelo_core::model::LayerFunction::Dielectric
+        })
+    }
     fn layer_shown(&self, id: LayerId) -> bool {
         self.display.layer_visible(id)
             || self
@@ -329,6 +369,13 @@ impl BoardViewport {
                     .count(),
                 members: Arc::new(members.iter().map(|(id, _, _)| *id).collect()),
             });
+            if group == LayerGroup::Copper
+                && (filtering || !self.collapsed_layer_groups.contains(&group))
+            {
+                items.push(LayerItem::Matrix(Arc::new(
+                    members.iter().map(|(id, _, _)| *id).collect(),
+                )));
+            }
             if filtering || !self.collapsed_layer_groups.contains(&group) {
                 items.extend(matching.into_iter().map(|(id, label, _)| LayerItem::Layer {
                     id: *id,
@@ -340,6 +387,7 @@ impl BoardViewport {
             .iter()
             .map(|item| match item {
                 LayerItem::Group { group, .. } => LayerListKey::Group(*group),
+                LayerItem::Matrix(_) => LayerListKey::Matrix,
                 LayerItem::Layer { id, .. } => LayerListKey::Layer(*id),
             })
             .collect();
@@ -417,6 +465,27 @@ impl BoardViewport {
                         },
                         cx,
                     ),
+                    LayerItem::Matrix(members) => {
+                        let columns = LayerPrimitive::MATRIX
+                            .map(|kind| column_mode(&this.display, &members, kind));
+                        crate::panels::layers::matrix_header(
+                            locale,
+                            columns,
+                            Box::new(cx.listener(
+                                move |this, (kind, alt): &(LayerPrimitive, bool), _, cx| {
+                                    let display = Arc::make_mut(&mut this.display);
+                                    let current = column_mode(display, &members, *kind);
+                                    let mode = next_mode(current, *alt);
+                                    for id in members.iter() {
+                                        display.set_cell_mode(*id, *kind, mode);
+                                    }
+                                    this.invalidate_hover();
+                                    cx.notify();
+                                },
+                            )),
+                            cx,
+                        )
+                    }
                     LayerItem::Layer { id, label } => this.render_layer_row(
                         id,
                         label,
@@ -443,6 +512,7 @@ impl BoardViewport {
                         .aria_label(text(locale, Key::LayerFilter)),
                 ),
             )
+            .child(self.render_visibility_views(locale, cx))
             .child(
                 div()
                     .flex()
@@ -609,7 +679,12 @@ impl BoardViewport {
                 at_top: list_order.last() == Some(&id),
                 expanded,
                 active: self.display.active_layer == Some(id),
-                primitives: self.display.primitives(id),
+                cells: self.is_conductor(id).then(|| {
+                    LayerPrimitive::MATRIX.map(|kind| self.display.cell_mode(id, kind))
+                }),
+                opacity: self
+                    .is_conductor(id)
+                    .then(|| self.display.layer_alpha(id)),
             },
             crate::panels::layers::LayerCommands {
                 activate: Box::new(cx.listener(move |this, _, _, cx| {
@@ -635,16 +710,38 @@ impl BoardViewport {
                     }
                     cx.notify();
                 })),
-                primitive: Box::new(cx.listener(
-                    move |this,
-                          (kind, visible): &(pomelo_core::display::LayerPrimitive, bool),
-                          _,
-                          cx| {
-                        Arc::make_mut(&mut this.display).set_primitive(id, *kind, *visible);
+                cell: Box::new(cx.listener(
+                    move |this, (kind, alt): &(LayerPrimitive, bool), _, cx| {
+                        let display = Arc::make_mut(&mut this.display);
+                        // A cell of a hidden layer brings the layer back with that cell shown.
+                        let current = if display.hidden_layers.remove(&id) {
+                            CellMode::Hidden
+                        } else {
+                            display.primitives(id).mode(*kind)
+                        };
+                        display.set_cell_mode(id, *kind, next_mode(current, *alt));
                         this.invalidate_hover();
                         cx.notify();
                     },
                 )),
+                opacity: Box::new(cx.listener(move |this, alpha: &f32, _, cx| {
+                    Arc::make_mut(&mut this.display).set_layer_alpha(id, *alpha);
+                    cx.notify();
+                })),
+                solo: {
+                    let solo_layers = Arc::clone(&all_layers);
+                    Box::new(cx.listener(move |this, _, _, cx| {
+                        this.last_visibility =
+                            Some(pomelo_core::display::LayerVisibility::capture(&this.display));
+                        Arc::make_mut(&mut this.display).hidden_layers = solo_layers
+                            .iter()
+                            .copied()
+                            .filter(|layer| *layer != id)
+                            .collect();
+                        this.invalidate_hover();
+                        cx.notify();
+                    }))
+                },
                 visibility: {
                     let view = cx.entity().downgrade();
                     Box::new(move |event, visible, _, cx| {

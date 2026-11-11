@@ -97,6 +97,13 @@ pub fn run() -> ExitCode {
             KeyBinding::new("f12", viewport::ZoomOut, Some("BoardViewport")),
             KeyBinding::new("b", viewport::FlipBoard, Some("BoardViewport")),
             KeyBinding::new("g", viewport::ToggleGrid, Some("BoardViewport")),
+            KeyBinding::new("pagedown", viewport::NextActiveLayer, Some("BoardViewport")),
+            KeyBinding::new(
+                "pageup",
+                viewport::PreviousActiveLayer,
+                Some("BoardViewport"),
+            ),
+            KeyBinding::new("l", viewport::ToggleSingleLayer, Some("BoardViewport")),
             KeyBinding::new("n", viewport::NextCandidate, Some("BoardViewport")),
             KeyBinding::new("=", viewport::ZoomIn, Some("BoardViewport")),
             KeyBinding::new("shift-=", viewport::ZoomIn, Some("BoardViewport")),

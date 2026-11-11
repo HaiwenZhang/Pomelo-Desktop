@@ -518,6 +518,7 @@ impl PreparedBoard3d {
             } else {
                 display.global_opacity
             };
+            color[3] *= display.layer_alpha(layer);
             if color[3] > 0.0
                 && (selected == Some(source.object) || selected_net == Some(source.net))
             {

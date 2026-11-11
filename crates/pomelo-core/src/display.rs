@@ -1,7 +1,7 @@
 //! Per-document display settings, independent of GPU resources and source layer order.
 pub mod filter;
 pub mod grid;
-use crate::model::LayerId;
+use crate::model::{LayerId, NetId};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -129,11 +129,40 @@ impl LabelOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LayerPrimitive {
     Traces,
     Vias,
     Pads,
+    Copper,
+    Components,
+}
+
+impl LayerPrimitive {
+    /// Columns of the layer matrix, in panel order.
+    pub const MATRIX: [Self; 5] = [
+        Self::Copper,
+        Self::Traces,
+        Self::Pads,
+        Self::Vias,
+        Self::Components,
+    ];
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// How one object category of one layer is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellMode {
+    Fill,
+    Outline,
+    Hidden,
+}
+impl CellMode {
+    pub fn visible(self) -> bool {
+        self != Self::Hidden
+    }
 }
 
 /// Submission categories shared by the canvas and picking (Pomelo Web BoardDisplay).
@@ -170,13 +199,25 @@ pub struct LayerPriority {
     pub category: DisplayCategory,
 }
 
-/// A sparse per-layer override; all three categories are visible by default.
+/// A sparse per-layer override. Copper, traces, pads and vias are visible by
+/// default; component bodies only appear when asked for. Visible cells are
+/// filled unless their bit in `outline` asks for outlines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayerPrimitives {
     pub traces: bool,
     pub vias: bool,
     pub pads: bool,
+    #[serde(default = "default_visible")]
+    pub copper: bool,
+    #[serde(default)]
+    pub components: bool,
+    /// Bit per [`LayerPrimitive`]; absent in views saved before outline cells.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub outline: u8,
+}
+fn is_zero(value: &u8) -> bool {
+    *value == 0
 }
 impl Default for LayerPrimitives {
     fn default() -> Self {
@@ -184,6 +225,9 @@ impl Default for LayerPrimitives {
             traces: true,
             vias: true,
             pads: true,
+            copper: true,
+            components: false,
+            outline: 0,
         }
     }
 }
@@ -193,6 +237,34 @@ impl LayerPrimitives {
             LayerPrimitive::Traces => self.traces,
             LayerPrimitive::Vias => self.vias,
             LayerPrimitive::Pads => self.pads,
+            LayerPrimitive::Copper => self.copper,
+            LayerPrimitive::Components => self.components,
+        }
+    }
+    pub fn mode(self, kind: LayerPrimitive) -> CellMode {
+        if !self.visible(kind) {
+            CellMode::Hidden
+        } else if self.outline & kind.bit() != 0 {
+            CellMode::Outline
+        } else {
+            CellMode::Fill
+        }
+    }
+    pub fn set_visible(&mut self, kind: LayerPrimitive, visible: bool) {
+        match kind {
+            LayerPrimitive::Traces => self.traces = visible,
+            LayerPrimitive::Vias => self.vias = visible,
+            LayerPrimitive::Pads => self.pads = visible,
+            LayerPrimitive::Copper => self.copper = visible,
+            LayerPrimitive::Components => self.components = visible,
+        }
+    }
+    pub fn set_mode(&mut self, kind: LayerPrimitive, mode: CellMode) {
+        self.set_visible(kind, mode.visible());
+        if mode == CellMode::Outline {
+            self.outline |= kind.bit();
+        } else {
+            self.outline &= !kind.bit();
         }
     }
 }
@@ -253,6 +325,12 @@ pub struct BoardDisplay {
     /// Explicit drawing order, from bottom to top; empty uses source order.
     #[serde(default)]
     pub layer_order: Vec<LayerId>,
+    /// Sparse per-layer opacity in 0..=1; absent layers are opaque.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub layer_opacity: BTreeMap<LayerId, f32>,
+    /// Nets hidden in both 2D and 3D; their objects are neither drawn nor picked.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub hidden_nets: BTreeSet<NetId>,
 }
 fn default_copper_opacity() -> f32 {
     0.25
@@ -291,6 +369,8 @@ impl Default for BoardDisplay {
             copper_opacity: default_copper_opacity(),
             global_opacity: default_global_opacity(),
             layer_order: Vec::new(),
+            layer_opacity: BTreeMap::new(),
+            hidden_nets: BTreeSet::new(),
         }
     }
 }
@@ -319,6 +399,32 @@ impl BoardDisplay {
             && self.grid.valid()
             && self.shadow.brightness.is_finite()
             && (0.0..=1.0).contains(&self.shadow.brightness)
+            && self
+                .layer_opacity
+                .values()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+    }
+    /// Opacity multiplier of one layer; 1 unless the user lowered it.
+    pub fn layer_alpha(&self, layer: LayerId) -> f32 {
+        self.layer_opacity.get(&layer).copied().unwrap_or(1.0)
+    }
+    pub fn set_layer_alpha(&mut self, layer: LayerId, alpha: f32) {
+        let alpha = alpha.clamp(0.0, 1.0);
+        if alpha >= 1.0 || !alpha.is_finite() {
+            self.layer_opacity.remove(&layer);
+        } else {
+            self.layer_opacity.insert(layer, alpha);
+        }
+    }
+    /// Draw mode of a cell, including whole-layer visibility and the placement quickview.
+    pub fn cell_mode(&self, layer: LayerId, kind: LayerPrimitive) -> CellMode {
+        if !self.primitive_visible(layer, kind) {
+            return CellMode::Hidden;
+        }
+        match self.primitives(layer).mode(kind) {
+            CellMode::Hidden => CellMode::Fill,
+            mode => mode,
+        }
     }
     /// Shadowing changes RGB brightness, never coverage, picking or source colors.
     pub fn layer_brightness(&self, layer: LayerId) -> f32 {
@@ -436,11 +542,25 @@ impl BoardDisplay {
             .get(&layer)
             .copied()
             .unwrap_or_default();
-        match kind {
-            LayerPrimitive::Traces => state.traces = visible,
-            LayerPrimitive::Vias => state.vias = visible,
-            LayerPrimitive::Pads => state.pads = visible,
+        state.set_visible(kind, visible);
+        self.store_primitives(layer, state);
+    }
+    /// Set fill, outline or hidden for one cell; outlines survive hide and show.
+    pub fn set_cell_mode(&mut self, layer: LayerId, kind: LayerPrimitive, mode: CellMode) {
+        if let Some(view) = self.quickview.as_mut().filter(|view| view.layer == layer)
+            && kind == LayerPrimitive::Pads
+        {
+            view.pins = mode.visible();
         }
+        let mut state = self
+            .layer_primitives
+            .get(&layer)
+            .copied()
+            .unwrap_or_default();
+        state.set_mode(kind, mode);
+        self.store_primitives(layer, state);
+    }
+    fn store_primitives(&mut self, layer: LayerId, state: LayerPrimitives) {
         if state == LayerPrimitives::default() {
             self.layer_primitives.remove(&layer);
         } else {
@@ -457,7 +577,14 @@ impl BoardDisplay {
     }
     pub fn category_visible(&self, layer: LayerId, category: DisplayCategory) -> bool {
         if category == DisplayCategory::Placement {
-            return self.quickview.is_some_and(|view| view.layer == layer);
+            return self.quickview.is_some_and(|view| view.layer == layer)
+                || self.primitive_visible(layer, LayerPrimitive::Components);
+        }
+        if matches!(
+            category,
+            DisplayCategory::Zone | DisplayCategory::ZoneOutline
+        ) {
+            return self.primitive_visible(layer, LayerPrimitive::Copper);
         }
         self.layer_visible(layer)
             || (category == DisplayCategory::Pin
@@ -469,7 +596,9 @@ impl BoardDisplay {
             SelectedObject::Segment(_) => self.primitive_visible(layer, LayerPrimitive::Traces),
             SelectedObject::Pin(_) => self.primitive_visible(layer, LayerPrimitive::Pads),
             SelectedObject::Via(_) => self.primitive_visible(layer, LayerPrimitive::Vias),
-            SelectedObject::Zone(_) => self.show_copper && self.layer_visible(layer),
+            SelectedObject::Zone(_) => {
+                self.show_copper && self.primitive_visible(layer, LayerPrimitive::Copper)
+            }
             SelectedObject::Drawing(_) => self.show_drawings && self.layer_visible(layer),
             SelectedObject::Placement(_) => {
                 self.category_visible(layer, DisplayCategory::Placement)
@@ -712,6 +841,48 @@ mod tests {
             display.primitives(LayerId(1)).traces,
             "whole-layer visibility must preserve category choices"
         );
+    }
+    #[test]
+    fn matrix_cells_keep_outline_choices_and_old_views_still_decode() {
+        let layer = LayerId(2);
+        let mut display = BoardDisplay::default();
+        assert_eq!(
+            display.cell_mode(layer, LayerPrimitive::Copper),
+            CellMode::Fill
+        );
+        assert_eq!(
+            display.cell_mode(layer, LayerPrimitive::Components),
+            CellMode::Hidden
+        );
+        display.set_cell_mode(layer, LayerPrimitive::Copper, CellMode::Outline);
+        display.set_primitive(layer, LayerPrimitive::Copper, false);
+        assert!(!display.category_visible(layer, DisplayCategory::Zone));
+        display.set_primitive(layer, LayerPrimitive::Copper, true);
+        assert_eq!(
+            display.cell_mode(layer, LayerPrimitive::Copper),
+            CellMode::Outline
+        );
+        display.set_cell_mode(layer, LayerPrimitive::Copper, CellMode::Fill);
+        assert!(display.layer_primitives.is_empty());
+        let old: LayerPrimitives =
+            serde_json::from_str(r#"{"traces":true,"vias":false,"pads":true}"#).unwrap();
+        assert!(old.copper && !old.components && !old.vias && old.outline == 0);
+        display.set_cell_mode(layer, LayerPrimitive::Components, CellMode::Fill);
+        assert!(display.category_visible(layer, DisplayCategory::Placement));
+        let restored: BoardDisplay =
+            serde_json::from_slice(&serde_json::to_vec(&display).unwrap()).unwrap();
+        assert_eq!(restored, display);
+    }
+    #[test]
+    fn layer_opacity_is_sparse_and_validated() {
+        let mut display = BoardDisplay::default();
+        display.set_layer_alpha(LayerId(1), 0.3);
+        assert_eq!(display.layer_alpha(LayerId(1)), 0.3);
+        assert_eq!(display.layer_alpha(LayerId(2)), 1.0);
+        display.set_layer_alpha(LayerId(1), 1.0);
+        assert!(display.layer_opacity.is_empty());
+        display.layer_opacity.insert(LayerId(1), 1.5);
+        assert!(!display.valid());
     }
     #[test]
     fn via_drill_scope_obeys_category_overrides_without_affecting_pin_drills() {

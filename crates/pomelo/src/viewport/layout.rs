@@ -131,6 +131,19 @@ impl Render for BoardViewport {
             .on_action(cx.listener(Self::remove_last_point))
             .on_action(cx.listener(Self::navigate_back))
             .on_action(cx.listener(Self::navigate_forward))
+            .on_action(
+                cx.listener(|this, _: &NextActiveLayer, _, cx| this.step_active_layer(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &PreviousActiveLayer, _, cx| {
+                    this.step_active_layer(false, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ToggleSingleLayer, _, cx| {
+                if !this.view3d.active {
+                    this.toggle_single_layer(cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &MeasureDistance, window, cx| {
                 this.set_review_tool(
                     Some(review::ReviewTool::Measure(

@@ -13,6 +13,7 @@ mod hover;
 mod inspector_panel;
 mod labels;
 mod layer_panel;
+mod layer_views;
 mod layout;
 mod motion;
 mod navigation;
@@ -90,7 +91,10 @@ actions!(
         FinishMeasurement,
         RemoveLastPoint,
         NavigateBack,
-        NavigateForward
+        NavigateForward,
+        NextActiveLayer,
+        PreviousActiveLayer,
+        ToggleSingleLayer
     ]
 );
 
