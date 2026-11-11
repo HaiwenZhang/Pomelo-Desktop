@@ -48,7 +48,15 @@ pub struct Display3d {
     pub show_dielectric: bool,
     /// Short transitions when jumping to a standard view.
     pub animate_views: bool,
+    /// Assumed board thickness when the source has no stack-up; display only.
+    pub board_mm: f64,
+    /// Assumed copper thickness of every conductor layer; display only.
+    pub copper_mm: f64,
 }
+
+/// Assumed thicknesses offered in the stack settings.
+pub const BOARD_PRESETS_MM: [f64; 5] = [0.8, 1.0, 1.6, 2.0, 2.4];
+pub const COPPER_PRESETS_MM: [f64; 3] = [0.018, 0.035, 0.07];
 
 impl Default for Display3d {
     fn default() -> Self {
@@ -62,6 +70,8 @@ impl Default for Display3d {
             show_stubs: true,
             show_dielectric: false,
             animate_views: true,
+            board_mm: 1.6,
+            copper_mm: 0.035,
         }
     }
 }
@@ -72,6 +82,8 @@ impl Display3d {
             && Z_SCALE_RANGE.contains(&self.z_scale)
             && self.unselected_opacity.is_finite()
             && (0.0..=1.0).contains(&self.unselected_opacity)
+            && (0.1..=10.0).contains(&self.board_mm)
+            && (0.001..=0.5).contains(&self.copper_mm)
     }
 }
 

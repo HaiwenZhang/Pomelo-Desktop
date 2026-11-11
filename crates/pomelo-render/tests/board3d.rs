@@ -977,3 +977,51 @@ fn circle_lod_uses_subpixel_error_and_preserves_full_precision_picking() {
         assert!((part.indices.end as usize) <= scene.meshes[part.mesh].fine_index_count());
     }
 }
+
+#[test]
+fn dielectric_slabs_fill_each_gap_and_are_never_picked() {
+    let input = source();
+    let cancel = CancellationToken::default();
+    let board = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup {
+            dielectric: true,
+            ..Default::default()
+        },
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    let slabs: Vec<_> = board.sources.iter().filter(|s| s.dielectric).collect();
+    assert_eq!(slabs.len(), board.layers.len() - 1);
+    let options = MaterialOptions {
+        show_dielectric: true,
+        ..MaterialOptions::plain()
+    };
+    let materials = board.materials(&input, &BoardDisplay::default(), &options);
+    for (i, source) in board.sources.iter().enumerate() {
+        if source.dielectric {
+            assert!(materials[i + 1][3] > 0.0 && materials[i + 1][3] < 1.0);
+        }
+    }
+    // Rays through the middle of the stack hit copper or nothing, never a slab.
+    let center = input.bounds.center();
+    let ray = PickRay3d {
+        origin: [center.x, center.y, 10.0],
+        direction: [0.0, 0.0, -1.0],
+        length: 20.0,
+    };
+    let hit = board.pick(ray, &materials, Default::default());
+    assert!(hit.is_none_or(|object| {
+        !board
+            .sources
+            .iter()
+            .any(|s| s.dielectric && s.object == object)
+    }));
+    let hidden = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
+    for (i, source) in board.sources.iter().enumerate() {
+        if source.dielectric {
+            assert_eq!(hidden[i + 1][3], 0.0);
+        }
+    }
+}

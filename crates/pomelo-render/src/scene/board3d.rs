@@ -32,6 +32,8 @@ pub struct PreviewStackup {
     pub copper_mm: f64,
     pub plating_mm: f64,
     pub chord_mm: f64,
+    /// Also build display-only dielectric slabs between conductor layers.
+    pub dielectric: bool,
 }
 impl Default for PreviewStackup {
     fn default() -> Self {
@@ -40,6 +42,7 @@ impl Default for PreviewStackup {
             copper_mm: 0.035,
             plating_mm: 0.025,
             chord_mm: 0.005,
+            dielectric: false,
         }
     }
 }
@@ -162,6 +165,8 @@ pub struct Source3d {
     pub transform: [f32; 4],
     /// Capsule endpoints move by ±extension; rounded ends keep their radius.
     pub extension: f32,
+    /// A display-only dielectric slab: never picked or selected.
+    pub dielectric: bool,
 }
 /// Selection and mode inputs of [`PreparedBoard3d::materials`].
 pub struct MaterialOptions<'a> {
@@ -177,6 +182,8 @@ pub struct MaterialOptions<'a> {
     pub unselected_opacity: f32,
     /// Show selected objects with faces even where outlines are requested.
     pub selected_solid: bool,
+    /// Draw the dielectric slabs between conductor layers.
+    pub show_dielectric: bool,
 }
 impl MaterialOptions<'static> {
     /// Default mode with nothing selected.
@@ -192,6 +199,7 @@ impl MaterialOptions<'static> {
             hovered: None,
             unselected_opacity: 1.0,
             selected_solid: true,
+            show_dielectric: false,
         }
     }
 }
@@ -474,6 +482,66 @@ impl PreparedBoard3d {
                 }
             }
         }
+        if preview.dielectric && only.is_none_or(|layer| layer == layers[0]) {
+            for (gap, pair) in layers.windows(2).enumerate() {
+                cancel.check().map_err(|e| fail(e.into()))?;
+                let (Some(upper), Some(lower)) = (heights.get(&pair[0]), heights.get(&pair[1]))
+                else {
+                    continue;
+                };
+                let Some(ring) = outline_ring(board, preview.chord_mm) else {
+                    break;
+                };
+                let remaining = builder.remaining()?;
+                let Ok(mesh) = pomelo_core::copper::CopperMesh::build(
+                    &[ring],
+                    &[],
+                    &pomelo_core::copper::MeshLimits::default(),
+                    cancel,
+                ) else {
+                    break;
+                };
+                let zone = pomelo_core::model::Zone {
+                    id: pomelo_core::model::ObjectId(u32::MAX - gap as u32),
+                    layer: pair[0],
+                    net: NetId(0),
+                    kind: Default::default(),
+                    paths: vec![],
+                    mesh,
+                };
+                let cuts = holes::cutouts(
+                    &holes,
+                    &hole_index,
+                    pair[0],
+                    zone.mesh.ring_bounds.first().copied(),
+                    preview.chord_mm,
+                    remaining,
+                    cancel,
+                )
+                .map_err(fail)?;
+                let remaining = SolidLimits {
+                    max_allocation_bytes: remaining
+                        .max_allocation_bytes
+                        .saturating_sub(super::solid::ring_bytes(&cuts)),
+                    ..remaining
+                };
+                let first = builder.sources.len();
+                builder.add_static(
+                    PreparedSolid::prepare_zone_with_cutouts(
+                        &zone,
+                        [lower[1], upper[0]],
+                        preview.chord_mm,
+                        &cuts,
+                        remaining,
+                        cancel,
+                    ),
+                    pair[0],
+                )?;
+                for source in &mut builder.sources[first..] {
+                    source.dielectric = true;
+                }
+            }
+        }
         builder.finish(layers, preview, only.is_some())
     }
 
@@ -546,6 +614,15 @@ impl PreparedBoard3d {
             || !options.related.is_empty()
             || !options.secondary.is_empty();
         for source in &self.sources {
+            if source.dielectric {
+                const DIELECTRIC: [f32; 3] = [0.36, 0.52, 0.4];
+                let shown = options.show_dielectric;
+                let wire = options.mode == RenderMode3d::Wireframe;
+                let [r, g, b] = DIELECTRIC;
+                faces.push([r, g, b, if shown && !wire { 0.18 } else { 0.0 }]);
+                edges.push([r * 0.8, g * 0.8, b * 0.8, f32::from(shown && wire)]);
+                continue;
+            }
             let scope: Vec<_> = match source.layers {
                 MemberLayers::Single(l) => vec![l],
                 MemberLayers::Span(a, b) => {
@@ -671,7 +748,8 @@ impl PreparedBoard3d {
         self.source_index
             .visit_ray(ray, &mut nearest, padding, |i, nearest| {
                 let source = &self.sources[i];
-                if !filter.contains(source.object.into())
+                if source.dielectric
+                    || !filter.contains(source.object.into())
                     || (materials.get(i + 1).is_none_or(|m| m[3] <= 0.0)
                         && materials
                             .get(self.sources.len() + 2 + i)
@@ -842,6 +920,7 @@ impl Builder<'_> {
             transform,
             extension: meta.extension,
             parts: self.parts.len()..self.parts.len(),
+            dielectric: false,
         });
         Ok(id)
     }
@@ -1039,6 +1118,83 @@ fn ray_triangle(origin: [f64; 3], direction: [f64; 3], p: [[f32; 3]; 3]) -> Opti
     }
     let t = dot(b, q) / det;
     (t >= 0.0).then_some(t)
+}
+
+/// Board outline as one closed polyline, following segment connectivity and
+/// flattening arcs. Falls back to the board bounds when the outline is open.
+fn outline_ring(board: &BoardScene, chord: f64) -> Option<Vec<Point>> {
+    let bounds = board.bounds;
+    let rectangle = || {
+        bounds.is_valid().then(|| {
+            vec![
+                Point::new(bounds.min.x, bounds.min.y),
+                Point::new(bounds.max.x, bounds.min.y),
+                Point::new(bounds.max.x, bounds.max.y),
+                Point::new(bounds.min.x, bounds.max.y),
+            ]
+        })
+    };
+    let segments = &board.outline;
+    if segments.len() < 3 {
+        return rectangle();
+    }
+    let close = |a: Point, b: Point| a.distance(b) <= 1e-3;
+    let flatten = |segment: &Segment, reverse: bool| -> Vec<Point> {
+        let mut points = match segment.arc {
+            Some(arc) => {
+                let steps = ((arc.sweep.abs() * arc.radius / chord.max(0.01))
+                    .sqrt()
+                    .ceil() as usize)
+                    .clamp(4, 64);
+                (0..=steps)
+                    .map(|i| {
+                        let t = arc.start + arc.sweep * i as f64 / steps as f64;
+                        Point::new(
+                            arc.center.x + arc.radius * t.cos(),
+                            arc.center.y + arc.radius * t.sin(),
+                        )
+                    })
+                    .collect()
+            }
+            None => vec![segment.a, segment.b],
+        };
+        // Arc samples run from its start angle; orient them like the segment.
+        if points.first().is_some_and(|p| !close(*p, segment.a)) {
+            points.reverse();
+        }
+        if reverse {
+            points.reverse();
+        }
+        points
+    };
+    let mut used = vec![false; segments.len()];
+    used[0] = true;
+    let mut ring = flatten(&segments[0], false);
+    let start = segments[0].a;
+    for _ in 1..segments.len() {
+        let end = *ring.last()?;
+        let next = segments.iter().enumerate().find_map(|(i, s)| {
+            (!used[i]).then_some(())?;
+            if close(s.a, end) {
+                Some((i, false))
+            } else if close(s.b, end) {
+                Some((i, true))
+            } else {
+                None
+            }
+        });
+        let Some((i, reverse)) = next else {
+            return rectangle();
+        };
+        used[i] = true;
+        ring.extend(flatten(&segments[i], reverse).into_iter().skip(1));
+    }
+    if !ring.last().is_some_and(|p| close(*p, start)) {
+        return rectangle();
+    }
+    ring.pop();
+    ring.dedup_by(|a, b| close(*a, *b));
+    (ring.len() >= 3).then_some(ring)
 }
 
 /// Model-to-display height map shared by the shader, culling, fitting and picking.

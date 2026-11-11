@@ -159,6 +159,8 @@ pub struct BoardViewport {
     copper_slider: Entity<SliderState>,
     global_slider: Entity<SliderState>,
     shadow_slider: Entity<SliderState>,
+    /// Continuous Z stretch in the 3D display settings.
+    z_slider: Entity<SliderState>,
     object_filter_slider: Entity<SliderState>,
     last_visibility: Option<pomelo_core::display::LayerVisibility>,
     net_color_target: Option<pomelo_core::model::NetId>,
@@ -574,6 +576,24 @@ impl BoardViewport {
             }
         })
         .detach();
+        let z_scale = prepared.restored_view.as_ref().map_or(
+            pomelo_core::display3d::Display3d::default().z_scale,
+            |state| state.view3d.display.z_scale,
+        );
+        let z_slider = cx.new(|_| {
+            SliderState::new()
+                .min(*pomelo_core::display3d::Z_SCALE_RANGE.start() as f32)
+                .max(*pomelo_core::display3d::Z_SCALE_RANGE.end() as f32)
+                .step(1.0)
+                .default_value(z_scale as f32)
+        });
+        cx.subscribe(&z_slider, |this, _, event, cx| {
+            if let SliderEvent::Change(value) = event {
+                // Live preview: the scene redraws while dragging; framing waits for presets.
+                this.set_z_scale_3d(f64::from(value.end()), cx);
+            }
+        })
+        .detach();
         let filter_pixels = prepared
             .restored_view
             .as_ref()
@@ -626,6 +646,7 @@ impl BoardViewport {
             copper_slider,
             global_slider,
             shadow_slider,
+            z_slider,
             object_filter_slider,
             last_visibility: None,
             net_color_target: None,

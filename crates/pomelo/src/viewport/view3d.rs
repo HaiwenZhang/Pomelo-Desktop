@@ -120,32 +120,7 @@ impl BoardViewport {
                 );
             }
             if self.view3d.scene.is_none() && !self.view3d.pending {
-                self.view3d.pending = true;
-                self.view3d.error = None;
-                self.view3d.cancel = CancellationToken::default();
-                let cancel = self.view3d.cancel.clone();
-                let source = self.scene.clone();
-                let budget = self.preparation_budget.clone();
-                let worker = cx.background_spawn(async move {
-                    pomelo_render::preparation_memory::PreparationMemory::new(budget)
-                        .prepare_board3d(&source, PreviewStackup::default(), &cancel)
-                });
-                self.view3d.task = Some(cx.spawn(async move |this, cx| {
-                    let result = worker.await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.view3d.pending = false;
-                        match result {
-                            Ok(scene) => {
-                                this.view3d.scene = Some(Arc::new(scene));
-                                this.view3d.initialized =
-                                    std::mem::take(&mut this.view3d.camera_restored);
-                                this.view3d.materials = None;
-                            }
-                            Err(e) => this.view3d.error = Some(e.to_string()),
-                        }
-                        cx.notify();
-                    });
-                }));
+                self.start_3d_preparation(cx);
             }
         } else {
             self.view3d.transition = None;
@@ -164,6 +139,54 @@ impl BoardViewport {
                 .store(0, Ordering::Relaxed);
         }
         window.focus(&self.focus, cx);
+        cx.notify();
+    }
+    /// Prepare the 3D scene in the background with the current stack assumption.
+    pub(super) fn start_3d_preparation(&mut self, cx: &mut Context<Self>) {
+        let settings = self.view3d.settings;
+        let stackup = PreviewStackup {
+            board_mm: settings.board_mm,
+            copper_mm: settings.copper_mm,
+            dielectric: true,
+            ..PreviewStackup::default()
+        };
+        self.view3d.pending = true;
+        self.view3d.error = None;
+        self.view3d.cancel = CancellationToken::default();
+        let cancel = self.view3d.cancel.clone();
+        let source = self.scene.clone();
+        let budget = self.preparation_budget.clone();
+        let worker = cx.background_spawn(async move {
+            pomelo_render::preparation_memory::PreparationMemory::new(budget)
+                .prepare_board3d(&source, stackup, &cancel)
+        });
+        self.view3d.task = Some(cx.spawn(async move |this, cx| {
+            let result = worker.await;
+            let _ = this.update(cx, |this, cx| {
+                this.view3d.pending = false;
+                match result {
+                    Ok(scene) => {
+                        this.view3d.scene = Some(Arc::new(scene));
+                        this.view3d.initialized = std::mem::take(&mut this.view3d.camera_restored);
+                        this.view3d.materials = None;
+                    }
+                    Err(e) => this.view3d.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+    }
+    /// Rebuild the 3D scene after the stack assumption changed.
+    pub(super) fn reprepare_3d(&mut self, cx: &mut Context<Self>) {
+        self.view3d.cancel.cancel();
+        self.view3d.task = None;
+        self.view3d.scene = None;
+        self.view3d.materials = None;
+        self.view3d.pending = false;
+        self.view3d.camera_restored = self.view3d.initialized || self.view3d.camera_restored;
+        if self.view3d.active {
+            self.start_3d_preparation(cx);
+        }
         cx.notify();
     }
     /// Record the current camera before a deliberate view change.
@@ -337,6 +360,7 @@ impl BoardViewport {
                 hovered: v.hovered.filter(|_| v.settings.hover_preview),
                 unselected_opacity: v.settings.unselected_opacity,
                 selected_solid: v.settings.selected_solid,
+                show_dielectric: v.settings.show_dielectric,
             },
         ));
         v.materials = Some(MaterialCache {

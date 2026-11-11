@@ -2,9 +2,12 @@
 //! toolbar's display mode and Z stretch, plus selection feedback.
 use super::*;
 use crate::panels::display::{section, setting_switch, switch_grid};
+use gpui_kit::component::slider::Slider;
 use gpui_kit::component::tab::{Tab, TabBar};
 use pomelo_core::{
-    display3d::{Display3d, RenderMode3d, Z_SCALE_PRESETS, ZStretch},
+    display3d::{
+        BOARD_PRESETS_MM, COPPER_PRESETS_MM, Display3d, RenderMode3d, Z_SCALE_PRESETS, ZStretch,
+    },
     i18n::Locale,
 };
 
@@ -15,6 +18,11 @@ impl BoardViewport {
     fn update_3d_settings(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Display3d)) {
         let before = self.view3d.settings;
         change(&mut self.view3d.settings);
+        if before.board_mm != self.view3d.settings.board_mm
+            || before.copper_mm != self.view3d.settings.copper_mm
+        {
+            self.reprepare_3d(cx);
+        }
         if before != self.view3d.settings {
             if before.z_scale != self.view3d.settings.z_scale
                 || before.stretch != self.view3d.settings.stretch
@@ -87,9 +95,62 @@ impl BoardViewport {
                         .display(locale),
                 )
             }))
-            .on_click(cx.listener(|this, index: &usize, _, cx| {
+            .on_click(cx.listener(|this, index: &usize, window, cx| {
                 if let Some(scale) = Z_SCALE_PRESETS.get(*index).copied() {
                     this.update_3d_settings(cx, |s| s.z_scale = scale);
+                    this.z_slider
+                        .update(cx, |slider, cx| slider.set_value(scale as f32, window, cx));
+                }
+            }))
+            .into_any_element();
+        let slider = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .min_h_8()
+            .child(div().flex_1().child(Slider::new(&self.z_slider).w_full()))
+            .child(
+                div().w_10().text_right().text_sm().child(
+                    Message::new(Key::Preview3dZScale)
+                        .arg("scale", controls::format_scale(settings.z_scale))
+                        .display(locale),
+                ),
+            )
+            .into_any_element();
+        let mm = |value: f64| {
+            Message::new(Key::StackMillimeters)
+                .arg("value", value.to_string())
+                .display(locale)
+        };
+        let board = TabBar::new("3d-board-tabs")
+            .segmented()
+            .xsmall()
+            .selected_index(
+                BOARD_PRESETS_MM
+                    .iter()
+                    .position(|v| *v == settings.board_mm)
+                    .unwrap_or(usize::MAX),
+            )
+            .children(BOARD_PRESETS_MM.iter().map(|v| Tab::new().label(mm(*v))))
+            .on_click(cx.listener(|this, index: &usize, _, cx| {
+                if let Some(value) = BOARD_PRESETS_MM.get(*index).copied() {
+                    this.update_3d_settings(cx, |s| s.board_mm = value);
+                }
+            }))
+            .into_any_element();
+        let copper = TabBar::new("3d-copper-tabs")
+            .segmented()
+            .xsmall()
+            .selected_index(
+                COPPER_PRESETS_MM
+                    .iter()
+                    .position(|v| *v == settings.copper_mm)
+                    .unwrap_or(usize::MAX),
+            )
+            .children(COPPER_PRESETS_MM.iter().map(|v| Tab::new().label(mm(*v))))
+            .on_click(cx.listener(|this, index: &usize, _, cx| {
+                if let Some(value) = COPPER_PRESETS_MM.get(*index).copied() {
+                    this.update_3d_settings(cx, |s| s.copper_mm = value);
                 }
             }))
             .into_any_element();
@@ -177,12 +238,27 @@ impl BoardViewport {
                 vec![
                     row(Key::ToolbarDisplayMode, mode),
                     row(Key::ZStretchFactor, scale),
+                    slider,
                     row(Key::StretchTarget, stretch),
                     div()
                         .pb_1()
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(text(locale, Key::StretchHint))
+                        .into_any_element(),
+                ],
+                cx,
+            ))
+            .child(section(
+                text(locale, Key::StackAssumption),
+                vec![
+                    row(Key::StackBoardThickness, board),
+                    row(Key::StackCopperThickness, copper),
+                    div()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(theme.warning)
+                        .child(text(locale, Key::StackAssumptionHint))
                         .into_any_element(),
                 ],
                 cx,
