@@ -1,177 +1,215 @@
-//! Canvas-local 3D controls, sharing the existing canvas toolbar surface.
+//! 3D-only entries of the canvas toolbar and the stack assumption notice.
 use super::*;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use pomelo_core::{i18n::Locale, interaction::camera3d::CameraView3d};
+use pomelo_core::{
+    display3d::{RenderMode3d, Z_SCALE_PRESETS},
+    i18n::Locale,
+};
+
+/// Display modes in menu order, with their name and one-line purpose.
+pub(in crate::viewport) const RENDER_MODES: [(RenderMode3d, Key, Key); 3] = [
+    (
+        RenderMode3d::Default,
+        Key::RenderModeDefault,
+        Key::RenderModeDefaultHint,
+    ),
+    (
+        RenderMode3d::Wireframe,
+        Key::RenderModeWireframe,
+        Key::RenderModeWireframeHint,
+    ),
+    (
+        RenderMode3d::Solid,
+        Key::RenderModeSolid,
+        Key::RenderModeSolidHint,
+    ),
+];
 
 impl BoardViewport {
-    pub(in crate::viewport) fn render_3d_controls(
-        &self,
-        locale: Locale,
-        cx: &Context<Self>,
-    ) -> Div {
-        let enabled = self.view3d.scene.is_some();
-        let mut controls = Vec::new();
-        for (id, transparent, key) in [
-            ("3d-solid", false, Key::Preview3dSolid),
-            ("3d-transparent", true, Key::Preview3dTransparent),
-        ] {
-            controls.push(
-                Button::new(id)
-                    .custom(crate::theme::canvas_toolbar_button(cx))
-                    .small()
-                    .label(text(locale, key))
-                    .selected(self.view3d.transparent == transparent)
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.view3d.transparent = transparent;
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            );
+    pub(in crate::viewport) fn set_render_mode_3d(
+        &mut self,
+        mode: RenderMode3d,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view3d.settings.mode != mode {
+            self.view3d.settings.mode = mode;
+            cx.notify();
         }
-        let selected = self.view3d.z_scale;
-        let view = cx.entity().downgrade();
-        controls.push(
-            Button::new("3d-z-scale")
-                .custom(crate::theme::canvas_toolbar_button(cx))
-                .small()
-                .label(
-                    Message::new(Key::Preview3dZScale)
-                        .arg("scale", selected as u64)
-                        .display(locale),
-                )
-                .native_tooltip(text(locale, Key::Preview3dDisplayOnly))
-                .dropdown_caret(true)
-                .disabled(!enabled)
-                .dropdown_menu(move |mut menu, _, _| {
-                    menu = menu.label(text(locale, Key::Preview3dDisplayOnly));
-                    for scale in [1_u64, 2, 5, 10, 20] {
-                        let view = view.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(
-                                Message::new(Key::Preview3dZScale)
-                                    .arg("scale", scale)
-                                    .display(locale),
-                            )
-                            .checked(selected == scale as f64)
-                            .on_click(move |_, _, cx| {
-                                let _ = view.update(cx, |this, cx| {
-                                    this.view3d.z_scale = scale as f64;
-                                    this.fit_3d();
-                                    cx.notify();
-                                });
-                            }),
-                        );
-                    }
-                    menu
-                })
-                .into_any_element(),
-        );
-        div()
-            .absolute()
-            .top_12()
-            .left_2()
-            .right_2()
-            .flex()
-            .justify_center()
-            .child(
-                super::super::layout::canvas_bar(controls)
-                    .flex_wrap()
-                    .max_w_full(),
-            )
     }
 
-    pub(in crate::viewport) fn render_3d_navigation(
+    /// Change the Z display factor around the current focus, keeping the view framed.
+    pub(in crate::viewport) fn set_z_scale_3d(&mut self, scale: f64, cx: &mut Context<Self>) {
+        let scale = scale.clamp(
+            *pomelo_core::display3d::Z_SCALE_RANGE.start(),
+            *pomelo_core::display3d::Z_SCALE_RANGE.end(),
+        );
+        if self.view3d.settings.z_scale != scale {
+            self.view3d.settings.z_scale = scale;
+            cx.notify();
+        }
+    }
+
+    /// Display mode and Z stretch, the 3D entries of the toolbar display group.
+    pub(in crate::viewport) fn render_3d_display_tools(
         &self,
         locale: Locale,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
         let enabled = self.view3d.scene.is_some();
-        let mut controls = vec![
-            Button::new("3d-fit")
-                .custom(crate::theme::canvas_toolbar_button(cx))
-                .small()
-                .icon(IconName::Scan)
-                .label(text(locale, Key::FitBoard))
-                .disabled(!enabled)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.fit_3d();
-                    cx.notify();
-                }))
-                .into_any_element(),
-        ];
-        for (id, view, key) in [
-            ("3d-top", CameraView3d::Top, Key::View3dTop),
-            ("3d-bottom", CameraView3d::Bottom, Key::View3dBottom),
-            (
-                "3d-isometric",
-                CameraView3d::Isometric,
-                Key::View3dIsometric,
-            ),
-        ] {
-            controls.push(
-                Button::new(id)
-                    .custom(crate::theme::canvas_toolbar_button(cx))
-                    .small()
-                    .label(text(locale, key))
-                    .selected(self.view3d.camera.is_view(view))
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.view3d.camera.set_view(view);
-                        this.fit_3d();
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            );
-        }
-        controls.push(
-            div()
-                .px_2()
-                .text_xs()
-                .child(text(locale, Key::View3dOrthographic))
-                .into_any_element(),
-        );
-        controls
+        let view = cx.entity().downgrade();
+        let current = self.view3d.settings.mode;
+        let mode_label = text(locale, Key::ToolbarDisplayMode);
+        let mode = super::super::canvas_toolbar::icon_button(
+            "3d-display-mode",
+            IconName::Box,
+            mode_label.clone(),
+            cx,
+        )
+        .disabled(!enabled)
+        .dropdown_menu(move |mut menu, window, _| {
+            menu = menu
+                .min_w(window.rem_size() * 15.0)
+                .label(mode_label.clone());
+            for (mode, name, hint) in RENDER_MODES {
+                let view = view.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(
+                        Message::new(Key::RenderModeItem)
+                            .arg("name", text(locale, name))
+                            .arg("hint", text(locale, hint))
+                            .display(locale),
+                    )
+                    .checked(current == mode)
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |this, cx| this.set_render_mode_3d(mode, cx));
+                    }),
+                );
+            }
+            menu
+        })
+        .into_any_element();
+        let view = cx.entity().downgrade();
+        let selected = self.view3d.settings.z_scale;
+        let stretch_label = Message::new(Key::ToolbarZStretch)
+            .arg("scale", format_scale(selected))
+            .display(locale);
+        let stretch = super::super::canvas_toolbar::icon_button(
+            "3d-z-stretch",
+            IconName::MoveVertical,
+            stretch_label.clone(),
+            cx,
+        )
+        .selected(selected != 1.0)
+        .disabled(!enabled)
+        .dropdown_menu(move |mut menu, window, _| {
+            menu = menu
+                .min_w(window.rem_size() * 14.0)
+                .label(stretch_label.clone());
+            for scale in Z_SCALE_PRESETS {
+                let view = view.clone();
+                let label = if scale == 1.0 {
+                    text(locale, Key::ZScaleTrue)
+                } else {
+                    Message::new(Key::Preview3dZScale)
+                        .arg("scale", format_scale(scale))
+                        .display(locale)
+                };
+                menu = menu.item(
+                    PopupMenuItem::new(label)
+                        .checked(selected == scale)
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| this.set_z_scale_3d(scale, cx));
+                        }),
+                );
+            }
+            menu.separator()
+                .label(text(locale, Key::Preview3dDisplayOnly))
+        })
+        .into_any_element();
+        vec![mode, stretch]
     }
 
-    pub(in crate::viewport) fn render_3d_note(&self, locale: Locale) -> Div {
+    /// Thickness assumption shown with the layer stack instead of over the board.
+    pub(in crate::viewport) fn render_stackup_notice(&self, locale: Locale, cx: &App) -> Div {
         let preview = self
             .view3d
             .scene
             .as_ref()
             .map_or_else(PreviewStackup::default, |s| s.preview);
         let warnings = self.view3d.scene.as_ref().map_or(0, |s| s.warning_count);
+        let theme = cx.theme();
+        let details = Message::new(Key::Preview3dStackup)
+            .arg("board", preview.board_mm.to_string())
+            .arg("copper", preview.copper_mm.to_string())
+            .arg("plating", preview.plating_mm.to_string())
+            .display(locale);
         div()
-            .absolute()
-            .top_24()
-            .left_4()
-            .right_4()
             .flex()
-            .flex_wrap()
-            .justify_center()
-            .gap_2()
+            .flex_col()
+            .items_start()
+            .gap_1()
             .text_xs()
-            .text_color(crate::theme::canvas_colors().1)
             .child(
                 div()
-                    .px_2()
-                    .py_1()
+                    .id("stackup-assumed")
+                    .px_1p5()
                     .rounded_sm()
-                    .bg(crate::theme::canvas_toolbar_surface())
-                    .child(
-                        Message::new(Key::Preview3dStackup)
-                            .arg("board", preview.board_mm.to_string())
-                            .arg("copper", preview.copper_mm.to_string())
-                            .arg("plating", preview.plating_mm.to_string())
+                    .border_1()
+                    .border_color(theme.warning)
+                    .text_color(theme.warning)
+                    .child(text(locale, Key::StackupAssumed)),
+            )
+            .child(div().text_color(theme.muted_foreground).child(details))
+            .when(self.view3d.scene.is_some(), |note| {
+                let total = self
+                    .scene
+                    .layers
+                    .iter()
+                    .filter(|l| {
+                        l.id.is_copper()
+                            && l.function != pomelo_core::model::LayerFunction::Dielectric
+                    })
+                    .count();
+                note.child(
+                    div().text_color(theme.muted_foreground).child(
+                        Message::new(Key::Prepared3dLayers)
+                            .arg("prepared", self.view3d.prepared_layers.len())
+                            .arg("total", total)
                             .display(locale),
                     ),
+                )
+            })
+            .when(
+                self.view3d.detail != pomelo_render::scene::board3d::Detail3d::Full,
+                |note| {
+                    note.child(div().text_color(theme.warning).child(text(
+                        locale,
+                        if self.view3d.detail == pomelo_render::scene::board3d::Detail3d::OuterOnly
+                        {
+                            Key::Reduced3dOuterOnly
+                        } else {
+                            Key::Reduced3dCoarse
+                        },
+                    )))
+                },
             )
             .when(warnings > 0, |note| {
                 note.child(
-                    Message::new(Key::Preview3dWarnings)
-                        .arg("count", warnings)
-                        .display(locale),
+                    div().text_color(theme.warning).child(
+                        Message::new(Key::Preview3dWarnings)
+                            .arg("count", warnings)
+                            .display(locale),
+                    ),
                 )
             })
+    }
+}
+
+/// Z factors are whole numbers in menus; keep a fraction if the slider set one.
+pub(in crate::viewport) fn format_scale(scale: f64) -> String {
+    if scale.fract() == 0.0 {
+        format!("{scale:.0}")
+    } else {
+        format!("{scale:.1}")
     }
 }

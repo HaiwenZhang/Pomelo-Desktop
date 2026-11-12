@@ -152,7 +152,9 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        crate::panels::selection_details::render(
+        let report = self.render_net_report(locale, cx);
+        let probe = self.render_probe(locale, cx);
+        let details = crate::panels::selection_details::render(
             crate::panels::selection_details::SelectionDetails {
                 selected_target: self.selected_target,
                 selected_anchor: self.selected_anchor,
@@ -199,7 +201,19 @@ impl BoardViewport {
             locale,
             window,
             cx,
-        )
+        );
+        if report.is_none() && probe.is_none() {
+            return details;
+        }
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .children(report)
+            .child(div().flex_1().min_h_0().child(details))
+            .children(probe)
+            .into_any_element()
     }
 
     fn render_display_body(
@@ -230,9 +244,14 @@ impl BoardViewport {
             );
         }
         let net_colors = self.net_color_controls(locale, window, cx);
+        let settings_3d = self
+            .view3d
+            .active
+            .then(|| self.render_3d_settings(locale, cx));
         div()
             .flex()
             .flex_col()
+            .children(settings_3d)
             .children(net_colors)
             .children(crate::panels::display::controls(
                 locale,

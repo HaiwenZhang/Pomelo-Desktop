@@ -425,6 +425,7 @@ mod tests {
             selection: None,
             selection_anchor: None,
             review: Default::default(),
+            view3d: Default::default(),
         };
         let budget = MemoryBudget::new(0);
         let prepared = prepare_document(DocumentPreparation {

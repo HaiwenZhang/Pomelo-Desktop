@@ -306,11 +306,13 @@ impl BoardPickingIndex {
             }
             let source = self.order[index - self.leaf_start];
             let segment = &self.scene.segments[source];
-            if !filter.allows(
-                SelectedObject::Segment(segment.id),
-                &[segment.layer],
-                display,
-            ) {
+            if !display.net_visible(segment.net)
+                || !filter.allows(
+                    SelectedObject::Segment(segment.id),
+                    &[segment.layer],
+                    display,
+                )
+            {
                 continue;
             }
             ranking.insert(
@@ -427,8 +429,8 @@ impl BoardPickingIndex {
             let zone = &self.scene.zones[source];
             cancel.check()?;
             if !filter.contains(PickCategory::Zone)
-                || !display.show_copper
-                || !display.layer_visible(zone.layer)
+                || !display.object_visible(zone.layer, SelectedObject::Zone(zone.id))
+                || !display.net_visible(zone.net)
             {
                 continue;
             }
@@ -566,7 +568,7 @@ impl BoardPickingIndex {
         for source in self.pins.query(query_bounds, cancel)? {
             let pin = &self.scene.pins[source];
             cancel.check()?;
-            if !filter.contains(PickCategory::Pin) {
+            if !filter.contains(PickCategory::Pin) || !display.net_visible(pin.net) {
                 continue;
             }
             let owner = PadPlacement {
@@ -653,7 +655,7 @@ impl BoardPickingIndex {
         for source in self.vias.query(query_bounds, cancel)? {
             let via = &self.scene.vias[source];
             cancel.check()?;
-            if !filter.contains(PickCategory::Via) {
+            if !filter.contains(PickCategory::Via) || !display.net_visible(via.net) {
                 continue;
             }
             let owner = PadPlacement {

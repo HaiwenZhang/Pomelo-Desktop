@@ -1,7 +1,9 @@
 //! Immutable, GPU-ready conductor geometry. Preview heights are explicit assumptions.
+pub(super) mod edges;
 mod holes;
 mod paging;
 mod parallel;
+pub mod raster;
 mod round;
 mod spatial;
 use super::solid::{PadSolidSource, PreparedSolid, SolidPrepareError, ViaWallSpan};
@@ -31,6 +33,8 @@ pub struct PreviewStackup {
     pub copper_mm: f64,
     pub plating_mm: f64,
     pub chord_mm: f64,
+    /// Also build display-only dielectric slabs between conductor layers.
+    pub dielectric: bool,
 }
 impl Default for PreviewStackup {
     fn default() -> Self {
@@ -39,6 +43,7 @@ impl Default for PreviewStackup {
             copper_mm: 0.035,
             plating_mm: 0.025,
             chord_mm: 0.005,
+            dielectric: false,
         }
     }
 }
@@ -69,6 +74,8 @@ pub struct Mesh3d {
     pub indices: Vec<u32>,
     /// Optional screen-error-bounded index ranges, sharing the full-resolution vertices.
     pub round_lods: Vec<RoundLod3d>,
+    /// Line-list feature edges stored after every triangle range; empty when absent.
+    pub edges: Range<u32>,
 }
 /// Alternative triangle range with a conservative model-space chord error.
 pub struct RoundLod3d {
@@ -80,13 +87,42 @@ impl Mesh3d {
     pub fn fine_index_count(&self) -> usize {
         self.round_lods
             .first()
-            .map_or(self.indices.len(), |lod| lod.indices.start as usize)
+            .map_or(self.triangle_index_count(), |lod| {
+                lod.indices.start as usize
+            })
+    }
+    /// Append feature edges of the full-resolution triangles.
+    /// Append edges already computed for this mesh's vertices.
+    pub(crate) fn append_edges(&mut self, lines: Vec<u32>) {
+        let start = self.indices.len() as u32;
+        self.indices.extend(lines);
+        self.edges = start..self.indices.len() as u32;
+    }
+    pub(crate) fn add_edges(&mut self, generators: bool) {
+        let fine = self.fine_index_count();
+        let edges = edges::feature_edges(&self.vertices, &self.indices[..fine], generators);
+        let start = self.indices.len() as u32;
+        self.indices.extend(edges);
+        self.edges = start..self.indices.len() as u32;
+    }
+    /// Index count of the triangle ranges, before the edge lines.
+    pub fn triangle_index_count(&self) -> usize {
+        if self.edges.is_empty() {
+            self.indices.len()
+        } else {
+            self.edges.start as usize
+        }
     }
     pub(crate) fn valid_lods(&self) -> bool {
+        if !self.edges.is_empty()
+            && (self.edges.end as usize != self.indices.len()
+                || !(self.edges.end - self.edges.start).is_multiple_of(2))
+        {
+            return false;
+        }
+        let triangles = self.triangle_index_count();
         let fine = self.fine_index_count();
-        if fine > self.indices.len()
-            || !fine.is_multiple_of(3)
-            || (!self.round_lods.is_empty() && fine == 0)
+        if fine > triangles || !fine.is_multiple_of(3) || (!self.round_lods.is_empty() && fine == 0)
         {
             return false;
         }
@@ -94,7 +130,7 @@ impl Mesh3d {
         for lod in &self.round_lods {
             if lod.indices.start != end
                 || lod.indices.end <= end
-                || lod.indices.end as usize > self.indices.len()
+                || lod.indices.end as usize > triangles
                 || !(lod.indices.end - end).is_multiple_of(3)
                 || !lod.error_mm.is_finite()
                 || lod.error_mm < 0.0
@@ -103,7 +139,7 @@ impl Mesh3d {
             }
             end = lod.indices.end;
         }
-        end as usize == self.indices.len()
+        end as usize == triangles
     }
     /// Select an uploaded range whose silhouette error is at most half a pixel.
     pub fn draw_indices(&self, pixels_per_mm: f32) -> Range<u32> {
@@ -136,6 +172,46 @@ pub struct Source3d {
     pub transform: [f32; 4],
     /// Capsule endpoints move by ±extension; rounded ends keep their radius.
     pub extension: f32,
+    /// A display-only dielectric slab: never picked or selected.
+    pub dielectric: bool,
+}
+/// Selection and mode inputs of [`PreparedBoard3d::materials`].
+pub struct MaterialOptions<'a> {
+    pub mode: pomelo_core::display3d::RenderMode3d,
+    pub selected: Option<SelectedObject>,
+    pub selected_net: Option<NetId>,
+    /// Members of the selected group, drawn in the primary selection color.
+    pub related: &'a std::collections::BTreeSet<SelectedObject>,
+    /// Added selection-set members, drawn in the secondary selection color.
+    pub secondary: &'a std::collections::BTreeSet<SelectedObject>,
+    pub hovered: Option<SelectedObject>,
+    /// Opacity kept by unselected objects while anything is selected.
+    pub unselected_opacity: f32,
+    /// Show selected objects with faces even where outlines are requested.
+    pub selected_solid: bool,
+    /// Draw the dielectric slabs between conductor layers.
+    pub show_dielectric: bool,
+    /// Highlight group colors, applied before selection colors.
+    pub group_colors: Option<&'a std::collections::BTreeMap<SelectedObject, [f32; 3]>>,
+}
+impl MaterialOptions<'static> {
+    /// Default mode with nothing selected.
+    pub fn plain() -> Self {
+        const NONE: &std::collections::BTreeSet<SelectedObject> =
+            &std::collections::BTreeSet::new();
+        Self {
+            mode: pomelo_core::display3d::RenderMode3d::Default,
+            selected: None,
+            selected_net: None,
+            related: NONE,
+            secondary: NONE,
+            hovered: None,
+            unselected_opacity: 1.0,
+            selected_solid: true,
+            show_dielectric: false,
+            group_colors: None,
+        }
+    }
 }
 pub struct PreparedBoard3d {
     pub(crate) memory_reservation: Option<pomelo_core::memory::MemoryReservation>,
@@ -416,6 +492,66 @@ impl PreparedBoard3d {
                 }
             }
         }
+        if preview.dielectric && only.is_none_or(|layer| layer == layers[0]) {
+            for (gap, pair) in layers.windows(2).enumerate() {
+                cancel.check().map_err(|e| fail(e.into()))?;
+                let (Some(upper), Some(lower)) = (heights.get(&pair[0]), heights.get(&pair[1]))
+                else {
+                    continue;
+                };
+                let Some(ring) = outline_ring(board, preview.chord_mm) else {
+                    break;
+                };
+                let remaining = builder.remaining()?;
+                let Ok(mesh) = pomelo_core::copper::CopperMesh::build(
+                    &[ring],
+                    &[],
+                    &pomelo_core::copper::MeshLimits::default(),
+                    cancel,
+                ) else {
+                    break;
+                };
+                let zone = pomelo_core::model::Zone {
+                    id: pomelo_core::model::ObjectId(u32::MAX - gap as u32),
+                    layer: pair[0],
+                    net: NetId(0),
+                    kind: Default::default(),
+                    paths: vec![],
+                    mesh,
+                };
+                let cuts = holes::cutouts(
+                    &holes,
+                    &hole_index,
+                    pair[0],
+                    zone.mesh.ring_bounds.first().copied(),
+                    preview.chord_mm,
+                    remaining,
+                    cancel,
+                )
+                .map_err(fail)?;
+                let remaining = SolidLimits {
+                    max_allocation_bytes: remaining
+                        .max_allocation_bytes
+                        .saturating_sub(super::solid::ring_bytes(&cuts)),
+                    ..remaining
+                };
+                let first = builder.sources.len();
+                builder.add_static(
+                    PreparedSolid::prepare_zone_with_cutouts(
+                        &zone,
+                        [lower[1], upper[0]],
+                        preview.chord_mm,
+                        &cuts,
+                        remaining,
+                        cancel,
+                    ),
+                    pair[0],
+                )?;
+                for source in &mut builder.sources[first..] {
+                    source.dielectric = true;
+                }
+            }
+        }
         builder.finish(layers, preview, only.is_some())
     }
 
@@ -460,22 +596,43 @@ impl PreparedBoard3d {
             + self.warnings.capacity() * size_of::<SolidPrepareError>()
     }
 
+    /// Face materials for slot 0 and every source, followed by edge materials in
+    /// the same order. A zero alpha draws nothing.
     pub fn materials(
         &self,
         board: &BoardScene,
         display: &BoardDisplay,
-        transparent: bool,
-        selected: Option<SelectedObject>,
-        selected_net: Option<NetId>,
+        options: &MaterialOptions<'_>,
     ) -> Vec<[f32; 4]> {
+        use pomelo_core::display::{CellMode, LayerPrimitive};
+        use pomelo_core::display3d::RenderMode3d;
+        const PRIMARY: [f32; 3] = [1.0, 0.35, 0.05];
+        const SECONDARY: [f32; 3] = [1.0, 0.82, 0.4];
+        const HOVER: [f32; 3] = [0.63, 1.0, 0.85];
         let colors: BTreeMap<_, _> = board
             .layers
             .iter()
             .map(|l| (l.id, parse_color(&l.color)))
             .collect();
-        let mut result = Vec::with_capacity(self.sources.len() + 1);
-        result.push([0.0; 4]);
+        let count = self.sources.len() + 1;
+        let mut faces = Vec::with_capacity(count * 2);
+        faces.push([0.0; 4]);
+        let mut edges = Vec::with_capacity(count);
+        edges.push([0.0; 4]);
+        let any_selection = options.selected.is_some()
+            || options.selected_net.is_some()
+            || !options.related.is_empty()
+            || !options.secondary.is_empty();
         for source in &self.sources {
+            if source.dielectric {
+                const DIELECTRIC: [f32; 3] = [0.36, 0.52, 0.4];
+                let shown = options.show_dielectric;
+                let wire = options.mode == RenderMode3d::Wireframe;
+                let [r, g, b] = DIELECTRIC;
+                faces.push([r, g, b, if shown && !wire { 0.18 } else { 0.0 }]);
+                edges.push([r * 0.8, g * 0.8, b * 0.8, f32::from(shown && wire)]);
+                continue;
+            }
             let scope: Vec<_> = match source.layers {
                 MemberLayers::Single(l) => vec![l],
                 MemberLayers::Span(a, b) => {
@@ -491,15 +648,17 @@ impl PreparedBoard3d {
             let Some(layer) = scope
                 .into_iter()
                 .find(|l| display.object_visible(*l, source.object))
+                .filter(|_| display.net_visible(source.net))
             else {
-                result.push([0.0; 4]);
+                faces.push([0.0; 4]);
+                edges.push([0.0; 4]);
                 continue;
             };
-            let category = match source.object {
-                SelectedObject::Segment(_) => DisplayCategory::Trace,
-                SelectedObject::Pin(_) => DisplayCategory::Pin,
-                SelectedObject::Via(_) => DisplayCategory::Via,
-                _ => DisplayCategory::Zone,
+            let (category, kind) = match source.object {
+                SelectedObject::Segment(_) => (DisplayCategory::Trace, LayerPrimitive::Traces),
+                SelectedObject::Pin(_) => (DisplayCategory::Pin, LayerPrimitive::Pads),
+                SelectedObject::Via(_) => (DisplayCategory::Via, LayerPrimitive::Vias),
+                _ => (DisplayCategory::Zone, LayerPrimitive::Copper),
             };
             let base = display
                 .appearance
@@ -512,42 +671,74 @@ impl PreparedBoard3d {
                 .unwrap_or_else(|| {
                     super::colors::copper_color(display.color_mode, base, source.net)
                 });
-            color[3] = if transparent { 0.22 } else { 1.0 };
-            color[3] *= if matches!(source.object, SelectedObject::Zone(_)) {
+            if let Some(&[r, g, b]) = options
+                .group_colors
+                .and_then(|colors| colors.get(&source.object))
+            {
+                color[..3].copy_from_slice(&[r, g, b]);
+            }
+            let alpha = if matches!(source.object, SelectedObject::Zone(_)) {
                 display.copper_opacity
             } else {
                 display.global_opacity
+            } * display.layer_alpha(layer);
+            let outline = options.mode == RenderMode3d::Wireframe
+                || display.cell_mode(layer, kind) == CellMode::Outline;
+            let mut face = if outline {
+                0.0
+            } else if options.mode == RenderMode3d::Solid {
+                1.0
+            } else {
+                alpha
             };
-            if color[3] > 0.0
-                && (selected == Some(source.object) || selected_net == Some(source.net))
-            {
-                color = [1.0, 0.35, 0.05, 1.0];
+            let mut edge: f32 = if outline { 1.0 } else { 0.0 };
+            let primary = options.selected == Some(source.object)
+                || options.selected_net == Some(source.net)
+                || options.related.contains(&source.object);
+            let secondary = options.secondary.contains(&source.object);
+            if primary || secondary {
+                color[..3].copy_from_slice(if primary { &PRIMARY } else { &SECONDARY });
+                if options.selected_solid {
+                    face = 1.0;
+                }
+                face = face.max(0.6);
+            } else if options.hovered == Some(source.object) {
+                color[..3].copy_from_slice(&HOVER);
+                face = face.max(0.5);
+                edge = edge.max(f32::from(outline));
+            } else if any_selection {
+                face *= options.unselected_opacity;
+                // Lines stay opaque; darken them in proportion instead.
+                let keep = 0.25 + 0.75 * options.unselected_opacity;
+                let rgb = [color[0] * keep, color[1] * keep, color[2] * keep];
+                faces.push([color[0], color[1], color[2], face.clamp(0.0, 1.0)]);
+                edges.push([rgb[0], rgb[1], rgb[2], edge]);
+                continue;
             }
-            result.push(color);
+            faces.push([color[0], color[1], color[2], face.clamp(0.0, 1.0)]);
+            edges.push([color[0], color[1], color[2], edge]);
         }
-        result
+        faces.extend(edges);
+        faces
     }
 
     pub fn visible_pages(
         &self,
         camera: pomelo_core::interaction::camera3d::Camera3d,
         viewport: [f64; 2],
-        z_scale: f64,
+        z_map: ZMap,
         output: &mut Vec<usize>,
     ) -> Result<(), SolidError> {
         output.clear();
-        if !z_scale.is_finite() || z_scale <= 0.0 {
+        if !z_map.scale.is_finite() || z_map.scale <= 0.0 {
             return Err(SolidError::Invalid("DISPLAY_Z_SCALE"));
         }
         output
             .try_reserve(self.pages.len())
             .map_err(|_| SolidError::Allocation)?;
         self.page_index
-            .visit_frustum(camera, viewport, z_scale, |id| {
-                let mut b = self.pages[id].bounds;
-                b.min[2] *= z_scale;
-                b.max[2] *= z_scale;
-                if camera.intersects(b, viewport) {
+            .visit_frustum(camera, viewport, z_map, |id| {
+                if camera.intersects(z_map.bounds(self.pages[id].bounds), viewport) {
                     output.push(id);
                 }
             });
@@ -573,8 +764,12 @@ impl PreparedBoard3d {
         self.source_index
             .visit_ray(ray, &mut nearest, padding, |i, nearest| {
                 let source = &self.sources[i];
-                if !filter.contains(source.object.into())
-                    || materials.get(i + 1).is_none_or(|m| m[3] <= 0.0)
+                if source.dielectric
+                    || !filter.contains(source.object.into())
+                    || (materials.get(i + 1).is_none_or(|m| m[3] <= 0.0)
+                        && materials
+                            .get(self.sources.len() + 2 + i)
+                            .is_none_or(|m| m[3] <= 0.0))
                     || !ray_box(ray, source.bounds, *nearest, padding)
                 {
                     return;
@@ -632,6 +827,9 @@ struct Group {
     bounds: Option<Bounds3>,
     shared: bool,
     round_lods: Vec<RoundLod3d>,
+    /// Feature edges of static sources, computed per source before tiling so
+    /// tile and page seams never read as outlines. Unused for shared prototypes.
+    edge_lines: Vec<u32>,
 }
 impl Group {
     fn allocation_bytes(&self) -> usize {
@@ -640,6 +838,7 @@ impl Group {
             + self.instances.capacity() * size_of::<Instance3d>()
             + self.sources.capacity() * 4
             + self.round_lods.capacity() * size_of::<RoundLod3d>()
+            + self.edge_lines.capacity() * 4
     }
 }
 struct Builder<'a> {
@@ -716,6 +915,7 @@ impl Builder<'_> {
             bounds: None,
             shared: false,
             round_lods: vec![],
+            edge_lines: vec![],
         });
         Ok(self.groups.len() - 1)
     }
@@ -741,6 +941,7 @@ impl Builder<'_> {
             transform,
             extension: meta.extension,
             parts: self.parts.len()..self.parts.len(),
+            dielectric: false,
         });
         Ok(id)
     }
@@ -938,4 +1139,413 @@ fn ray_triangle(origin: [f64; 3], direction: [f64; 3], p: [[f32; 3]; 3]) -> Opti
     }
     let t = dot(b, q) / det;
     (t >= 0.0).then_some(t)
+}
+
+/// Board outline as one closed polyline, following segment connectivity and
+/// flattening arcs. Falls back to the board bounds when the outline is open.
+fn outline_ring(board: &BoardScene, chord: f64) -> Option<Vec<Point>> {
+    let bounds = board.bounds;
+    let rectangle = || {
+        bounds.is_valid().then(|| {
+            vec![
+                Point::new(bounds.min.x, bounds.min.y),
+                Point::new(bounds.max.x, bounds.min.y),
+                Point::new(bounds.max.x, bounds.max.y),
+                Point::new(bounds.min.x, bounds.max.y),
+            ]
+        })
+    };
+    let segments = &board.outline;
+    if segments.len() < 3 {
+        return rectangle();
+    }
+    let close = |a: Point, b: Point| a.distance(b) <= 1e-3;
+    let flatten = |segment: &Segment, reverse: bool| -> Vec<Point> {
+        let mut points = match segment.arc {
+            Some(arc) => {
+                let steps = ((arc.sweep.abs() * arc.radius / chord.max(0.01))
+                    .sqrt()
+                    .ceil() as usize)
+                    .clamp(4, 64);
+                (0..=steps)
+                    .map(|i| {
+                        let t = arc.start + arc.sweep * i as f64 / steps as f64;
+                        Point::new(
+                            arc.center.x + arc.radius * t.cos(),
+                            arc.center.y + arc.radius * t.sin(),
+                        )
+                    })
+                    .collect()
+            }
+            None => vec![segment.a, segment.b],
+        };
+        // Arc samples run from its start angle; orient them like the segment.
+        if points.first().is_some_and(|p| !close(*p, segment.a)) {
+            points.reverse();
+        }
+        if reverse {
+            points.reverse();
+        }
+        points
+    };
+    let mut used = vec![false; segments.len()];
+    used[0] = true;
+    let mut ring = flatten(&segments[0], false);
+    let start = segments[0].a;
+    for _ in 1..segments.len() {
+        let end = *ring.last()?;
+        let next = segments.iter().enumerate().find_map(|(i, s)| {
+            (!used[i]).then_some(())?;
+            if close(s.a, end) {
+                Some((i, false))
+            } else if close(s.b, end) {
+                Some((i, true))
+            } else {
+                None
+            }
+        });
+        let Some((i, reverse)) = next else {
+            return rectangle();
+        };
+        used[i] = true;
+        ring.extend(flatten(&segments[i], reverse).into_iter().skip(1));
+    }
+    if !ring.last().is_some_and(|p| close(*p, start)) {
+        return rectangle();
+    }
+    ring.pop();
+    ring.dedup_by(|a, b| close(*a, *b));
+    (ring.len() >= 3).then_some(ring)
+}
+
+/// Model-to-display height map shared by the shader, culling, fitting and picking.
+/// With `dielectric` the copper layers keep their thickness and only the gaps
+/// between them grow; otherwise every height is multiplied by `scale`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZMap {
+    pub scale: f64,
+    /// Uniform preview stack: pitch, copper thickness, top surface, layer count.
+    pub stack: Option<[f64; 4]>,
+}
+
+impl ZMap {
+    pub fn linear(scale: f64) -> Self {
+        Self { scale, stack: None }
+    }
+    pub fn apply(self, z: f64) -> f64 {
+        let Some([pitch, copper, top, count]) = self.stack else {
+            return z * self.scale;
+        };
+        let depth = (top - z).clamp(0.0, pitch * (count - 1.0) + copper);
+        let layers = (depth / pitch).floor().min(count - 1.0);
+        let within = depth - layers * pitch;
+        let metal = layers * copper + within.min(copper);
+        let gap = depth - metal;
+        let outside = (top - z) - depth;
+        top * self.scale - (metal + gap * self.scale + outside * self.scale)
+    }
+    /// Inverse of [`Self::apply`]; the map is strictly increasing.
+    pub fn inverse(self, display: f64) -> f64 {
+        if self.stack.is_none() {
+            return display / self.scale;
+        }
+        let (mut low, mut high) = (-1e6_f64, 1e6_f64);
+        for _ in 0..80 {
+            let mid = 0.5 * (low + high);
+            if self.apply(mid) < display {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        0.5 * (low + high)
+    }
+    pub fn bounds(self, bounds: Bounds3) -> Bounds3 {
+        Bounds3 {
+            min: [bounds.min[0], bounds.min[1], self.apply(bounds.min[2])],
+            max: [bounds.max[0], bounds.max[1], self.apply(bounds.max[2])],
+        }
+    }
+    /// Display heights where the slope of the map changes, low to high.
+    fn breaks(self) -> Vec<f64> {
+        let Some([pitch, copper, top, count]) = self.stack else {
+            return vec![];
+        };
+        let mut z: Vec<_> = (0..count as usize)
+            .flat_map(|i| {
+                let layer_top = top - pitch * i as f64;
+                [layer_top, layer_top - copper]
+            })
+            .map(|z| self.apply(z))
+            .collect();
+        z.sort_by(f64::total_cmp);
+        z
+    }
+    /// Split a display-space ray into model-space rays, nearest first. Each piece
+    /// spans t in 0..1 along its unnormalized direction.
+    pub fn model_rays(self, ray: PickRay3d) -> Vec<PickRay3d> {
+        let point =
+            |t: f64| std::array::from_fn::<_, 3, _>(|i| ray.origin[i] + ray.direction[i] * t);
+        let mut ts = vec![0.0, ray.length];
+        if ray.direction[2].abs() > f64::EPSILON {
+            for z in self.breaks() {
+                let t = (z - ray.origin[2]) / ray.direction[2];
+                if t > 0.0 && t < ray.length {
+                    ts.push(t);
+                }
+            }
+        }
+        ts.sort_by(f64::total_cmp);
+        ts.windows(2)
+            .filter(|w| w[1] > w[0])
+            .map(|w| {
+                let [mut a, mut b] = [point(w[0]), point(w[1])];
+                a[2] = self.inverse(a[2]);
+                b[2] = self.inverse(b[2]);
+                PickRay3d {
+                    origin: a,
+                    direction: std::array::from_fn(|i| b[i] - a[i]),
+                    length: 1.0,
+                }
+            })
+            .collect()
+    }
+    /// Shader parameters: (mode flag, stack) for the solid uniforms.
+    pub fn uniforms(self) -> (f32, [f32; 4]) {
+        match self.stack {
+            Some(stack) => (1.0, stack.map(|v| v as f32)),
+            None => (0.0, [0.0; 4]),
+        }
+    }
+}
+
+impl PreparedBoard3d {
+    /// Height map for a display factor; dielectric-only needs at least two layers.
+    pub fn z_map(&self, scale: f64, dielectric_only: bool) -> ZMap {
+        let count = self.layers.len();
+        if !dielectric_only || count < 2 {
+            return ZMap::linear(scale);
+        }
+        let p = self.preview;
+        let pitch = (p.board_mm - p.copper_mm) / (count - 1) as f64;
+        ZMap {
+            scale,
+            stack: (pitch > p.copper_mm).then_some([
+                pitch,
+                p.copper_mm,
+                p.board_mm * 0.5,
+                count as f64,
+            ]),
+        }
+    }
+}
+
+#[cfg(test)]
+mod z_map_tests {
+    use super::*;
+
+    fn map() -> ZMap {
+        ZMap {
+            scale: 10.0,
+            stack: Some([0.5, 0.05, 0.775, 4.0]),
+        }
+    }
+
+    #[test]
+    fn dielectric_only_keeps_copper_thickness_and_stays_monotonic() {
+        let m = map();
+        let top = 0.775;
+        assert!((m.apply(top) - top * 10.0).abs() < 1e-9);
+        // A copper layer keeps its 0.05 mm thickness.
+        assert!(((m.apply(top) - m.apply(top - 0.05)) - 0.05).abs() < 1e-9);
+        // A gap grows by the factor.
+        assert!(((m.apply(top - 0.05) - m.apply(top - 0.5)) - 4.5).abs() < 1e-9);
+        let mut previous = f64::NEG_INFINITY;
+        for i in 0..400 {
+            let z = -1.0 + i as f64 * 0.005;
+            let d = m.apply(z);
+            assert!(d > previous);
+            assert!((m.inverse(d) - z).abs() < 1e-6);
+            previous = d;
+        }
+    }
+
+    #[test]
+    fn split_rays_join_end_to_end_in_model_space() {
+        let m = map();
+        let ray = PickRay3d {
+            origin: [0.0, 0.0, 20.0],
+            direction: [0.1, 0.0, -1.0],
+            length: 40.0,
+        };
+        let pieces = m.model_rays(ray);
+        assert!(pieces.len() > 2);
+        for w in pieces.windows(2) {
+            let end = std::array::from_fn::<_, 3, _>(|i| w[0].origin[i] + w[0].direction[i]);
+            for (end, start) in end.iter().zip(w[1].origin) {
+                assert!((end - start).abs() < 1e-6);
+            }
+        }
+        assert_eq!(ZMap::linear(5.0).model_rays(ray).len(), 1);
+    }
+}
+
+/// Conductor-layer subset of a board for 3D preparation. Every layer stays in the
+/// stack so heights do not move; only objects on `layers` are kept. Vias stay when
+/// any of their pads is kept, so barrels still join the shown layers.
+pub fn layer_subset(
+    board: &BoardScene,
+    layers: &std::collections::BTreeSet<LayerId>,
+) -> BoardScene {
+    let pin_pads =
+        |pads: &[pomelo_core::model::Pad]| pads.iter().any(|p| layers.contains(&p.layer));
+    BoardScene {
+        layers: board.layers.clone(),
+        special_layers: Vec::new(),
+        nets: BTreeMap::new(),
+        segments: board
+            .segments
+            .iter()
+            .filter(|s| layers.contains(&s.layer))
+            .cloned()
+            .collect(),
+        pins: board
+            .pins
+            .iter()
+            .filter(|p| pin_pads(&p.pads))
+            .map(|p| pomelo_core::model::Pin {
+                pads: p
+                    .pads
+                    .iter()
+                    .filter(|pad| layers.contains(&pad.layer))
+                    .cloned()
+                    .collect(),
+                ..p.clone()
+            })
+            .collect(),
+        components: Vec::new(),
+        vias: board
+            .vias
+            .iter()
+            .filter(|v| pin_pads(&v.pads))
+            .cloned()
+            .collect(),
+        zones: board
+            .zones
+            .iter()
+            .filter(|z| layers.contains(&z.layer))
+            .cloned()
+            .collect(),
+        outline: board.outline.clone(),
+        texts: Vec::new(),
+        drawing_layers: Vec::new(),
+        drawings: Vec::new(),
+        bounds: board.bounds,
+        diagnostics: Vec::new(),
+    }
+}
+
+/// How much a prepared 3D scene was simplified to fit in memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Detail3d {
+    /// Every requested layer at full curve precision.
+    #[default]
+    Full,
+    /// Coarser circles and arcs, without dielectric slabs.
+    Coarse,
+    /// Only the outermost requested layers, coarse.
+    OuterOnly,
+}
+
+/// Detail levels tried in order when memory runs out.
+pub const DETAIL_LADDER: [Detail3d; 3] = [Detail3d::Full, Detail3d::Coarse, Detail3d::OuterOnly];
+
+impl Detail3d {
+    pub fn stackup(self, preview: PreviewStackup) -> PreviewStackup {
+        match self {
+            Self::Full => preview,
+            Self::Coarse | Self::OuterOnly => PreviewStackup {
+                chord_mm: preview.chord_mm.max(0.02),
+                dielectric: false,
+                ..preview
+            },
+        }
+    }
+    /// Layers kept at this level, in stack order.
+    pub fn layers(
+        self,
+        board: &BoardScene,
+        requested: &std::collections::BTreeSet<LayerId>,
+    ) -> std::collections::BTreeSet<LayerId> {
+        if self != Self::OuterOnly {
+            return requested.clone();
+        }
+        let ordered: Vec<_> = board
+            .layers
+            .iter()
+            .map(|l| l.id)
+            .filter(|id| requested.contains(id))
+            .collect();
+        ordered
+            .first()
+            .into_iter()
+            .chain(ordered.last())
+            .copied()
+            .collect()
+    }
+}
+
+/// Whether a preparation failure means "does not fit", so a lower detail may work.
+pub fn out_of_memory(error: &SolidPrepareError) -> bool {
+    matches!(
+        error,
+        SolidPrepareError::Scene(SolidError::Limit { .. } | SolidError::Allocation)
+            | SolidPrepareError::Geometry {
+                source: SolidError::Limit { .. } | SolidError::Allocation,
+                ..
+            }
+    )
+}
+
+#[cfg(test)]
+mod subset_tests {
+    use super::*;
+
+    #[test]
+    fn outer_only_keeps_the_first_and_last_requested_layers() {
+        let layer = |id: u32| pomelo_core::model::Layer {
+            id: LayerId(id),
+            name: String::new(),
+            function: LayerFunction::Conductor,
+            color: String::new(),
+            source_flags: None,
+        };
+        let board = BoardScene {
+            layers: (0..6).map(layer).collect(),
+            special_layers: vec![],
+            nets: Default::default(),
+            segments: vec![],
+            pins: vec![],
+            components: vec![],
+            vias: vec![],
+            zones: vec![],
+            outline: vec![],
+            texts: vec![],
+            drawing_layers: vec![],
+            drawings: vec![],
+            bounds: pomelo_core::model::Bounds::from_points([Point::new(0.0, 0.0)]).unwrap(),
+            diagnostics: vec![],
+        };
+        let requested = [1, 2, 4].map(LayerId).into_iter().collect();
+        assert_eq!(
+            Detail3d::OuterOnly.layers(&board, &requested),
+            [1, 4].map(LayerId).into_iter().collect()
+        );
+        assert_eq!(Detail3d::Coarse.layers(&board, &requested), requested);
+        let coarse = Detail3d::Coarse.stackup(PreviewStackup {
+            dielectric: true,
+            ..Default::default()
+        });
+        assert!(coarse.chord_mm >= 0.02 && !coarse.dielectric);
+    }
 }

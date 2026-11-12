@@ -30,6 +30,12 @@ pub struct ViewState {
     /// Highlight groups and named views; absent in views saved before review tools.
     #[serde(default, skip_serializing_if = "crate::review::ReviewState::is_empty")]
     pub review: crate::review::ReviewState,
+    /// 3D camera and display options; absent in views saved before the 3D view.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::display3d::View3dState::is_default"
+    )]
+    pub view3d: crate::display3d::View3dState,
 }
 
 impl ViewState {
@@ -44,6 +50,7 @@ impl ViewState {
             || !self.camera.is_renderable()
             || !self.display.valid()
             || !self.review.valid()
+            || !self.view3d.valid()
         {
             return Err(crate::model::Diagnostic::error(
                 "VIEW_STATE_INVALID",
@@ -86,6 +93,7 @@ mod tests {
             )),
             selection_anchor: None,
             review: Default::default(),
+            view3d: Default::default(),
         }
     }
     #[test]
@@ -111,6 +119,25 @@ mod tests {
         assert_eq!(restored.display.object_filter, value.display.object_filter);
         value.display.object_filter.minimum_pixels = 101;
         assert!(value.validate().is_err());
+    }
+    #[test]
+    fn view3d_state_is_optional_roundtrips_and_is_validated() {
+        let value = serde_json::to_value(state()).unwrap();
+        assert!(value.get("view3d").is_none());
+        let mut saved = state();
+        saved.view3d.active = true;
+        saved.view3d.display.mode = crate::display3d::RenderMode3d::Wireframe;
+        saved.view3d.camera = Some(crate::display3d::Camera3dState {
+            pivot: [1.0, 2.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+            view_height: 25.0,
+        });
+        let decoded: ViewState =
+            serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert_eq!(decoded.view3d, saved.view3d);
+        assert!(decoded.validate().is_ok());
+        saved.view3d.display.z_scale = 0.0;
+        assert!(saved.validate().is_err());
     }
     #[test]
     fn invalid_shadow_brightness_cannot_restore_a_saved_view() {

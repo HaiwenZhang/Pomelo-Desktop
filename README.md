@@ -1,152 +1,203 @@
 <p align="center">
-  <img src="crates/pomelo/assets/pomelo.svg" width="120" alt="Pomelo logo">
+  <img src="crates/pomelo/assets/pomelo.svg" width="112" alt="Pomelo logo">
 </p>
 
-<h1 align="center">Pomelo Desktop · PCB Viewer</h1>
+<h1 align="center">Pomelo Desktop</h1>
 
 <p align="center">
-  <strong>See every connection, layer by layer.</strong><br>
-  A local, read-only PCB viewer built with GPUI and GPUI Kit.
+  <strong>Open any PCB. See every layer — in 2D and 3D.</strong><br>
+  A fast, free, open-source PCB viewer for layout and SI/PI engineers.<br>
+  Allegro, Altium, ODB++, PADS, KiCad and HFSS EDB files, read natively in Rust — no vendor tools, no uploads.
+</p>
+
+<p align="center">
+  <a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest"><img src="https://img.shields.io/github/v/release/HaiwenZhang/Pomelo-Desktop?label=download&color=58752c" alt="Latest release"></a>
+  <a href="https://github.com/HaiwenZhang/Pomelo-Desktop/actions/workflows/ci.yml"><img src="https://github.com/HaiwenZhang/Pomelo-Desktop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows, macOS, Linux">
+  <img src="https://img.shields.io/badge/GPU-D3D11%20%7C%20Metal%20%7C%20Vulkan-58752c" alt="D3D11, Metal, Vulkan">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
 
 <p align="center">English · <a href="README_zh-CN.md">简体中文</a> · <a href="README_zh-TW.md">繁體中文</a> · <a href="README_ja.md">日本語</a> · <a href="README_ko.md">한국어</a></p>
 
-<p align="center"><a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases">Download releases</a></p>
+![An 8-layer LPDDR4 board in Pomelo's 3D view, with the layer matrix on the left and 3D display settings on the right](images/pcb-example-3d.png)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows, macOS, Linux">
-  <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI_Kit-58752c" alt="Rust + GPUI Kit">
-  <img src="https://img.shields.io/badge/rendering-D3D11%20%7C%20Metal%20%7C%20wgpu-58752c" alt="D3D11, Metal, wgpu">
-  <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
-</p>
+<p align="center"><a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest"><b>⬇ Download for Windows, macOS or Linux</b></a> · <a href="#build-from-source">Build from source</a> · <a href="#what-you-can-do">Features</a></p>
 
-![Pomelo Desktop PCB viewer showing a multilayer board](images/pcb-example-en.png)
+## Why Pomelo
 
-## Your board, a clearer view
+You get a board file from a colleague, a vendor or an old project, and you just want to *look* at it: trace a net, check a via, see what sits under a BGA. Usually that means installing a heavyweight EDA suite, finding a license, or uploading the design to someone's cloud.
 
-- **Keep designs local.** Import and view board files on your computer without uploading them. Viewing does not modify the source board.
-- **Explore with native GPU rendering.** Shared WGSL shaders render traces, arcs, pads, vias, copper regions and holes, drawings, and MSDF board text. naga translates them to HLSL for D3D11 and MSL for Metal; wgpu uses WGSL directly.
-- **Follow connections.** Search nets and components, navigate to results, and inspect selected objects.
-- **Control the view.** Manage layers, color by layer or net, and adjust copper opacity, pad fills, and labels.
-- **Work across boards.** Multiple documents, recent files, and saved view preferences make it easier to return to a design.
-- **Choose your language.** English, Simplified Chinese, Traditional Chinese, Japanese, and Korean interfaces; light and dark themes.
+Pomelo opens the file directly on your machine and draws it on the GPU.
 
-> **In development:** compatibility, visual fidelity, performance, and platform stability need further validation. This is a read-only viewer; it does not edit boards or run DRC. See [development notes](docs/development-progress.md).
+- **Native readers, no vendor tools.** Every importer is written in Rust. Nothing calls out to Cadence, Altium or Ansys software, and no JavaScript engine is involved.
+- **Your design stays yours.** Files never leave your computer, and Pomelo never writes to them.
+- **Fast on real boards.** Traces, arcs, pads, copper with holes and board text render through native D3D11, Metal or Vulkan from one set of WGSL shaders. Boards with millions of objects stay interactive.
+- **2D and 3D in one window.** Switch with one click and keep your place, your selection and your layer choices.
+
+## What you can do
+
+### Review layout in 2D
+
+- **Find anything** — search nets and components, or type `x, y` to jump to a coordinate.
+- **Control every layer** — a per-layer matrix of copper, traces, pads, vias and components, each filled, outlined or hidden; per-layer opacity; saved visibility views; single-layer mode with PageUp/PageDown.
+- **Measure** — point-to-point, polyline, object clearance and pin-to-pin routed length along traces and vias.
+- **Understand a net** — routed length per layer, which layers each via really connects, via stubs, the nearest reference planes and every pin, in one inspector card.
+- **Compare lengths** — a net length table for a net and its differential partner or bus, with per-layer columns and deltas, copied as CSV.
+- **See what is underneath** — the stack probe lists what every conductor layer holds under the pointer; the adjacent-plane view overlays the planes above and below a trace.
+- **Share findings** — highlight groups, named views, navigation history, PNG/SVG export and copy-to-clipboard.
+
+### Inspect the stack-up in 3D
+
+- **Three display modes** — default (follows layer opacity), wireframe to see inside, and solid.
+- **Stretch Z the way you need** — grow only the dielectric gaps so copper keeps its true thickness, or stretch everything; display only, readings never change.
+- **Navigate like CAD** — view cube with nine standard views, orbit around the point under the pointer, right/middle-drag to pan, zoom at the pointer.
+- **Focus on a signal** — isolate a net or component with the layers it uses; unselected objects fade; via stubs are marked.
+- **Measure in 3D** — snaps to pad and via centers, trace ends and layer surfaces, with ΔX, ΔY and ΔZ.
+- **Scale to big boards** — 3D builds only the layers you show and adds a layer when you turn it on. If memory runs short it lowers detail instead of failing, and tells you what it simplified.
+
+![A 14-layer DDR5 board in the 2D view with a net selected](images/pcb-example-en.png)
+
+### Everyday comfort
+
+- Multiple boards in tabs, recent files with thumbnails, and per-board view state restored on reopen.
+- English, 简体中文, 繁體中文, 日本語 and 한국어 interfaces; light and dark themes.
+- Inferred groupings (differential pairs, buses, power and ground) and assumed stack thicknesses are always labeled as such — Pomelo shows facts and assumptions, it does not run DRC.
 
 ## Supported formats
 
-Supports `.brd`, `.PcbDoc`, ODB++ (`.tgz`, `.tar`, `.tar.gz`), `.pcb`, `.kicad_pcb`, and `edb.def`. Import coverage depends on the file version and saved data; unsupported content is reported through diagnostics.
-
-All board readers are implemented in Rust in `crates/pomelo-import`; no JavaScript engine or Node.js is used.
-
-## Quick start
-
-Install Git and the repository-pinned Rust **1.98.1** toolchain. Dependency versions are recorded in `Cargo.lock`.
-
-| Platform | Build and runtime requirements |
+| Tool | Files |
 | --- | --- |
-| Windows x64 | MSVC C++ build tools, Windows SDK, and a Direct3D 11-capable device and driver |
-| macOS | A Metal-capable Mac and Xcode Command Line Tools |
-| Linux | Development packages for fontconfig, FreeType, xkbcommon, Wayland/X11, ALSA, and OpenSSL, plus a Vulkan-capable driver |
+| Cadence Allegro | `.brd`, `.mcm` |
+| Altium Designer | `.PcbDoc` |
+| ODB++ | `.tgz`, `.tar`, `.tar.gz` |
+| PADS | `.pcb` |
+| KiCad | `.kicad_pcb` |
+| Ansys HFSS 3D Layout / EDB | `edb.def` |
 
-The commands below apply to all three platforms. On macOS, use Cmd in place of Ctrl for application shortcuts.
+Coverage depends on the file version and the data it stores. Anything Pomelo cannot read yet is listed in the diagnostics panel rather than silently dropped — [tell us](https://github.com/HaiwenZhang/Pomelo-Desktop/issues) and attach the diagnostics.
 
-```powershell
+## Install
+
+Download the package for your platform from [Releases](https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest):
+
+| Platform | Package |
+| --- | --- |
+| Windows 10/11 (x64, ARM64) | `.exe` installer |
+| macOS 14+ (Apple silicon, Intel) | `.dmg` or `.app.zip` |
+| Ubuntu 24.04+ (amd64, arm64) | `.deb` or `.tar.gz` |
+
+macOS builds are ad-hoc signed: on first launch, right-click the app and choose **Open**.
+
+Open a board with **Ctrl+O** (⌘O on macOS), by dropping it onto the window, or from the command line:
+
+```sh
+pomelo --locale en --encoding auto "board.brd"
+```
+
+`--locale` accepts `en`, `zh-CN`, `zh-TW`, `ja` and `ko` for this launch only. `--encoding` (`auto`, `utf-8`, `gbk`, `shift_jis`, `big5`, `windows-1252`) helps when names in older files decode incorrectly. Arguments after `--` are file paths.
+
+## Shortcuts
+
+| Action | Key |
+| --- | --- |
+| Open / close / reload | `Ctrl+O` / `Ctrl+W` / `Ctrl+R` |
+| Search, or jump to `x, y` | `Ctrl+K` |
+| Fit board | `F2` |
+| Flip board | `B` |
+| Single-layer mode / change active layer | `L` / `PageUp` `PageDown` |
+| Measure distance / polyline / clearance | `M` / `P` / `C` |
+| Pin-to-pin routed length | `Shift+L` |
+| Box select / zoom to area | `S` / `Z` |
+| Next overlapping object | `N` (2D), click again (3D) |
+| Back / forward in view history | `Alt+←` / `Alt+→` |
+| Toggle left / right panel | `Ctrl+B` / `Ctrl+Shift+B` |
+| 3D: orbit / pan / zoom | left-drag / right- or middle-drag / wheel |
+
+On macOS use ⌘ for Ctrl.
+
+## Build from source
+
+Requirements: Git and the pinned Rust **1.98.1** toolchain (installed automatically by `rustup`).
+
+| Platform | Also needed |
+| --- | --- |
+| Windows | MSVC C++ build tools, Windows SDK, a Direct3D 11 GPU |
+| macOS | Xcode Command Line Tools, a Metal-capable Mac |
+| Linux | fontconfig, FreeType, xkbcommon, Wayland/X11, ALSA and OpenSSL development packages, a Vulkan driver |
+
+```sh
 git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
 cd Pomelo-Desktop
-cargo run -p pomelo --locked
+cargo run -p pomelo --release --locked
 ```
 
-Open a board with **Ctrl+O**, drag and drop, or a startup file path. Select a language from the application menu or toolbar.
+Checks used by CI:
 
-```powershell
-cargo run -p pomelo --locked -- --locale en --encoding windows-1252 "example.brd"
-```
-
-`--locale` accepts `en`, `zh-CN`, `zh-TW`, `ja`, and `ko`. It applies only to this launch and does not overwrite the saved language preference. `--encoding` accepts `auto`, `utf-8`, `gbk`, `shift_jis`, `big5`, and `windows-1252`, with `auto` as the default; specify an encoding if detection is inaccurate. Interface language and source encoding are independent. The encoding option applies to files opened in that process. Arguments after `--` are treated as file paths.
-
-## Navigation
-
-| Action | Control |
-| --- | --- |
-| Open file | `Ctrl+O` |
-| Close document | `Ctrl+W` |
-| Reload document | `Ctrl+R` |
-| Next / previous document | `Ctrl+Tab / Ctrl+Shift+Tab` |
-| Fit board | `F2` |
-| Focus search | `Ctrl+K` |
-| Settings | `Ctrl+,` |
-| Toggle left / right panel | `Ctrl+B / Ctrl+Shift+B` |
-
-## Build and development
-
-Dependency versions and sources are defined in `Cargo.toml` and `Cargo.lock`. See [GPUI dependency notes](docs/gpui-dependencies.md) and [GPU backends](docs/native-gpu-backends.md).
-
-```powershell
-cargo build -p pomelo --locked
-cargo test --workspace --locked
+```sh
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo run -p pomelo-import --bin pcb_inspect --locked -- --help
+cargo test --workspace --locked
 ```
 
-### Release packaging
+`cargo run -p pomelo-import --bin pcb_inspect --locked -- --help` inspects files from the command line.
 
-| Platform / architecture | Package | Command |
+<details>
+<summary>Release packaging</summary>
+
+| Platform | Package | Command |
 | --- | --- | --- |
-| Windows x64 | `.exe` | `scripts\build-windows.bat` |
-| Windows ARM64 | `.exe` | `scripts\build-windows.bat --arch arm64` |
+| Windows x64 / ARM64 | `.exe` | `scripts\build-windows.bat` (`--arch arm64`) |
 | macOS arm64 / x64 | `.dmg`, `.app.zip` | `scripts/build-macos.sh` |
 | Ubuntu 24.04+ amd64 / arm64 | `.deb`, `.tar.gz` | `scripts/build-ubuntu.sh` |
 
-Requires Rust and native build dependencies. macOS packaging also needs ImageMagick; Windows needs Inno Setup 6; Ubuntu packaging needs `dpkg-dev` and `desktop-file-utils`. Outputs go to `dist`.
+macOS packaging needs ImageMagick, Windows needs Inno Setup 6, Ubuntu needs `dpkg-dev` and `desktop-file-utils`. Output goes to `dist`. The scripts accept `--offline`, `--toolchain NAME`, `--output-dir PATH` and `--binary PATH`. macOS builds default to ad-hoc signing (`MACOS_SIGNING_IDENTITY` selects a keychain identity) with a macOS 14.0 minimum. Ubuntu releases are built on 24.04 to keep its ABI baseline.
 
-The shell scripts accept `--offline`, `--toolchain NAME`, `--output-dir PATH`, and `--binary PATH` to package an existing executable. Release builds use `cargo build --release --locked` without Python.
+Pushing a `vX.Y.Z` tag that matches the workspace version runs the [release workflow](.github/workflows/release.yml), which builds every platform and publishes the packages with `SHA256SUMS`.
 
-Ubuntu releases are built on 24.04 to retain the 24.04 ABI baseline; CI also installs and checks the packages on Ubuntu 26.04. Building locally on a newer Ubuntu can introduce newer library requirements.
+</details>
 
-macOS defaults to ad-hoc signing and macOS 14.0 minimum. `MACOS_SIGNING_IDENTITY` selects an existing keychain identity; Apple notarization is not configured.
+## How it works
 
-[Release workflow](.github/workflows/release.yml): pushing `vX.Y.Z` builds all platforms and publishes packages plus `SHA256SUMS` after validation. The tag must match the workspace version in `Cargo.toml`. Manual runs only upload Actions artifacts.
-
-## Project structure and documentation
-
-| Location | Purpose |
+| Crate | Role |
 | --- | --- |
-| [crates/pomelo-core](crates/pomelo-core) | Board model, search, selection, and localization |
-| [crates/pomelo-import](crates/pomelo-import) | File import and diagnostics |
-| [crates/pomelo-render](crates/pomelo-render) | Scene preparation and D3D11, Metal, and wgpu renderers |
-| [crates/pomelo](crates/pomelo) | GPUI desktop application and document management |
-| [locales](locales) | Five-language interface resources |
-| [docs](docs) | General development notes |
+| [pomelo-import](crates/pomelo-import) | Native Rust readers for every format, with structured diagnostics |
+| [pomelo-core](crates/pomelo-core) | Board model, search, selection, net analysis, review tools and localization |
+| [pomelo-render](crates/pomelo-render) | 2D and 3D scene preparation; D3D11, Metal and wgpu renderers from shared WGSL shaders (naga translates to HLSL and MSL) |
+| [pomelo](crates/pomelo) | The desktop app, built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and [GPUI Kit](https://github.com/longbridge/gpui-kit) |
 
-- [Documentation](docs/README.md)
-- [Development progress](docs/development-progress.md)
-- [i18n](docs/i18n.md)
-- [GPU](docs/native-gpu-backends.md)
+Design notes live in [docs](docs/README.md), including the [2D/3D viewer plan](docs/viewer-2d-3d-unified-ui-plan.md), [3D rendering design](docs/pcb-3d-rendering-design.md) and [GPU backends](docs/native-gpu-backends.md).
 
-## Development roadmap
+## Status and roadmap
 
-These capabilities are planned or need further implementation; they are not delivered features.
+Pomelo is under active development. Format coverage, rendering fidelity and platform stability are still being validated, so compare against your source tool before relying on a reading.
 
-| Area | Planned capabilities |
-| --- | --- |
-| Everyday review | Point and polyline measurement, object clearance, multiple selection, persistent highlight groups |
-| Views and output | Named views, navigation history, custom display settings, screenshots, and lightweight local exports |
-| Engineering information | Property queries, per-layer pad structures, physical stackup, net groups, connection topology, and selected path lengths |
-| Ongoing improvements | File compatibility, large-scene performance, platform stability, keyboard access, and five-language interfaces |
+Next up:
 
-See the [review roadmap](docs/viewer-review-capabilities-plan.md) for priorities and scope, and the [implementation design](docs/viewer-review-development-design.md) for development and acceptance criteria.
+- Real stack-up thickness and materials from the source file, and multi-zone stack-ups
+- Clip planes and cross-sections in 3D
+- Linked 2D/3D split view
+- Component bodies from package heights and 3D models
+- Region-based 3D loading for boards that are huge even on one layer
 
-The scope remains read-only viewing and review, without editing source designs or running DRC.
+Pomelo stays a viewer: it does not edit designs, route or run DRC.
 
 ## Contributing
 
-Contributions to file compatibility, rendering accuracy, performance, translations, and documentation are welcome. [Report an issue](https://github.com/HaiwenZhang/Pomelo-Desktop/issues) with the source tool/file version, OS and GPU details, reproduction steps, and import diagnostics. A small sample or comparison screenshot helps; remove confidential design data before sharing. Add focused regression tests for parser or geometry changes and screenshots for visual changes. Keep all five README versions in sync.
+Every board file that opens a little better helps everyone. Good places to start:
+
+- **Format compatibility** — [open an issue](https://github.com/HaiwenZhang/Pomelo-Desktop/issues) with the source tool and version, your OS and GPU, what you expected, and the import diagnostics. A small sample or a screenshot from the source tool helps; remove confidential data first.
+- **Rendering and performance** — before/after screenshots for visual changes, timings for large boards.
+- **Translations** — all interface text lives in [locales](locales); the five README files are kept in sync.
+
+Parser and geometry changes come with focused regression tests. See [development progress](docs/development-progress.md) and [validation guide](docs/validation-guide.md).
+
+If Pomelo saves you from installing an EDA suite just to look at a board, **a ⭐ helps others find it.**
 
 ## License
 
-Copyright (c) 2026 HaiwenZhang. Project code is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`). Bundled font assets retain their own licenses; see [Source Han Sans](assets/fonts/source-han-sans/README.md).
+Copyright (c) 2026 HaiwenZhang. Licensed under the [Apache License 2.0](LICENSE). Bundled fonts keep their own licenses; see [Source Han Sans](assets/fonts/source-han-sans/README.md).
 
 ## Acknowledgments
 
-Thanks to [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and [GPUI Kit](https://github.com/longbridge/gpui-kit) for the GPU-accelerated UI framework and UI components that power Pomelo Desktop.
+Built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and [GPUI Kit](https://github.com/longbridge/gpui-kit).

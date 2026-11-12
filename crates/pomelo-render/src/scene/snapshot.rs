@@ -564,7 +564,8 @@ pub fn svg(
         if category == DisplayCategory::Zone
             && display.show_copper
             && display.copper_opacity > 0.0
-            && display.layer_visible(layer)
+            && display.cell_mode(layer, LayerPrimitive::Copper)
+                == pomelo_core::display::CellMode::Fill
         {
             for zone in scene.zones.iter().filter(|zone| zone.layer == layer) {
                 let object = SelectedObject::Zone(zone.id);
@@ -596,7 +597,7 @@ pub fn svg(
                     "<path d=\"{}\" fill=\"{}\" fill-opacity=\"{}\" fill-rule=\"evenodd\"/>",
                     rings_path(&rings[..1]),
                     color(shadow(paint, layer)),
-                    display.copper_opacity * opacity(paint)
+                    display.copper_opacity * display.layer_alpha(layer) * opacity(paint)
                 );
                 writer.pattern_end(patterned);
                 annotations.automatic(
@@ -687,7 +688,11 @@ pub fn svg(
         if category == DisplayCategory::Trace
             && display.primitive_visible(layer, LayerPrimitive::Traces)
         {
-            let _ = write!(writer.output, "<g opacity=\"{global}\">");
+            let _ = write!(
+                writer.output,
+                "<g opacity=\"{}\">",
+                global * display.layer_alpha(layer)
+            );
             for segment in scene
                 .segments
                 .iter()
@@ -741,7 +746,11 @@ pub fn svg(
             }
             writer.output.push_str("</g>");
         }
-        let _ = write!(writer.output, "<g opacity=\"{global}\">");
+        let _ = write!(
+            writer.output,
+            "<g opacity=\"{}\">",
+            global * display.layer_alpha(layer)
+        );
         if category == DisplayCategory::Pin
             && display.primitive_visible(layer, LayerPrimitive::Pads)
         {

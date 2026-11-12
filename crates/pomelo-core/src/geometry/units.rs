@@ -44,3 +44,47 @@ mod tests {
         }
     }
 }
+
+/// Parse "x, y" or "x y" in the given unit; a trailing `mm` or `mil` overrides it.
+/// Returns board coordinates in millimetres.
+pub fn parse_coordinates(input: &str, unit: LengthUnit) -> Option<crate::model::Point> {
+    let text = input.trim().to_ascii_lowercase();
+    let (text, unit) = if let Some(rest) = text.strip_suffix("mil") {
+        (rest.trim_end().to_owned(), LengthUnit::Mils)
+    } else if let Some(rest) = text.strip_suffix("mm") {
+        (rest.trim_end().to_owned(), LengthUnit::Millimeters)
+    } else {
+        (text, unit)
+    };
+    let text = text.trim_start_matches('(').trim_end_matches(')');
+    let mut parts = text
+        .split([',', ' ', ';', '\t'])
+        .filter(|part| !part.is_empty());
+    let x: f64 = parts.next()?.parse().ok()?;
+    let y: f64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    Some(crate::model::Point::new(
+        unit.to_millimeters(x),
+        unit.to_millimeters(y),
+    ))
+}
+
+#[cfg(test)]
+mod coordinate_tests {
+    use super::*;
+
+    #[test]
+    fn coordinates_accept_separators_units_and_reject_names() {
+        let p = parse_coordinates("12.5, -3", LengthUnit::Millimeters).unwrap();
+        assert_eq!((p.x, p.y), (12.5, -3.0));
+        let p = parse_coordinates("(1000 500) mil", LengthUnit::Millimeters).unwrap();
+        assert!((p.x - 25.4).abs() < 1e-9 && (p.y - 12.7).abs() < 1e-9);
+        let p = parse_coordinates("100;200", LengthUnit::Mils).unwrap();
+        assert!((p.x - 2.54).abs() < 1e-9);
+        for name in ["DQ0_A", "12", "1,2,3", "VDD 1V8", ""] {
+            assert!(parse_coordinates(name, LengthUnit::Millimeters).is_none());
+        }
+    }
+}

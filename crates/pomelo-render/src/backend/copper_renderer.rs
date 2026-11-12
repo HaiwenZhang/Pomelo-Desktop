@@ -785,10 +785,11 @@ impl NativeGpuRenderer for BoardRenderer {
             .visible_zones
             .store(0, Ordering::Relaxed);
         use super::board::{OverlayPass, TraceScope};
-        use pomelo_core::display::{DisplayCategory as Category, LayerPrimitive};
+        use pomelo_core::display::{CellMode, DisplayCategory as Category, LayerPrimitive};
         let mut base = frame.traces.base();
-        base.net_colors = (!frame.display.appearance.hide_net_colors
+        base.net_colors = ((!frame.display.appearance.hide_net_colors
             && !frame.display.appearance.nets.is_empty())
+            || !frame.display.hidden_nets.is_empty())
         .then(|| Arc::clone(&frame.display));
         base.opacity = frame.display.global_opacity;
         base.object_filter = frame.display.object_filter;
@@ -872,9 +873,50 @@ impl NativeGpuRenderer for BoardRenderer {
                 {
                     1.0
                 } else {
-                    frame.display.global_opacity
+                    frame.display.global_opacity * frame.display.layer_alpha(layer)
                 };
+                // Pads and vias drawn as outlines on this layer reuse the unfilled style.
+                traces.filled = frame.display.filled
+                    && match category {
+                        Category::Pin => {
+                            frame.display.cell_mode(layer, LayerPrimitive::Pads)
+                                != CellMode::Outline
+                        }
+                        Category::Via => {
+                            frame.display.cell_mode(layer, LayerPrimitive::Vias)
+                                != CellMode::Outline
+                        }
+                        _ => true,
+                    };
+                let zone_opacity = frame.copper_opacity
+                    * if pass == OverlayPass::Base {
+                        frame.display.layer_alpha(layer)
+                    } else {
+                        1.0
+                    };
                 match category {
+                    Category::Placement
+                        if pass == OverlayPass::Base
+                            && placement_ready
+                            && frame.display.cell_mode(layer, LayerPrimitive::Components)
+                                == CellMode::Outline =>
+                    {
+                        if let Some(source) = &frame.placement_outlines
+                            && self.placement_outlines.is_uploaded(source)
+                        {
+                            let mut outline = traces.with_source(Arc::clone(source));
+                            outline.net_colors = None;
+                            outline.object_colors = None;
+                            outline.pattern = None;
+                            outline.object_filter = Default::default();
+                            outline.material_override = Some([0.85, 0.87, 0.89, 0.6]);
+                            self.placement_outlines.draw_prepared(
+                                context,
+                                &outline,
+                                TraceScope::Layer(layer),
+                            )?;
+                        }
+                    }
                     Category::Placement if pass == OverlayPass::Base && placement_ready => {
                         let mut placement = traces.clone();
                         placement.net_colors = None;
@@ -938,7 +980,9 @@ impl NativeGpuRenderer for BoardRenderer {
                     Category::Zone
                         if copper_ready
                             && frame.display.show_copper
-                            && (frame.copper_opacity > 0.0 || pass != OverlayPass::Base) =>
+                            && frame.display.cell_mode(layer, LayerPrimitive::Copper)
+                                == CellMode::Fill
+                            && (zone_opacity > 0.0 || pass != OverlayPass::Base) =>
                     {
                         if pass == OverlayPass::Base
                             && let Some(label) = &label_frame
@@ -947,7 +991,7 @@ impl NativeGpuRenderer for BoardRenderer {
                             self.copper.draw_annotated(
                                 context,
                                 &traces,
-                                frame.copper_opacity,
+                                zone_opacity,
                                 layer,
                                 Some(&zone_label_owners),
                                 &mut |batch| {
@@ -970,7 +1014,7 @@ impl NativeGpuRenderer for BoardRenderer {
                             self.copper.draw_prepared(
                                 context,
                                 &traces,
-                                frame.copper_opacity,
+                                zone_opacity,
                                 Some(layer),
                             )?;
                         }
@@ -1037,7 +1081,7 @@ impl NativeGpuRenderer for BoardRenderer {
                                 },
                             )?;
                         }
-                        if custom_ready && frame.display.filled {
+                        if custom_ready && traces.filled {
                             let visible = |batch: &crate::copper::CopperBatch| {
                                 matches!(
                                     batch.selected_object,
@@ -1059,7 +1103,7 @@ impl NativeGpuRenderer for BoardRenderer {
                                     .load(Ordering::Relaxed);
                             }
                         }
-                        if (!frame.display.filled || pass != OverlayPass::Base)
+                        if (!traces.filled || pass != OverlayPass::Base)
                             && let Some(source) = &custom_outline_frame
                             && self.custom_outlines.is_uploaded(&source.tracks)
                         {

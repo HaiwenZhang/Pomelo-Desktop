@@ -8,6 +8,10 @@ use gpui_kit::component::{
 impl Render for BoardViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = i18n::current(cx);
+        self.ensure_net_report(cx);
+        self.ensure_3d_layers(cx);
+        self.ensure_length_table(cx);
+        let length_table = self.render_length_table(locale, cx);
         let panel_budget = window.viewport_size().width.as_f32()
             - crate::workbench::panel_layout::MIN_CANVAS_WIDTH
             - crate::workbench::panel_layout::PANEL_FRAME_WIDTH;
@@ -99,8 +103,11 @@ impl Render for BoardViewport {
         } = self.render_canvas(layer_order, panels, window, cx);
         let grid = self.render_grid();
         let review_overlay = self.render_review_overlay(locale, cx);
-        let (review_tools, history_tools) = self.render_review_tools(locale, cx);
-        let canvas_view_controls = self.render_canvas_view_controls(history_tools, locale, cx);
+        let canvas_view_controls = self.render_canvas_toolbar(locale, cx);
+        let view_cube = self
+            .view3d
+            .active
+            .then(|| self.render_view_cube(locale, cx));
         let status_bar = self.render_status_bar(ready, pointer_coordinates, locale, cx);
         let theme = cx.theme();
         let mut view = div()
@@ -128,6 +135,19 @@ impl Render for BoardViewport {
             .on_action(cx.listener(Self::remove_last_point))
             .on_action(cx.listener(Self::navigate_back))
             .on_action(cx.listener(Self::navigate_forward))
+            .on_action(
+                cx.listener(|this, _: &NextActiveLayer, _, cx| this.step_active_layer(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &PreviousActiveLayer, _, cx| {
+                    this.step_active_layer(false, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ToggleSingleLayer, _, cx| {
+                if !this.view3d.active {
+                    this.toggle_single_layer(cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &MeasureDistance, window, cx| {
                 this.set_review_tool(
                     Some(review::ReviewTool::Measure(
@@ -148,6 +168,9 @@ impl Render for BoardViewport {
             }))
             .on_action(cx.listener(|this, _: &MeasureClearance, window, cx| {
                 this.set_review_tool(Some(review::ReviewTool::Clearance), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MeasurePinPath, window, cx| {
+                this.set_review_tool(Some(review::ReviewTool::PinPath), window, cx)
             }))
             .on_action(cx.listener(|this, _: &BoxSelect, window, cx| {
                 this.set_review_tool(Some(review::ReviewTool::BoxSelect), window, cx)
@@ -236,149 +259,180 @@ impl Render for BoardViewport {
                                 )
                                 .child(
                                     div()
-                                        .id("board-canvas")
-                                        .relative()
-                                        .key_context("BoardViewport")
-                                        .track_focus(&self.focus)
-                                        .flex_1()
+                                        .size_full()
+                                        .flex()
+                                        .flex_col()
                                         .min_h_0()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .border_1()
-                                        .border_color(self.canvas_background())
-                                        .bg(self.canvas_background())
-                                        .focus_visible(|style| style.border_color(theme.ring))
-                                        .cursor(
-                                            if self
-                                                .pointer_gesture
-                                                .as_ref()
-                                                .is_some_and(|gesture| gesture.dragging)
-                                            {
-                                                CursorStyle::ClosedHand
-                                            } else if self.pan_tool {
-                                                CursorStyle::OpenHand
-                                            } else if self.review.tool.is_some() {
-                                                CursorStyle::Crosshair
-                                            } else {
-                                                CursorStyle::Arrow
-                                            },
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(Self::start_pan),
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Middle,
-                                            cx.listener(Self::start_pan),
-                                        )
-                                        .on_mouse_move(cx.listener(Self::move_pan))
-                                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                            if !*hovered {
-                                                this.pointer_position = None;
-                                                this.hover_cancel.cancel();
-                                                this.hovered = None;
-                                                this.hover_notice = None;
-                                                cx.notify();
-                                            }
-                                        }))
-                                        .on_mouse_up(MouseButton::Left, cx.listener(Self::stop_pan))
-                                        .on_mouse_up_out(
-                                            MouseButton::Left,
-                                            cx.listener(Self::cancel_pan),
-                                        )
-                                        .on_mouse_up(
-                                            MouseButton::Middle,
-                                            cx.listener(Self::stop_pan),
-                                        )
-                                        .on_mouse_up_out(
-                                            MouseButton::Middle,
-                                            cx.listener(Self::cancel_pan),
-                                        )
-                                        .on_scroll_wheel(cx.listener(Self::scroll))
-                                        .children(grid)
-                                        .child(viewport)
-                                        .children(review_overlay)
-                                        // Initial uploads must not resize the canvas after its first fit.
-                                        .when(!geometry_ready && failure.is_none(), |canvas| {
-                                            canvas.child(
-                                                div()
-                                                    .absolute()
-                                                    .top_10()
-                                                    .left_4()
-                                                    .max_w(relative(0.85))
-                                                    .truncate()
-                                                    .bg(theme.popover)
-                                                    .text_color(theme.popover_foreground)
-                                                    .rounded_sm()
-                                                    .px_4()
-                                                    .py_1()
-                                                    .text_xs()
-                                                    .child(
-                                                        Message::new(Key::TraceUpload)
-                                                            .arg("completed", uploaded_bytes)
-                                                            .arg("total", total_bytes)
-                                                            .display(locale),
-                                                    ),
-                                            )
-                                        })
                                         .child(
                                             div()
-                                                .absolute()
-                                                .top_3()
-                                                .left_4()
-                                                .max_w(relative(0.6))
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .text_sm()
-                                                .text_color(crate::theme::canvas_colors().1)
-                                                .child(
-                                                    Icon::new(IconName::Layers)
-                                                        .small()
-                                                        .flex_shrink_0(),
+                                                .id("board-canvas")
+                                                .relative()
+                                                .key_context("BoardViewport")
+                                                .track_focus(&self.focus)
+                                                .flex_1()
+                                                .min_h_0()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .border_1()
+                                                .border_color(self.canvas_background())
+                                                .bg(self.canvas_background())
+                                                .focus_visible(|style| {
+                                                    style.border_color(theme.ring)
+                                                })
+                                                .cursor(
+                                                    if self
+                                                        .pointer_gesture
+                                                        .as_ref()
+                                                        .is_some_and(|gesture| gesture.dragging)
+                                                    {
+                                                        CursorStyle::ClosedHand
+                                                    } else if self.pan_tool {
+                                                        CursorStyle::OpenHand
+                                                    } else if self.review.tool.is_some() {
+                                                        CursorStyle::Crosshair
+                                                    } else {
+                                                        CursorStyle::Arrow
+                                                    },
+                                                )
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::start_pan),
+                                                )
+                                                .on_mouse_down(
+                                                    MouseButton::Middle,
+                                                    cx.listener(Self::start_pan),
+                                                )
+                                                // Right-drag pans the 3D view only.
+                                                .on_mouse_down(
+                                                    MouseButton::Right,
+                                                    cx.listener(|this, event, window, cx| {
+                                                        if this.view3d.active {
+                                                            this.start_3d_drag(event, window, cx);
+                                                        }
+                                                    }),
+                                                )
+                                                .on_mouse_up(
+                                                    MouseButton::Right,
+                                                    cx.listener(|this, event, window, cx| {
+                                                        if this.view3d.active {
+                                                            this.stop_3d_drag(event, window, cx);
+                                                        }
+                                                    }),
+                                                )
+                                                .on_mouse_move(cx.listener(Self::move_pan))
+                                                .on_hover(cx.listener(
+                                                    |this, hovered: &bool, _, cx| {
+                                                        if !*hovered {
+                                                            this.pointer_position = None;
+                                                            this.hover_cancel.cancel();
+                                                            this.hovered = None;
+                                                            this.hover_notice = None;
+                                                            cx.notify();
+                                                        }
+                                                    },
+                                                ))
+                                                .on_mouse_up(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::stop_pan),
+                                                )
+                                                .on_mouse_up_out(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::cancel_pan),
+                                                )
+                                                .on_mouse_up(
+                                                    MouseButton::Middle,
+                                                    cx.listener(Self::stop_pan),
+                                                )
+                                                .on_mouse_up_out(
+                                                    MouseButton::Middle,
+                                                    cx.listener(Self::cancel_pan),
+                                                )
+                                                .on_scroll_wheel(cx.listener(Self::scroll))
+                                                .children(grid)
+                                                .child(viewport)
+                                                .children(review_overlay)
+                                                // Initial uploads must not resize the canvas after its first fit.
+                                                .when(
+                                                    !geometry_ready && failure.is_none(),
+                                                    |canvas| {
+                                                        canvas.child(
+                                                            div()
+                                                                .absolute()
+                                                                .top_10()
+                                                                .left_4()
+                                                                .max_w(relative(0.85))
+                                                                .truncate()
+                                                                .bg(theme.popover)
+                                                                .text_color(
+                                                                    theme.popover_foreground,
+                                                                )
+                                                                .rounded_sm()
+                                                                .px_4()
+                                                                .py_1()
+                                                                .text_xs()
+                                                                .child(
+                                                                    Message::new(Key::TraceUpload)
+                                                                        .arg(
+                                                                            "completed",
+                                                                            uploaded_bytes,
+                                                                        )
+                                                                        .arg("total", total_bytes)
+                                                                        .display(locale),
+                                                                ),
+                                                        )
+                                                    },
                                                 )
                                                 .child(
                                                     div()
-                                                        .min_w_0()
-                                                        .truncate()
-                                                        .child(canvas_breadcrumb),
-                                                ),
-                                        )
-                                        .when(!self.view3d.active, |canvas| {
-                                            canvas.child(axes_indicator(locale))
-                                        })
-                                        .when(!self.view3d.active, |canvas| {
-                                            canvas.child(
-                                                div()
-                                                    .absolute()
-                                                    .top_3()
-                                                    .left_4()
-                                                    .right_4()
-                                                    .flex()
-                                                    .justify_end()
-                                                    .child(
-                                                        canvas_bar(review_tools)
-                                                            .flex_wrap()
-                                                            .max_w_full(),
-                                                    ),
-                                            )
-                                        })
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .bottom_4()
-                                                .left_0()
-                                                .right_0()
-                                                .flex()
-                                                .justify_center()
+                                                        .absolute()
+                                                        .top_3()
+                                                        .left_4()
+                                                        .max_w(relative(0.6))
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .text_sm()
+                                                        .text_color(crate::theme::canvas_colors().1)
+                                                        .child(
+                                                            Icon::new(IconName::Layers)
+                                                                .small()
+                                                                .flex_shrink_0(),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .truncate()
+                                                                .child(canvas_breadcrumb),
+                                                        ),
+                                                )
+                                                .when(!self.view3d.active, |canvas| {
+                                                    canvas.child(axes_indicator(locale))
+                                                })
+                                                .when_some(view_cube, |canvas, cube| {
+                                                    canvas.child(
+                                                        div()
+                                                            .absolute()
+                                                            .top_3()
+                                                            .right_4()
+                                                            .child(cube),
+                                                    )
+                                                })
                                                 .child(
-                                                    canvas_bar(canvas_view_controls)
-                                                        .flex_wrap()
-                                                        .max_w_full(),
-                                                ),
-                                        )
-                                        .when_some(scale_bar, |canvas, scale| {
-                                            canvas.child(
+                                                    div()
+                                                        .absolute()
+                                                        .bottom_4()
+                                                        .left_0()
+                                                        .right_0()
+                                                        .flex()
+                                                        .justify_center()
+                                                        .child(
+                                                            canvas_bar(canvas_view_controls)
+                                                                .flex_wrap()
+                                                                .max_w_full(),
+                                                        ),
+                                                )
+                                                .when_some(scale_bar, |canvas, scale| {
+                                                    canvas.child(
                                                 div()
                                                     .absolute()
                                                     .right_4()
@@ -414,7 +468,9 @@ impl Render for BoardViewport {
                                                             ),
                                                     ),
                                             )
-                                        }),
+                                                }),
+                                        )
+                                        .children(length_table),
                                 ),
                         )
                         .when(!panels.right_collapsed, |group| {
@@ -497,61 +553,6 @@ impl Render for BoardViewport {
 }
 
 impl BoardViewport {
-    /// Zoom, fit, flip and view history, floating over the bottom of the board.
-    fn render_canvas_view_controls(
-        &self,
-        history: Vec<AnyElement>,
-        locale: pomelo_core::i18n::Locale,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        if self.view3d.active {
-            return self.render_3d_navigation(locale, cx);
-        }
-        let button = |id: &'static str, icon: IconName, key: Key, cx: &App| {
-            Button::new(id)
-                .custom(crate::theme::canvas_toolbar_button(cx))
-                .small()
-                .size_8()
-                .icon(icon)
-                .accessibility_label(text(locale, key))
-                .native_tooltip(text(locale, key))
-        };
-        let mut controls = vec![
-            button("zoom-out", IconName::Minus, Key::ZoomOut, cx)
-                .on_click(cx.listener(|this, _, _, cx| this.zoom(1.0 / 1.2, cx)))
-                .into_any_element(),
-            div()
-                .min_w_12()
-                .text_center()
-                .text_xs()
-                .child(
-                    Message::new(Key::ZoomPercent)
-                        .arg("percent", self.navigation.zoom_percent().round() as u64)
-                        .display(locale),
-                )
-                .into_any_element(),
-            button("zoom-in", IconName::Plus, Key::ZoomIn, cx)
-                .on_click(cx.listener(|this, _, _, cx| this.zoom(1.2, cx)))
-                .into_any_element(),
-            canvas_separator(),
-            button("canvas-fit", IconName::Scan, Key::FitBoard, cx)
-                .on_click(cx.listener(|this, _, window, cx| this.fit_board(&FitBoard, window, cx)))
-                .into_any_element(),
-            button("flip-board", IconName::FlipHorizontal2, Key::FlipBoard, cx)
-                .selected(self.navigation.camera().flipped)
-                .toggled(self.navigation.camera().flipped)
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.flip_board(&FlipBoard, window, cx)),
-                )
-                .into_any_element(),
-        ];
-        if !history.is_empty() {
-            controls.push(canvas_separator());
-            controls.extend(history);
-        }
-        controls
-    }
-
     fn render_status_bar(
         &self,
         ready: bool,
@@ -606,6 +607,34 @@ impl BoardViewport {
                         .child(coordinates),
                 )
             })
+            .when(self.view3d.active, |bar| {
+                let mode = super::view3d::controls::RENDER_MODES
+                    .iter()
+                    .find(|(mode, _, _)| *mode == self.view3d.settings.mode)
+                    .map_or(Key::RenderModeDefault, |(_, key, _)| *key);
+                bar.child(
+                    Message::new(Key::StatusView3d)
+                        .arg("mode", text(locale, mode))
+                        .arg(
+                            "scale",
+                            super::view3d::controls::format_scale(self.view3d.settings.z_scale),
+                        )
+                        .display(locale),
+                )
+            })
+            .when_some(
+                self.display
+                    .active_layer
+                    .filter(|_| !self.view3d.active)
+                    .and_then(|id| self.scene.layers.iter().find(|layer| layer.id == id)),
+                |bar, layer| {
+                    bar.child(
+                        Message::new(Key::StatusActiveLayer)
+                            .arg("layer", layer.display_name(locale))
+                            .display(locale),
+                    )
+                },
+            )
             .right(
                 TabBar::new("length-unit")
                     .segmented()
@@ -655,7 +684,7 @@ pub(super) fn canvas_bar(children: Vec<AnyElement>) -> Div {
         .children(children)
 }
 
-fn canvas_separator() -> AnyElement {
+pub(super) fn canvas_separator() -> AnyElement {
     div()
         // A one-pixel divider is a hairline, not spacing.
         .w(px(1.0))

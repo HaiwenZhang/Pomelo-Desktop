@@ -85,6 +85,7 @@ pub(crate) fn verify(
         camera,
         materials: Arc::new(vec![[0.0; 4], [1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]),
         z_scale: 1.0,
+        dielectric_only: false,
     };
     let mut pipeline = None;
     let sample = |image: &[u8], x: usize, y: usize| -> [u8; 4] {
@@ -213,6 +214,7 @@ pub(crate) fn verify(
         camera,
         materials,
         z_scale: 1.0,
+        dielectric_only: false,
     };
     pipeline = None;
     let pixels = render(&mut pipeline, &frame, false, 1.0);
@@ -271,6 +273,7 @@ pub(crate) fn verify(
         scene,
         camera,
         z_scale: 1.,
+        dielectric_only: false,
     };
     let smooth_frame = make_frame(smooth.clone(), camera);
     let flat_frame = make_frame(flat.clone(), camera);

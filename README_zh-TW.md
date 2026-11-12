@@ -1,152 +1,203 @@
 <p align="center">
-  <img src="crates/pomelo/assets/pomelo.svg" width="120" alt="Pomelo logo">
+  <img src="crates/pomelo/assets/pomelo.svg" width="112" alt="Pomelo 標誌">
 </p>
 
-<h1 align="center">Pomelo Desktop · PCB Viewer</h1>
+<h1 align="center">Pomelo Desktop</h1>
 
 <p align="center">
-  <strong>逐層看清每一處連接。</strong><br>
-  基於 GPUI 和 GPUI Kit 的本機唯讀 PCB 檢視器。
+  <strong>打開任何一塊 PCB，2D 與 3D 逐層看清。</strong><br>
+  為 Layout 工程師與 SI/PI 工程師打造的免費、開源、高速 PCB 檢視器。<br>
+  以 Rust 原生讀取 Allegro、Altium、ODB++、PADS、KiCad 與 HFSS EDB 檔案——不需廠商軟體，也不必上傳。
+</p>
+
+<p align="center">
+  <a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest"><img src="https://img.shields.io/github/v/release/HaiwenZhang/Pomelo-Desktop?label=download&color=58752c" alt="最新版本"></a>
+  <a href="https://github.com/HaiwenZhang/Pomelo-Desktop/actions/workflows/ci.yml"><img src="https://github.com/HaiwenZhang/Pomelo-Desktop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows、macOS、Linux">
+  <img src="https://img.shields.io/badge/GPU-D3D11%20%7C%20Metal%20%7C%20Vulkan-58752c" alt="D3D11、Metal、Vulkan">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README_zh-CN.md">简体中文</a> · 繁體中文 · <a href="README_ja.md">日本語</a> · <a href="README_ko.md">한국어</a></p>
 
-<p align="center"><a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases">下載發行版本</a></p>
+![Pomelo 3D 檢視中的 8 層 LPDDR4 電路板，左側為圖層矩陣，右側為 3D 顯示設定](images/pcb-example-3d.png)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="Windows, macOS, Linux">
-  <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI_Kit-58752c" alt="Rust + GPUI Kit">
-  <img src="https://img.shields.io/badge/rendering-D3D11%20%7C%20Metal%20%7C%20wgpu-58752c" alt="D3D11, Metal, wgpu">
-  <img src="https://img.shields.io/badge/status-in_development-d77d8a" alt="In development">
-</p>
+<p align="center"><a href="https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest"><b>⬇ 下載 Windows、macOS、Linux 版本</b></a> · <a href="#從原始碼建置">從原始碼建置</a> · <a href="#你可以做什麼">功能一覽</a></p>
 
-![Pomelo Desktop PCB 檢視器中的多層電路板](images/pcb-example-en.png)
+## 為什麼是 Pomelo
 
-## 更清晰地檢視電路板
+同事、供應商或舊專案傳來一個電路板檔案，你只是想**看一看**：追一條網路、查一個導通孔、看看 BGA 底下走了什麼。通常這代表要安裝一整套 EDA 軟體、找授權，或把設計上傳到別人的雲端。
 
-- **設計檔案留在本機。** 在電腦上匯入與檢視電路板，無須上傳；檢視操作不會修改原始檔案。
-- **原生 GPU 繪製。** 共用一套 WGSL 著色器顯示走線、圓弧、焊盤、導通孔、銅箔及孔洞、繪圖和 MSDF 板上文字；naga 為 D3D11 產生 HLSL、為 Metal 產生 MSL，wgpu 直接使用 WGSL。
-- **追蹤連接。** 搜尋網路與元件，定位搜尋結果，並檢查選取物件的屬性。
-- **控制顯示。** 管理圖層，依圖層或網路著色，調整銅箔透明度、焊盤填滿和標籤顯示。
-- **同時檢視多塊板。** 支援多文件、最近開啟的檔案與檢視偏好儲存，方便繼續檢視設計。
-- **選擇熟悉的語言。** 提供英文、簡體中文、繁體中文、日文、韓文介面，以及淺色和深色主題。
+Pomelo 直接在你的電腦上開啟檔案，並以 GPU 繪製。
 
-> **開發中：** 相容性、顯示精度、效能與各平台穩定性仍需驗證。本專案用於唯讀檢視，不編輯電路板或執行 DRC。見[開發說明](docs/development-progress.md)。
+- **原生解析，不依賴廠商軟體。** 所有匯入器都以 Rust 撰寫，不呼叫 Cadence、Altium 或 Ansys 的軟體，也不需要 JavaScript 引擎。
+- **設計檔留在本機。** 檔案不會離開你的電腦，Pomelo 也從不寫回原始檔案。
+- **真實大板依然流暢。** 走線、圓弧、焊墊、帶孔銅皮與板上文字透過同一套 WGSL 著色器，在 D3D11、Metal 或 Vulkan 上原生繪製。上百萬個物件的電路板仍可流暢操作。
+- **2D 與 3D 在同一個視窗。** 一鍵切換，位置、選取與圖層設定都保持不變。
+
+## 你可以做什麼
+
+### 在 2D 中審閱佈局
+
+- **快速定位**：搜尋網路與元件，或輸入 `x, y` 直接跳到座標。
+- **掌控每一層**：每個導體層一列矩陣，銅皮、走線、焊墊、導通孔、元件各自可填充、線框或隱藏；逐層不透明度；儲存可見性檢視；單層模式搭配 PageUp/PageDown 逐層切換。
+- **量測**：兩點距離、折線、物件淨距，以及沿走線與導通孔的接腳到接腳路徑長度。
+- **讀懂一條網路**：檢查器卡片一次呈現各層走線長度、每個導通孔實際連接哪些層、導通孔殘段、上下最近的參考平面與所有接腳。
+- **比較長度**：網路長度表把選取的網路與其差動對或匯流排並排比較，附各層長度與差值，可複製為 CSV。
+- **看清下方有什麼**：指標處疊構列出游標下每個導體層的內容；相鄰平面疊顯把走線上下的參考平面疊在一起看。
+- **分享結論**：醒目提示群組、命名檢視、檢視歷程、PNG/SVG 匯出與複製到剪貼簿。
+
+### 在 3D 中檢視疊構
+
+- **三種顯示模式**：預設（依各層不透明度）、線框（看穿內部）、實體。
+- **依需求拉伸 Z 軸**：只拉開介質層間距、銅厚維持真實，或整體拉伸；只影響顯示，讀數不變。
+- **像 CAD 一樣操作**：檢視立方體與九個標準方向，以滑鼠所在點為中心旋轉，右鍵/中鍵拖曳平移，在滑鼠處縮放。
+- **聚焦一個訊號**：隔離網路或元件及其經過的層，未選物件自動淡化，導通孔殘段另外標示。
+- **3D 量測**：吸附焊墊中心、導通孔中心、線端點與層表面，提供 ΔX、ΔY、ΔZ。
+- **應付大型設計**：3D 只為顯示中的層產生網格，開啟新層時自動補上；記憶體不足時降低細節而不是直接失敗，並說明簡化了什麼。
+
+![2D 檢視中選取網路的 14 層 DDR5 電路板](images/pcb-example-en.png)
+
+### 日常好用
+
+- 多文件分頁、附縮圖的最近檔案，重新開啟時還原每塊板的檢視狀態。
+- 繁體中文、简体中文、English、日本語、한국어 介面；淺色與深色主題。
+- 推斷出的分組（差動對、匯流排、電源與地）與假設的疊構厚度都會明確標示——Pomelo 呈現事實與假設，不做 DRC 判斷。
 
 ## 支援的格式
 
-支援 `.brd`、`.PcbDoc`、ODB++ 封存檔（`.tgz`、`.tar`、`.tar.gz`）、`.pcb`、`.kicad_pcb` 和 `edb.def`。匯入範圍取決於檔案版本與已儲存資料，未支援的內容透過診斷提示。
-
-所有格式解析均在 `crates/pomelo-import` 中使用 Rust 實作，無需 JavaScript 引擎或 Node.js。
-
-## 快速開始
-
-需要 Git 與儲存庫固定的 Rust **1.98.1**；依賴版本以 `Cargo.lock` 為準。
-
-| 平台 | 建置與執行條件 |
+| 工具 | 檔案 |
 | --- | --- |
-| Windows x64 | MSVC C++ 建置工具、Windows SDK、支援 Direct3D 11 的顯示卡與驅動程式 |
-| macOS | 支援 Metal 的 Mac、Xcode Command Line Tools |
-| Linux | fontconfig、FreeType、xkbcommon、Wayland/X11、ALSA、OpenSSL 開發套件與支援 Vulkan 的驅動程式 |
+| Cadence Allegro | `.brd`、`.mcm` |
+| Altium Designer | `.PcbDoc` |
+| ODB++ | `.tgz`、`.tar`、`.tar.gz` |
+| PADS | `.pcb` |
+| KiCad | `.kicad_pcb` |
+| Ansys HFSS 3D Layout / EDB | `edb.def` |
 
-下方建置命令適用於三個平台。macOS 的應用程式快捷鍵使用 Cmd 取代 Ctrl。
+匯入範圍取決於檔案版本與其中儲存的資料。尚未支援的內容會列在診斷面板中，而不是悄悄略過——歡迎[提交 Issue](https://github.com/HaiwenZhang/Pomelo-Desktop/issues) 並附上診斷資訊。
 
-```powershell
-git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
-cd Pomelo-Desktop
-cargo run -p pomelo --locked
+## 安裝
+
+從 [Releases](https://github.com/HaiwenZhang/Pomelo-Desktop/releases/latest) 下載對應平台的安裝套件：
+
+| 平台 | 套件 |
+| --- | --- |
+| Windows 10/11（x64、ARM64） | `.exe` 安裝程式 |
+| macOS 14+（Apple 晶片、Intel） | `.dmg` 或 `.app.zip` |
+| Ubuntu 24.04+（amd64、arm64） | `.deb` 或 `.tar.gz` |
+
+macOS 版本為 ad-hoc 簽署：第一次開啟時請以右鍵點選應用程式，選擇「打開」。
+
+以 **Ctrl+O**（macOS 為 ⌘O）、拖放到視窗或命令列開啟電路板：
+
+```sh
+pomelo --locale zh-TW --encoding auto "board.brd"
 ```
 
-使用 **Ctrl+O**、拖放或啟動檔案路徑開啟電路板。在應用程式選單或工具列中選擇介面語言。
+`--locale` 支援 `en`、`zh-CN`、`zh-TW`、`ja`、`ko`，只對本次啟動有效。`--encoding`（`auto`、`utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252`）可解決舊檔案名稱解碼錯誤的問題。`--` 之後的參數視為檔案路徑。
 
-```powershell
-cargo run -p pomelo --locked -- --locale zh-TW --encoding windows-1252 "example.brd"
-```
-
-`--locale` 支援 `en`、`zh-CN`、`zh-TW`、`ja`、`ko`，僅對本次啟動生效，不覆寫已儲存的語言偏好。`--encoding` 支援 `auto`、`utf-8`、`gbk`、`shift_jis`、`big5`、`windows-1252`，預設為 `auto`；自動識別不準確時可明確指定編碼。介面語言與來源編碼獨立，編碼選項適用於本次程序開啟的檔案。`--` 後的參數視為檔案路徑。
-
-## 快捷操作
+## 快速鍵
 
 | 操作 | 按鍵 |
 | --- | --- |
-| 開啟檔案 | `Ctrl+O` |
-| 關閉文件 | `Ctrl+W` |
-| 重新載入文件 | `Ctrl+R` |
-| 下一個／上一個文件 | `Ctrl+Tab / Ctrl+Shift+Tab` |
-| 縮放至電路板全貌 | `F2` |
-| 聚焦搜尋 | `Ctrl+K` |
-| 設定 | `Ctrl+,` |
-| 切換左側／右側面板 | `Ctrl+B / Ctrl+Shift+B` |
+| 開啟 / 關閉 / 重新載入 | `Ctrl+O` / `Ctrl+W` / `Ctrl+R` |
+| 搜尋，或跳到 `x, y` | `Ctrl+K` |
+| 適配整板 | `F2` |
+| 翻轉電路板 | `B` |
+| 單層模式 / 切換作用層 | `L` / `PageUp` `PageDown` |
+| 量測距離 / 折線 / 淨距 | `M` / `P` / `C` |
+| 接腳到接腳路徑長度 | `Shift+L` |
+| 框選 / 框選放大 | `S` / `Z` |
+| 下一個重疊物件 | `N`（2D）、再次點擊（3D） |
+| 檢視歷程上一步 / 下一步 | `Alt+←` / `Alt+→` |
+| 切換左側 / 右側面板 | `Ctrl+B` / `Ctrl+Shift+B` |
+| 3D：旋轉 / 平移 / 縮放 | 左鍵拖曳 / 右鍵或中鍵拖曳 / 滾輪 |
 
-## 建置與開發
+在 macOS 上以 ⌘ 取代 Ctrl。
 
-依賴版本與來源以 `Cargo.toml` 和 `Cargo.lock` 為準。見 [GPUI 依賴說明](docs/gpui-dependencies.md)及[GPU 後端](docs/native-gpu-backends.md)。
+## 從原始碼建置
 
-```powershell
-cargo build -p pomelo --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo run -p pomelo-import --bin pcb_inspect --locked -- --help
+需要 Git 與儲存庫固定的 Rust **1.98.1** 工具鏈（`rustup` 會自動安裝）。
+
+| 平台 | 另需 |
+| --- | --- |
+| Windows | MSVC C++ 建置工具、Windows SDK、支援 Direct3D 11 的顯示卡 |
+| macOS | Xcode Command Line Tools、支援 Metal 的 Mac |
+| Linux | fontconfig、FreeType、xkbcommon、Wayland/X11、ALSA、OpenSSL 開發套件，以及 Vulkan 驅動程式 |
+
+```sh
+git clone https://github.com/HaiwenZhang/Pomelo-Desktop.git
+cd Pomelo-Desktop
+cargo run -p pomelo --release --locked
 ```
 
-### Release 打包
+CI 使用的檢查：
 
-| 平台／架構 | 產物 | 指令 |
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+`cargo run -p pomelo-import --bin pcb_inspect --locked -- --help` 可在命令列檢查檔案。
+
+<details>
+<summary>發佈打包</summary>
+
+| 平台 | 套件 | 命令 |
 | --- | --- | --- |
-| Windows x64 | `.exe` | `scripts\build-windows.bat` |
-| Windows ARM64 | `.exe` | `scripts\build-windows.bat --arch arm64` |
-| macOS arm64 / x64 | `.dmg`, `.app.zip` | `scripts/build-macos.sh` |
-| Ubuntu 24.04+ amd64 / arm64 | `.deb`, `.tar.gz` | `scripts/build-ubuntu.sh` |
+| Windows x64 / ARM64 | `.exe` | `scripts\build-windows.bat`（`--arch arm64`） |
+| macOS arm64 / x64 | `.dmg`、`.app.zip` | `scripts/build-macos.sh` |
+| Ubuntu 24.04+ amd64 / arm64 | `.deb`、`.tar.gz` | `scripts/build-ubuntu.sh` |
 
-需要 Rust 與各平台原生建置相依套件；macOS 另需 ImageMagick，Windows 另需 Inno Setup 6，Ubuntu 另需 `dpkg-dev` 和 `desktop-file-utils`。產物輸出至 `dist`。
+macOS 打包需要 ImageMagick，Windows 需要 Inno Setup 6，Ubuntu 需要 `dpkg-dev` 與 `desktop-file-utils`。產物輸出到 `dist`。腳本支援 `--offline`、`--toolchain NAME`、`--output-dir PATH` 與 `--binary PATH`。macOS 預設 ad-hoc 簽署（`MACOS_SIGNING_IDENTITY` 指定鑰匙圈中的簽署身分），最低支援 macOS 14.0。Ubuntu 發佈版在 24.04 上建置以維持其 ABI 基準。
 
-Shell 腳本支援 `--offline`、`--toolchain NAME`、`--output-dir PATH`，以及 `--binary PATH` 打包既有程式。正式建置使用 `cargo build --release --locked`，不需要 Python。
+推送與工作區版本一致的 `vX.Y.Z` 標籤會觸發[發佈流程](.github/workflows/release.yml)，建置所有平台並發佈套件與 `SHA256SUMS`。
 
-Ubuntu Release 固定在 24.04 建置，維持 24.04 的 ABI 基線，並於 CI 檢查 26.04 安裝與執行。若本機在更新的 Ubuntu 建置，可能引入更新的函式庫版本需求。
+</details>
 
-macOS 預設臨時簽名，最低版本為 macOS 14.0。可設定 `MACOS_SIGNING_IDENTITY` 使用鑰匙圈中的簽名身分，尚未設定 Apple 公證。
+## 運作方式
 
-[Release 工作流程](.github/workflows/release.yml)：推送 `vX.Y.Z` 標籤後建置全部平台，通過驗證後發佈安裝包與 `SHA256SUMS`；標籤必須與 `Cargo.toml` 的 workspace 版本一致。手動觸發僅上傳 Actions 產物。
-
-## 專案結構與文件
-
-| 目錄 | 用途 |
+| Crate | 作用 |
 | --- | --- |
-| [crates/pomelo-core](crates/pomelo-core) | 電路板模型、搜尋、選取與國際化 |
-| [crates/pomelo-import](crates/pomelo-import) | 檔案匯入與診斷 |
-| [crates/pomelo-render](crates/pomelo-render) | 場景準備與 D3D11、Metal、wgpu 繪製 |
-| [crates/pomelo](crates/pomelo) | GPUI 桌面應用程式與文件管理 |
-| [locales](locales) | 五種語言的介面資源 |
-| [docs](docs) | 通用開發說明 |
+| [pomelo-import](crates/pomelo-import) | 各格式的原生 Rust 解析器與結構化診斷 |
+| [pomelo-core](crates/pomelo-core) | 電路板模型、搜尋、選取、網路分析、審閱工具與多語系 |
+| [pomelo-render](crates/pomelo-render) | 2D 與 3D 場景準備；以同一套 WGSL 著色器實作的 D3D11、Metal、wgpu 繪製器（naga 轉換為 HLSL 與 MSL） |
+| [pomelo](crates/pomelo) | 以 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 與 [GPUI Kit](https://github.com/longbridge/gpui-kit) 建構的桌面應用程式 |
 
-- [文件](docs/README.md)
-- [開發進度與驗證範圍](docs/development-progress.md)
-- [i18n](docs/i18n.md)
-- [GPU](docs/native-gpu-backends.md)
+設計文件見 [docs](docs/README.md)，包含 [2D/3D 統一檢視計畫](docs/viewer-2d-3d-unified-ui-plan.md)、[3D 繪製設計](docs/pcb-3d-rendering-design.md)與 [GPU 後端](docs/native-gpu-backends.md)。
 
-## 開發計畫
+## 狀態與路線圖
 
-以下為待開發或待補齊的能力，不代表已交付功能。
+Pomelo 正在積極開發中。格式相容性、顯示精度與各平台穩定性仍在驗證，依賴任何讀數之前請與原始工具核對。
 
-| 階段 | 計畫內容 |
-| --- | --- |
-| 日常審閱 | 兩點與折線測量、物件淨距、任意多選、持久多組高亮 |
-| 檢視與輸出 | 命名視圖、導覽歷史、自訂顯示、截圖與輕量本機匯出 |
-| 工程資訊 | 屬性查詢、逐層焊盤結構、物理疊層、網路分組、連接拓撲與指定路徑長度 |
-| 持續改善 | 檔案相容性、大型場景效能、跨平台穩定性、鍵盤操作與五語介面 |
+接下來：
 
-詳細優先順序與功能邊界見[審閱能力規劃](docs/viewer-review-capabilities-plan.md)，實作與驗收要求見[開發設計](docs/viewer-review-development-design.md)。
+- 讀取原始檔案中的真實疊構厚度與材料，支援多區域疊構
+- 3D 剖切平面與截面
+- 2D/3D 連動分割畫面
+- 依封裝高度與 3D 模型顯示元件
+- 對單層就特別大的電路板，依區域載入 3D
 
-功能圍繞唯讀檢視與審閱，不編輯來源設計或執行 DRC。
+Pomelo 始終是檢視器：不編輯設計、不佈線、不做 DRC。
 
 ## 參與貢獻
 
-歡迎改善檔案相容性、繪製精度、效能、翻譯與文件。[回報問題](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)時，請附上來源工具與檔案版本、作業系統和 GPU 資訊、重現步驟及匯入診斷。小型範例或對照截圖有助於定位問題；分享前請移除機密設計資料。解析或幾何變更應提供針對性的回歸測試，視覺變更應附截圖，並保持五種語言的 README 同步。
+每多一個能順利開啟的電路板檔案，所有人都受益。可以從這些地方開始：
+
+- **格式相容**：[提交 Issue](https://github.com/HaiwenZhang/Pomelo-Desktop/issues)，寫明原始工具與版本、作業系統與顯示卡、預期結果，並附上匯入診斷。小樣本或原始工具截圖很有幫助；分享前請移除機密資料。
+- **繪製與效能**：視覺改動請附前後對照截圖，大板改動請附耗時數據。
+- **翻譯**：介面文字都在 [locales](locales)；五個 README 保持同步。
+
+解析與幾何相關的改動需要附上對應的回歸測試。請參考[開發進展](docs/development-progress.md)與[驗證方法](docs/validation-guide.md)。
+
+如果 Pomelo 讓你不必為了看一眼電路板而安裝整套 EDA 軟體，**按個 ⭐ 能幫更多人找到它。**
 
 ## 授權
 
-Copyright (c) 2026 HaiwenZhang。專案程式碼採用 [Apache 2.0 授權條款](LICENSE)（`Apache-2.0`）。內附字型保留各自的授權，詳見[思源黑體](assets/fonts/source-han-sans/README.md)。
+Copyright (c) 2026 HaiwenZhang。專案程式碼採用 [Apache License 2.0](LICENSE) 授權。隨附字型保留各自的授權，見 [Source Han Sans](assets/fonts/source-han-sans/README.md)。
 
 ## 致謝
 
-感謝 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 和 [GPUI Kit](https://github.com/longbridge/gpui-kit) 專案，為 Pomelo Desktop 提供 GPU 加速的 UI 框架和 UI 元件。
+以 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 與 [GPUI Kit](https://github.com/longbridge/gpui-kit) 建構。

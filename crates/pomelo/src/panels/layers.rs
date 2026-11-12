@@ -5,13 +5,12 @@ use gpui_kit::base::Selectable;
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable,
     button::{Button, ButtonVariants},
-    checkbox::Checkbox,
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pomelo_core::{
-    display::{LayerPrimitive, LayerPrimitives},
+    display::{CellMode, LayerPrimitive},
     i18n::{Locale, Message, MessageKey, text},
     model::LayerId,
 };
@@ -46,7 +45,9 @@ pub struct GroupHeader {
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type SharedClickHandler = std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type VisibilityHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
-type PrimitiveHandler = Box<dyn Fn(&(LayerPrimitive, bool), &mut Window, &mut App)>;
+/// Receives the clicked matrix column and whether Alt was held (fill/outline).
+pub type CellHandler = Box<dyn Fn(&(LayerPrimitive, bool), &mut Window, &mut App)>;
+type OpacityHandler = Box<dyn Fn(&f32, &mut Window, &mut App)>;
 /// Receives the click, for its modifiers, and the requested visibility.
 type LayerVisibilityHandler = Box<dyn Fn(&ClickEvent, bool, &mut Window, &mut App)>;
 
@@ -148,15 +149,21 @@ pub struct LayerRow {
     pub color: Option<[f32; 4]>,
     pub expanded: bool,
     pub active: bool,
-    pub primitives: LayerPrimitives,
-    /// Material color controls, one per primitive in [`PRIMITIVES`] order.
+    /// Matrix cells in [`LayerPrimitive::MATRIX`] order; conductor layers only.
+    pub cells: Option<[CellMode; 5]>,
+    /// Layer opacity for conductor layers.
+    pub opacity: Option<f32>,
+    /// Material color controls, one per entry in [`COLOR_ROWS`] order.
     pub colors: Vec<AnyElement>,
 }
 
 pub struct LayerCommands {
     pub activate: ClickHandler,
     pub expand: ClickHandler,
-    pub primitive: PrimitiveHandler,
+    /// Show this layer only, from a double click on its name.
+    pub solo: ClickHandler,
+    pub cell: CellHandler,
+    pub opacity: OpacityHandler,
     /// Receives the requested visibility; the click also carries modifiers
     /// so the owner can isolate the layer.
     pub visibility: LayerVisibilityHandler,
@@ -164,15 +171,168 @@ pub struct LayerCommands {
     pub to_top: ClickHandler,
 }
 
-const PRIMITIVES: [(LayerPrimitive, MessageKey); 3] = [
-    (LayerPrimitive::Traces, MessageKey::LayerTraces),
-    (LayerPrimitive::Pads, MessageKey::LayerPads),
-    (LayerPrimitive::Vias, MessageKey::LayerVias),
+/// Color rows disclosed under a layer; traces share their color with copper.
+const COLOR_ROWS: [MessageKey; 3] = [
+    MessageKey::LayerTraces,
+    MessageKey::LayerPads,
+    MessageKey::LayerVias,
 ];
+
+/// Column name and one-character heading for each matrix column.
+pub fn matrix_labels(kind: LayerPrimitive) -> (MessageKey, MessageKey) {
+    match kind {
+        LayerPrimitive::Copper => (MessageKey::MatrixCopper, MessageKey::MatrixCopperShort),
+        LayerPrimitive::Traces => (MessageKey::MatrixTraces, MessageKey::MatrixTracesShort),
+        LayerPrimitive::Pads => (MessageKey::MatrixPads, MessageKey::MatrixPadsShort),
+        LayerPrimitive::Vias => (MessageKey::MatrixVias, MessageKey::MatrixViasShort),
+        LayerPrimitive::Components => (
+            MessageKey::MatrixComponents,
+            MessageKey::MatrixComponentsShort,
+        ),
+    }
+}
+
+/// Opacity choices offered from a layer's menu.
+pub const OPACITY_STEPS: [f32; 5] = [1.0, 0.7, 0.5, 0.3, 0.1];
+
+/// Width of one matrix column, shared by headings and cells so they line up.
+const CELL: f32 = 18.0;
+
+/// A clickable matrix slot; a plain element keeps the full width for its content.
+fn matrix_slot(
+    id: impl Into<ElementId>,
+    label: String,
+    kind: LayerPrimitive,
+    handler: std::rc::Rc<CellHandler>,
+    cx: &App,
+) -> Stateful<Div> {
+    let hover = cx.theme().list_hover;
+    let tooltip: SharedString = label.into();
+    div()
+        .id(id.into())
+        .w(px(CELL))
+        .h_5()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+        })
+        .on_click(move |event, window, cx| handler(&(kind, event.modifiers().alt), window, cx))
+}
+
+/// One matrix cell: filled square, outlined square or an empty slot.
+fn cell_button(
+    id: impl Into<ElementId>,
+    kind: LayerPrimitive,
+    mode: CellMode,
+    locale: Locale,
+    handler: std::rc::Rc<CellHandler>,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let (name, _) = matrix_labels(kind);
+    let state = match mode {
+        CellMode::Fill => MessageKey::CellFilled,
+        CellMode::Outline => MessageKey::CellOutline,
+        CellMode::Hidden => MessageKey::CellHidden,
+    };
+    let label = Message::new(MessageKey::MatrixCellHint)
+        .arg("name", text(locale, name))
+        .arg("state", text(locale, state))
+        .display(locale);
+    let border = match mode {
+        CellMode::Hidden => theme.muted_foreground.opacity(0.5),
+        _ => theme.primary,
+    };
+    let fill = theme.primary;
+    matrix_slot(id, label, kind, handler, cx).child(
+        div()
+            .size_2p5()
+            .rounded_sm()
+            .border_1()
+            .border_color(border)
+            .when(mode == CellMode::Fill, |square| square.bg(fill)),
+    )
+}
+
+/// Column headings above the conductor layers; a click applies to the whole column.
+pub fn matrix_header(
+    locale: Locale,
+    columns: [CellMode; 5],
+    handler: CellHandler,
+    cx: &App,
+) -> AnyElement {
+    let handler = std::rc::Rc::new(handler);
+    let theme = cx.theme();
+    div()
+        .w_full()
+        .px_2()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .pl_1()
+                .pr_1()
+                .h_6()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .pl_7()
+                        .child(text(locale, MessageKey::MatrixHeading)),
+                )
+                .child(
+                    div().flex().flex_shrink_0().children(
+                        LayerPrimitive::MATRIX
+                            .into_iter()
+                            .zip(columns)
+                            .map(|(kind, mode)| {
+                                let (name, short) = matrix_labels(kind);
+                                let label = Message::new(MessageKey::MatrixColumnHint)
+                                    .arg("name", text(locale, name))
+                                    .display(locale);
+                                matrix_slot(
+                                    ("matrix-column", kind as u32),
+                                    label,
+                                    kind,
+                                    handler.clone(),
+                                    cx,
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(if mode == CellMode::Hidden {
+                                            theme.muted_foreground
+                                        } else {
+                                            theme.foreground
+                                        })
+                                        .child(text(locale, short)),
+                                )
+                            }),
+                    ),
+                )
+                // Lines up with the layer menu button of each row.
+                .child(div().w_6().flex_shrink_0()),
+        )
+        .into_any_element()
+}
 
 pub fn row(locale: Locale, state: LayerRow, commands: LayerCommands, cx: &App) -> AnyElement {
     let visible = state.visible;
-    let primitive = std::rc::Rc::new(commands.primitive);
+    let cell = std::rc::Rc::new(commands.cell);
+    let opacity_command = std::rc::Rc::new(commands.opacity);
+    let solo = commands.solo;
+    let expand = commands.expand;
     let to_bottom: SharedClickHandler = commands.to_bottom.into();
     let to_top: SharedClickHandler = commands.to_top.into();
     let activate: SharedClickHandler = commands.activate.into();
@@ -252,18 +412,59 @@ pub fn row(locale: Locale, state: LayerRow, commands: LayerCommands, cx: &App) -
                                 .when(muted, |label| label.text_color(theme.muted_foreground))
                                 .child(state.label),
                         )
-                        .child(
-                            Icon::new(if state.expanded {
-                                IconName::ChevronUp
-                            } else {
-                                IconName::ChevronDown
-                            })
-                            .xsmall()
-                            .text_color(theme.muted_foreground),
-                        ),
+                        // Matrix rows need the width for the name; a click still discloses colors.
+                        .when(state.cells.is_none(), |label| {
+                            label.child(
+                                Icon::new(if state.expanded {
+                                    IconName::ChevronUp
+                                } else {
+                                    IconName::ChevronDown
+                                })
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                            )
+                        }),
                 )
-                .on_click(commands.expand),
+                .on_click(move |event, window, cx| {
+                    if event.click_count() >= 2 {
+                        solo(event, window, cx)
+                    } else {
+                        expand(event, window, cx)
+                    }
+                }),
         )
+        .when_some(state.opacity.filter(|alpha| *alpha < 1.0), |row, alpha| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        Message::new(MessageKey::UiPercent)
+                            .arg("value", (alpha * 100.0).round() as u32)
+                            .display(locale),
+                    ),
+            )
+        })
+        .when_some(state.cells, |row, cells| {
+            row.child(
+                div().flex().flex_shrink_0().children(
+                    LayerPrimitive::MATRIX
+                        .into_iter()
+                        .zip(cells)
+                        .map(|(kind, mode)| {
+                            cell_button(
+                                ("layer-cell", state.id.0 as u64 * 8 + kind as u64),
+                                kind,
+                                mode,
+                                locale,
+                                cell.clone(),
+                                cx,
+                            )
+                        }),
+                ),
+            )
+        })
         .child(
             Button::new(("layer-order", state.id.0))
                 .ghost()
@@ -292,6 +493,24 @@ pub fn row(locale: Locale, state: LayerRow, commands: LayerCommands, cx: &App) -
                             .disabled(state.at_bottom)
                             .on_click(move |event, window, cx| to_bottom(event, window, cx)),
                     )
+                    .when_some(state.opacity, |mut menu, current| {
+                        menu = menu
+                            .separator()
+                            .label(text(locale, MessageKey::LayerOpacity));
+                        for step in OPACITY_STEPS {
+                            let command = opacity_command.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(
+                                    Message::new(MessageKey::UiPercent)
+                                        .arg("value", (step * 100.0).round() as u32)
+                                        .display(locale),
+                                )
+                                .checked((current - step).abs() < 0.005)
+                                .on_click(move |_, window, cx| command(&step, window, cx)),
+                            );
+                        }
+                        menu
+                    })
                 }),
         );
     let mut colors = state.colors.into_iter();
@@ -310,28 +529,14 @@ pub fn row(locale: Locale, state: LayerRow, commands: LayerCommands, cx: &App) -
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .children(PRIMITIVES.into_iter().map(|(kind, label)| {
-                        let command = primitive.clone();
+                    .children(COLOR_ROWS.into_iter().map(|label| {
                         div()
                             .flex()
                             .items_center()
                             .justify_between()
                             .gap_2()
                             .min_h_7()
-                            .child(
-                                Checkbox::new((
-                                    "layer-primitive",
-                                    state.id.0 as u64 * 3 + kind as u64,
-                                ))
-                                .small()
-                                .label(text(locale, label))
-                                .checked(state.primitives.visible(kind))
-                                .on_change(
-                                    move |enabled, window, cx| {
-                                        command(&(kind, *enabled), window, cx)
-                                    },
-                                ),
-                            )
+                            .child(div().text_sm().child(text(locale, label)))
                             .children(colors.next())
                     })),
             )

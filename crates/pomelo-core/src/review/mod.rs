@@ -5,11 +5,15 @@ pub mod clearance;
 pub mod export;
 pub mod highlight;
 pub mod measure;
+pub mod net_groups;
+pub mod net_report;
 pub mod selection_set;
 pub mod views;
+pub mod visibility;
 
 use highlight::{HighlightGroup, MAX_DOCUMENT_MEMBERS, MAX_HIGHLIGHT_GROUPS};
 use views::{MAX_NAMED_VIEWS, NamedView};
+use visibility::{MAX_VISIBILITY_VIEWS, VisibilityView};
 
 /// Review state saved with a document's view. Older saved views without it
 /// restore with no groups or named views.
@@ -18,6 +22,9 @@ use views::{MAX_NAMED_VIEWS, NamedView};
 pub struct ReviewState {
     pub highlight_groups: Vec<HighlightGroup>,
     pub named_views: Vec<NamedView>,
+    /// Saved layer, category and net visibility without a camera.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub visibility_views: Vec<VisibilityView>,
     /// Next identity for a group or view; identities are never reused in a document.
     pub next_id: u32,
 }
@@ -28,13 +35,16 @@ impl ReviewState {
             .highlight_groups
             .iter()
             .map(|group| group.id)
-            .chain(self.named_views.iter().map(|view| view.id));
+            .chain(self.named_views.iter().map(|view| view.id))
+            .chain(self.visibility_views.iter().map(|view| view.id));
         let mut seen = std::collections::BTreeSet::new();
         self.highlight_groups.len() <= MAX_HIGHLIGHT_GROUPS
             && self.named_views.len() <= MAX_NAMED_VIEWS
             && self.highlight_groups.iter().all(HighlightGroup::valid)
             && self.member_count() <= MAX_DOCUMENT_MEMBERS
             && self.named_views.iter().all(NamedView::valid)
+            && self.visibility_views.len() <= MAX_VISIBILITY_VIEWS
+            && self.visibility_views.iter().all(VisibilityView::valid)
             && ids
                 .into_iter()
                 .all(|id| id < self.next_id && seen.insert(id))
@@ -55,7 +65,9 @@ impl ReviewState {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.highlight_groups.is_empty() && self.named_views.is_empty()
+        self.highlight_groups.is_empty()
+            && self.named_views.is_empty()
+            && self.visibility_views.is_empty()
     }
 }
 

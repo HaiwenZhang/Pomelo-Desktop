@@ -9,7 +9,7 @@ use pomelo_core::{
     selection::SelectedObject,
     task::CancellationToken,
 };
-use pomelo_render::scene::board3d::{PreparedBoard3d, PreviewStackup};
+use pomelo_render::scene::board3d::{MaterialOptions, PreparedBoard3d, PreviewStackup, ZMap};
 
 #[test]
 fn solid_via_pads_share_meshes_while_their_body_profiles_remain_distinct() {
@@ -267,7 +267,8 @@ fn all_via_profiles_are_solid_and_do_not_cut_zones_or_traces() {
             &CancellationToken::default(),
         )
         .unwrap();
-        let materials = solid.materials(&input, &BoardDisplay::default(), false, None, None);
+        let materials =
+            solid.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
         let ray = |x, y| PickRay3d {
             origin: [x, y, 10.0],
             direction: [0.0, 0.0, -1.0],
@@ -328,7 +329,8 @@ fn all_via_profiles_are_solid_and_do_not_cut_zones_or_traces() {
             &CancellationToken::default(),
         )
         .unwrap();
-        let materials = blind.materials(&input, &BoardDisplay::default(), false, None, None);
+        let materials =
+            blind.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
         assert_eq!(
             blind.pick(ray(1.5, 1.5), &materials, Default::default()),
             Some(SelectedObject::Segment(ObjectId(1))),
@@ -355,7 +357,7 @@ fn pin_holes_remain_cut_out_of_the_3d_preview() {
         &CancellationToken::default(),
     )
     .unwrap();
-    let materials = solid.materials(&input, &BoardDisplay::default(), false, None, None);
+    let materials = solid.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
     assert!(
         solid
             .pick(
@@ -400,7 +402,7 @@ fn whole_board_can_exceed_page_limits_and_zone_parts_preserve_triangles_and_hole
         paged
             .meshes
             .iter()
-            .all(|m| m.vertices.len() <= 24 && m.indices.len() <= 36)
+            .all(|m| m.vertices.len() <= 24 && m.triangle_index_count() <= 36)
     );
     input.zones = vec![square_zone(999, 0.0, 20.0, true)];
     input.bounds.max = Point::new(20.0, 20.0);
@@ -430,7 +432,7 @@ fn whole_board_can_exceed_page_limits_and_zone_parts_preserve_triangles_and_hole
         original.mesh.indices.len(),
         "paging must not add boundary walls or drop triangles"
     );
-    let colors = board.materials(&input, &BoardDisplay::default(), false, None, None);
+    let colors = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
     let ray = |x, y| PickRay3d {
         origin: [x, y, 10.0],
         direction: [0.0, 0.0, -1.0],
@@ -472,7 +474,7 @@ fn repeated_pads_and_vias_use_shared_geometry_and_keep_source_identity() {
         100
     );
     assert!((board.bounds.max[2] - 0.8).abs() < 1e-9 && (board.bounds.min[2] + 0.8).abs() < 1e-9);
-    let materials = board.materials(&source, &BoardDisplay::default(), false, None, None);
+    let materials = board.materials(&source, &BoardDisplay::default(), &MaterialOptions::plain());
     let ray = PickRay3d {
         origin: [2.0, 0.0, 10.0],
         direction: [0.0, 0.0, -1.0],
@@ -487,7 +489,7 @@ fn repeated_pads_and_vias_use_shared_geometry_and_keep_source_identity() {
     assert_eq!(
         board.pick(
             ray,
-            &board.materials(&source, &display, false, None, None),
+            &board.materials(&source, &display, &MaterialOptions::plain()),
             Default::default()
         ),
         None
@@ -503,9 +505,10 @@ fn repeated_pads_and_vias_use_shared_geometry_and_keep_source_identity() {
             &board.materials(
                 &source,
                 &display,
-                false,
-                Some(SelectedObject::Segment(ObjectId(1))),
-                None
+                &MaterialOptions {
+                    selected: Some(SelectedObject::Segment(ObjectId(1))),
+                    ..MaterialOptions::plain()
+                }
             ),
             Default::default()
         ),
@@ -562,7 +565,7 @@ fn straight_traces_share_capsules_under_a_bounded_budget_and_pick_stretched_ends
     assert_eq!(board.meshes.len(), 1);
     assert!(board.vertex_count() < 256);
     assert!(board.upload_bytes() < 1024 * 1024);
-    let materials = board.materials(&input, &BoardDisplay::default(), false, None, None);
+    let materials = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
     for (i, segment) in input.segments.iter().enumerate().take(3) {
         let delta = Point::new(segment.b.x - segment.a.x, segment.b.y - segment.a.y);
         let length = segment.a.distance(segment.b);
@@ -618,7 +621,7 @@ fn paged_frustum_results_match_bruteforce_and_reduce_local_work() {
         let mut camera = Camera3d::new([10.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0], 10.0).unwrap();
         camera.set_view(direction);
         board
-            .visible_pages(camera, [100.0; 2], 5.0, &mut visible)
+            .visible_pages(camera, [100.0; 2], ZMap::linear(5.0), &mut visible)
             .unwrap();
         assert!(visible.len() < board.pages.len() / 2);
         let expected: std::collections::BTreeSet<_> = board
@@ -800,7 +803,7 @@ fn parallel_preparation_preserves_geometry_ownership_and_empty_layer_warnings() 
         assert_ne!(serial.sources[1].object, parallel.sources[1].object);
     }
     let materials = |scene: &PreparedBoard3d| {
-        scene.materials(&input, &BoardDisplay::default(), false, None, None)
+        scene.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain())
     };
     for [x, y] in [
         [0.1, 0.1],
@@ -973,4 +976,181 @@ fn circle_lod_uses_subpixel_error_and_preserves_full_precision_picking() {
     for part in &scene.parts {
         assert!((part.indices.end as usize) <= scene.meshes[part.mesh].fine_index_count());
     }
+}
+
+#[test]
+fn dielectric_slabs_fill_each_gap_and_are_never_picked() {
+    let input = source();
+    let cancel = CancellationToken::default();
+    let board = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup {
+            dielectric: true,
+            ..Default::default()
+        },
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    let slabs: Vec<_> = board.sources.iter().filter(|s| s.dielectric).collect();
+    assert_eq!(slabs.len(), board.layers.len() - 1);
+    let options = MaterialOptions {
+        show_dielectric: true,
+        ..MaterialOptions::plain()
+    };
+    let materials = board.materials(&input, &BoardDisplay::default(), &options);
+    for (i, source) in board.sources.iter().enumerate() {
+        if source.dielectric {
+            assert!(materials[i + 1][3] > 0.0 && materials[i + 1][3] < 1.0);
+        }
+    }
+    // Rays through the middle of the stack hit copper or nothing, never a slab.
+    let center = input.bounds.center();
+    let ray = PickRay3d {
+        origin: [center.x, center.y, 10.0],
+        direction: [0.0, 0.0, -1.0],
+        length: 20.0,
+    };
+    let hit = board.pick(ray, &materials, Default::default());
+    assert!(hit.is_none_or(|object| {
+        !board
+            .sources
+            .iter()
+            .any(|s| s.dielectric && s.object == object)
+    }));
+    let hidden = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
+    for (i, source) in board.sources.iter().enumerate() {
+        if source.dielectric {
+            assert_eq!(hidden[i + 1][3], 0.0);
+        }
+    }
+}
+
+#[test]
+fn cpu_raster_draws_visible_copper_and_leaves_hidden_scenes_as_background() {
+    use pomelo_core::interaction::camera3d::{Camera3d, CameraView3d};
+    use pomelo_render::scene::board3d::raster::{RasterRequest, rasterize};
+    let input = source();
+    let cancel = CancellationToken::default();
+    let board = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    let mut camera = Camera3d::default();
+    camera.set_view(CameraView3d::Top);
+    let z_map = ZMap::linear(5.0);
+    assert!(camera.fit(z_map.bounds(board.bounds), [64.0, 64.0], 2.0));
+    let materials = board.materials(&input, &BoardDisplay::default(), &MaterialOptions::plain());
+    let background = [0.0, 0.0, 0.0, 1.0];
+    fn request(
+        camera: Camera3d,
+        z_map: ZMap,
+        materials: &[[f32; 4]],
+        background: [f32; 4],
+    ) -> RasterRequest<'_> {
+        RasterRequest {
+            camera,
+            z_map,
+            materials,
+            size: [64, 64],
+            background,
+        }
+    }
+    let image = rasterize(
+        &board,
+        &request(camera, z_map, &materials, background),
+        &cancel,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(image.len(), 64 * 64 * 4);
+    let drawn = image
+        .chunks(4)
+        .filter(|px| px[0] != 0 || px[1] != 0 || px[2] != 0)
+        .count();
+    assert!(drawn > 0, "copper must cover some pixels");
+    let hidden = vec![[0.0; 4]; materials.len()];
+    let empty = rasterize(
+        &board,
+        &request(camera, z_map, &hidden, background),
+        &cancel,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(empty.chunks(4).all(|px| px == [0, 0, 0, 255]));
+}
+
+#[test]
+fn large_zones_split_into_tiles_outline_only_their_boundary() {
+    // A zone with a grid of holes triangulates into many triangles across tiles.
+    let square = |x: f64, y: f64, s: f64| {
+        vec![
+            Point::new(x, y),
+            Point::new(x + s, y),
+            Point::new(x + s, y + s),
+            Point::new(x, y + s),
+        ]
+    };
+    let mut rings = vec![square(-60.0, -60.0, 120.0)];
+    let holes: Vec<(f64, f64)> = (0..6)
+        .flat_map(|i| (0..6).map(move |j| (-50.0 + 18.0 * i as f64, -50.0 + 18.0 * j as f64)))
+        .collect();
+    rings.extend(holes.iter().map(|(x, y)| square(*x, *y, 4.0)));
+    let mut input = source();
+    input.segments.clear();
+    input.pins.clear();
+    input.vias.clear();
+    input.zones = vec![pomelo_core::model::Zone {
+        id: ObjectId(900),
+        layer: LayerId(0),
+        net: NetId(1),
+        kind: pomelo_core::model::ZoneKind::Static,
+        paths: vec![],
+        mesh: pomelo_core::copper::CopperMesh::build(
+            &rings,
+            &[],
+            &pomelo_core::copper::MeshLimits::default(),
+            &CancellationToken::default(),
+        )
+        .unwrap(),
+    }];
+    input.bounds = pomelo_core::model::Bounds {
+        min: Point::new(-70.0, -70.0),
+        max: Point::new(70.0, 70.0),
+    };
+    let board = PreparedBoard3d::preview(
+        &input,
+        PreviewStackup::default(),
+        SolidLimits::default(),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    assert!(board.meshes.len() > 1, "the zone must be split into tiles");
+    let on_ring = |x: f64, y: f64| {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let on_square = |sx: f64, sy: f64, s: f64| {
+            ((near(x, sx) || near(x, sx + s)) && y >= sy - 1e-3 && y <= sy + s + 1e-3)
+                || ((near(y, sy) || near(y, sy + s)) && x >= sx - 1e-3 && x <= sx + s + 1e-3)
+        };
+        on_square(-60.0, -60.0, 120.0) || holes.iter().any(|(hx, hy)| on_square(*hx, *hy, 4.0))
+    };
+    let mut lines = 0;
+    for mesh in &board.meshes {
+        let edges = &mesh.indices[mesh.edges.start as usize..mesh.edges.end as usize];
+        for line in edges.chunks(2) {
+            // Ring vertices are shared by interior diagonals; test the middle of the edge.
+            let a = mesh.vertices[line[0] as usize].position;
+            let b = mesh.vertices[line[1] as usize].position;
+            let (x, y) = (
+                f64::from(a[0] + b[0]) * 0.5 + board.origin.x,
+                f64::from(a[1] + b[1]) * 0.5 + board.origin.y,
+            );
+            assert!(on_ring(x, y), "interior edge through ({x}, {y})");
+            lines += 1;
+        }
+    }
+    assert!(lines > 0);
 }

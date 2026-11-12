@@ -3,7 +3,7 @@ use crate::{
     backend::{
         NativeGpuContext,
         solid_cache::{GeometryCache, cache_target, system_memory, upload_memory},
-        solid_renderer::{SolidFrame, SolidUniforms, display_bounds, metal_source},
+        solid_renderer::{SolidFrame, SolidUniforms, metal_source},
     },
     scene::board3d::{Instance3d, PreparedBoard3d, Vertex3d},
 };
@@ -45,6 +45,7 @@ pub(crate) struct SolidPipeline {
     material_source: Option<Arc<Vec<[f32; 4]>>>,
     opaque: RenderPipelineState,
     transparent: RenderPipelineState,
+    edges: RenderPipelineState,
     composite: RenderPipelineState,
     depth_write: DepthStencilState,
     depth_read: DepthStencilState,
@@ -53,6 +54,7 @@ pub(crate) struct SolidPipeline {
     visible_mask: Vec<bool>,
     opaque_batches: Vec<usize>,
     transparent_batches: Vec<usize>,
+    edge_batches: Vec<usize>,
 }
 impl SolidPipeline {
     #[allow(
@@ -135,9 +137,16 @@ impl SolidPipeline {
         layout.set_stride(size_of::<Instance3d>() as u64);
         layout.set_step_function(MTLVertexStepFunction::PerInstance);
         layout.set_step_rate(1);
+        let edge_vertex = library
+            .get_function("edge_vertex", None)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let geometry = |entry: &str, transparent: bool| -> anyhow::Result<RenderPipelineState> {
             let desc = RenderPipelineDescriptor::new();
-            desc.set_vertex_function(Some(&vertex));
+            desc.set_vertex_function(Some(if entry == "solid_edge" {
+                &edge_vertex
+            } else {
+                &vertex
+            }));
             desc.set_vertex_descriptor(Some(descriptor));
             let fragment = library
                 .get_function(entry, None)
@@ -174,6 +183,7 @@ impl SolidPipeline {
         };
         let opaque = geometry("solid_opaque", false)?;
         let transparent = geometry("solid_transparent", true)?;
+        let edges = geometry("solid_edge", false)?;
         let desc = RenderPipelineDescriptor::new();
         let cv = library
             .get_function("composite_vertex", None)
@@ -233,6 +243,7 @@ impl SolidPipeline {
             material_source: None,
             opaque,
             transparent,
+            edges,
             composite,
             depth_write,
             depth_read,
@@ -241,6 +252,7 @@ impl SolidPipeline {
             visible_mask: vec![],
             opaque_batches: vec![],
             transparent_batches: vec![],
+            edge_batches: vec![],
         })
     }
     fn evict_to(&mut self, target: usize) {
@@ -427,7 +439,20 @@ impl SolidPipeline {
             self.active_mask.fill(false);
             self.opaque_batches.clear();
             self.transparent_batches.clear();
+            self.edge_batches.clear();
+            let edge_offset = frame.edge_offset();
             for (i, batch) in frame.scene.pages.iter().enumerate() {
+                if !frame.scene.meshes[batch.mesh].edges.is_empty()
+                    && batch.sources.iter().any(|id| {
+                        frame
+                            .materials
+                            .get(edge_offset + *id as usize)
+                            .is_some_and(|m| m[3] > 0.0)
+                    })
+                {
+                    self.edge_batches.push(i);
+                    self.active_mask[i] = true;
+                }
                 if batch
                     .sources
                     .iter()
@@ -452,7 +477,7 @@ impl SolidPipeline {
                 f64::from(context.bounds.size.width.0),
                 f64::from(context.bounds.size.height.0),
             ],
-            frame.z_scale,
+            frame.z_map(),
             &mut self.visible,
         )?;
         self.visible_mask.clear();
@@ -464,7 +489,8 @@ impl SolidPipeline {
         self.upload_visible(device, &frame.scene)?;
         let targets = self.targets.as_ref().context("SOLID_TARGETS")?;
         let material = self.materials.as_ref().context("SOLID_MATERIALS")?;
-        let bounds = display_bounds(frame.scene.bounds, frame.z_scale);
+        let z_map = frame.z_map();
+        let bounds = z_map.bounds(frame.scene.bounds);
         let matrix = frame
             .camera
             .clip_matrix(
@@ -499,9 +525,16 @@ impl SolidPipeline {
                         / f64::from(context.bounds.size.width.0),
                 ) / frame.camera.view_height()) as f32,
             ],
+            extra: [
+                f32::from_bits(frame.edge_offset() as u32),
+                z_map.uniforms().0,
+                0.0,
+                0.0,
+            ],
+            stretch: z_map.uniforms().1,
         };
         let sizes = [material.size as u32];
-        let draw = |encoder: &RenderCommandEncoderRef, batches: &[usize]| {
+        let draw = |encoder: &RenderCommandEncoderRef, batches: &[usize], edges: bool| {
             encoder.set_cull_mode(MTLCullMode::None);
             encoder.set_vertex_bytes(
                 0,
@@ -523,9 +556,17 @@ impl SolidPipeline {
                 encoder.set_vertex_buffer(1, Some(&mesh.vertices.raw), 0);
                 encoder.set_vertex_buffer(2, Some(&instances.raw), 0);
                 calls += 1;
-                let indices = frame.scene.meshes[b.mesh].draw_indices(uniforms.parameters[3]);
+                let indices = if edges {
+                    frame.scene.meshes[b.mesh].edges.clone()
+                } else {
+                    frame.scene.meshes[b.mesh].draw_indices(uniforms.parameters[3])
+                };
                 encoder.draw_indexed_primitives_instanced_base_instance(
-                    MTLPrimitiveType::Triangle,
+                    if edges {
+                        MTLPrimitiveType::Line
+                    } else {
+                        MTLPrimitiveType::Triangle
+                    },
                     u64::from(indices.end - indices.start),
                     MTLIndexType::UInt32,
                     &mesh.indices.raw,
@@ -555,7 +596,12 @@ impl SolidPipeline {
         let encoder = device.command_buffer.new_render_command_encoder(pass);
         encoder.set_render_pipeline_state(&self.opaque);
         encoder.set_depth_stencil_state(&self.depth_write);
-        calls += draw(encoder, &self.opaque_batches);
+        calls += draw(encoder, &self.opaque_batches, false);
+        if !self.edge_batches.is_empty() {
+            encoder.set_render_pipeline_state(&self.edges);
+            encoder.set_depth_stencil_state(&self.depth_read);
+            calls += draw(encoder, &self.edge_batches, true);
+        }
         encoder.end_encoding();
         if !self.transparent_batches.is_empty() {
             let pass = RenderPassDescriptor::new();
@@ -579,7 +625,7 @@ impl SolidPipeline {
             let encoder = device.command_buffer.new_render_command_encoder(pass);
             encoder.set_render_pipeline_state(&self.transparent);
             encoder.set_depth_stencil_state(&self.depth_read);
-            calls += draw(encoder, &self.transparent_batches);
+            calls += draw(encoder, &self.transparent_batches, false);
             encoder.end_encoding();
         }
         let pass = RenderPassDescriptor::new();

@@ -850,7 +850,8 @@ impl BoardViewport {
                             .xsmall()
                             .icon(IconName::Image)
                             .label(text(locale, Key::ExportSvg))
-                            .disabled(export.pending || frame.is_none())
+                            // The 3D view exports as a raster image only.
+                            .disabled(export.pending || frame.is_none() || self.view3d.active)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.export_image(ImageFormat::Svg, window, cx)
                             })),

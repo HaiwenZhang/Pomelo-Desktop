@@ -4,7 +4,13 @@ use super::*;
 impl BoardViewport {
     pub(crate) fn fit_board(&mut self, _: &FitBoard, _: &mut Window, cx: &mut Context<Self>) {
         if self.view3d.active {
+            let previous = self.view3d.camera;
             if self.fit_3d() {
+                if previous != self.view3d.camera {
+                    self.view3d.camera = previous;
+                    self.record_3d_view();
+                    self.fit_3d();
+                }
                 cx.notify();
             }
             return;
@@ -21,10 +27,45 @@ impl BoardViewport {
         }
     }
 
+    /// Center the view on a board point typed in the search field, keeping the zoom.
+    pub(super) fn go_to_point(&mut self, point: pomelo_core::model::Point, cx: &mut Context<Self>) {
+        if self.view3d.active {
+            self.record_3d_view();
+            let pivot = self.view3d.camera.pivot();
+            let height = self.view3d.camera.view_height();
+            self.view3d
+                .camera
+                .look_at([point.x, point.y, pivot[2]], height);
+            cx.notify();
+            return;
+        }
+        let previous = self.navigation.camera();
+        let camera = pomelo_core::interaction::Camera {
+            center: point,
+            ..previous
+        };
+        if self.navigation.restore_camera(camera) {
+            self.review.history.record(previous, camera);
+            self.refresh_measure_preview(cx);
+            self.invalidate_hover();
+            cx.notify();
+        }
+    }
+
     pub(super) fn flip_board(&mut self, _: &FlipBoard, _: &mut Window, cx: &mut Context<Self>) {
         if self.view3d.active {
-            self.view3d.camera.orbit(0.0, std::f64::consts::PI);
-            cx.notify();
+            use pomelo_core::interaction::camera3d::CameraView3d;
+            // Flipping swaps top and bottom; other views turn over in place.
+            if self.view3d.camera.is_view(CameraView3d::Top) {
+                self.set_standard_view_3d(CameraView3d::Bottom, cx);
+            } else if self.view3d.camera.is_view(CameraView3d::Bottom) {
+                self.set_standard_view_3d(CameraView3d::Top, cx);
+            } else {
+                self.record_3d_view();
+                self.view3d.transition = None;
+                self.view3d.camera.orbit(0.0, std::f64::consts::PI);
+                cx.notify();
+            }
             return;
         }
         self.wheel_history_at = None;
@@ -181,7 +222,12 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) {
         if self.view3d.active {
-            self.move_3d_drag(event, cx);
+            self.pointer_position = Some(event.position);
+            if self.pointer_gesture.is_some() {
+                self.move_3d_drag(event, cx);
+            } else {
+                self.hover_3d(event.position, cx);
+            }
             return;
         }
         self.review.free_measure = event.modifiers.alt;

@@ -116,6 +116,7 @@ mod tests {
                 indices: 6..12,
                 error_mm: 0.01,
             }],
+            edges: 0..0,
         };
         assert!(mesh.valid_lods());
         mesh.round_lods[0].indices.end = 15;

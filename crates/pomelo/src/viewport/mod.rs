@@ -2,6 +2,7 @@
 use crate::panels::focus_scroll::FocusScroll;
 use crate::tooltips::ButtonTooltipExt;
 mod appearance;
+mod canvas_toolbar;
 mod curves;
 mod diagnostics_panel;
 mod frame;
@@ -10,16 +11,21 @@ mod gpu_trace;
 mod grid;
 mod hover;
 mod inspector_panel;
+mod isolation;
 mod labels;
 mod layer_panel;
+mod layer_views;
 mod layout;
+mod length_table;
 mod motion;
 mod navigation;
 mod net_colors;
+mod net_panel;
 mod object_filter;
 mod opacity;
 mod patterns;
 mod picking;
+mod probe;
 mod review;
 mod review_export;
 mod review_overlay;
@@ -89,12 +95,25 @@ actions!(
         FinishMeasurement,
         RemoveLastPoint,
         NavigateBack,
-        NavigateForward
+        NavigateForward,
+        NextActiveLayer,
+        PreviousActiveLayer,
+        ToggleSingleLayer,
+        MeasurePinPath
     ]
 );
 
 pub struct BoardViewport {
     view3d: view3d::View3d,
+    /// Visibility saved by "isolate selection", restored by the same command.
+    isolation: Option<isolation::Isolation>,
+    /// Visibility saved by the adjacent-plane view.
+    plane_view: Option<isolation::PlaneView>,
+    nets: net_panel::NetState,
+    /// The left panel is wide enough to show the layer matrix.
+    layer_matrix: bool,
+    probe: probe::ProbeState,
+    length_table: length_table::LengthTable,
     preparation_budget: pomelo_core::memory::MemoryBudget,
     hover_selection: Option<(
         pomelo_core::selection::SelectionTarget,
@@ -151,6 +170,8 @@ pub struct BoardViewport {
     copper_slider: Entity<SliderState>,
     global_slider: Entity<SliderState>,
     shadow_slider: Entity<SliderState>,
+    /// Continuous Z stretch in the 3D display settings.
+    z_slider: Entity<SliderState>,
     object_filter_slider: Entity<SliderState>,
     last_visibility: Option<pomelo_core::display::LayerVisibility>,
     net_color_target: Option<pomelo_core::model::NetId>,
@@ -367,6 +388,12 @@ impl BoardViewport {
             selection,
             selection_anchor: selection.and(self.selected_anchor),
             review: self.review.state.clone(),
+            view3d: pomelo_core::display3d::View3dState {
+                active: self.view3d.active,
+                camera: (self.view3d.initialized || self.view3d.camera_restored)
+                    .then(|| pomelo_core::display3d::Camera3dState::capture(self.view3d.camera)),
+                display: self.view3d.settings,
+            },
         })
     }
 
@@ -440,6 +467,17 @@ impl BoardViewport {
         cx.subscribe_in(&search_input, window, |this, input, event, window, cx| {
             if matches!(event, InputEvent::Change) {
                 this.query_search(input.read(cx).value().to_string(), window, cx);
+            } else if matches!(
+                event,
+                InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false
+                }
+            ) && let Some(point) = pomelo_core::units::parse_coordinates(
+                &input.read(cx).value(),
+                this.display.length_unit,
+            ) {
+                this.go_to_point(point, cx);
             } else if matches!(
                 event,
                 InputEvent::PressEnter {
@@ -560,6 +598,24 @@ impl BoardViewport {
             }
         })
         .detach();
+        let z_scale = prepared.restored_view.as_ref().map_or(
+            pomelo_core::display3d::Display3d::default().z_scale,
+            |state| state.view3d.display.z_scale,
+        );
+        let z_slider = cx.new(|_| {
+            SliderState::new()
+                .min(*pomelo_core::display3d::Z_SCALE_RANGE.start() as f32)
+                .max(*pomelo_core::display3d::Z_SCALE_RANGE.end() as f32)
+                .step(1.0)
+                .default_value(z_scale as f32)
+        });
+        cx.subscribe(&z_slider, |this, _, event, cx| {
+            if let SliderEvent::Change(value) = event {
+                // Live preview: the scene redraws while dragging; framing waits for presets.
+                this.set_z_scale_3d(f64::from(value.end()), cx);
+            }
+        })
+        .detach();
         let filter_pixels = prepared
             .restored_view
             .as_ref()
@@ -583,6 +639,12 @@ impl BoardViewport {
         .detach();
         let mut viewport = Self {
             view3d: view3d::View3d::default(),
+            isolation: None,
+            plane_view: None,
+            nets: Default::default(),
+            layer_matrix: true,
+            probe: Default::default(),
+            length_table: Default::default(),
             preparation_budget,
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),
@@ -611,6 +673,7 @@ impl BoardViewport {
             copper_slider,
             global_slider,
             shadow_slider,
+            z_slider,
             object_filter_slider,
             last_visibility: None,
             net_color_target: None,
@@ -696,6 +759,11 @@ impl BoardViewport {
             viewport.validate_review_state(window, cx);
             viewport.selection_mode = state.selection_mode;
             viewport.pick_filter = state.pick_filter;
+            viewport.view3d.settings = state.view3d.display;
+            if let Some(camera) = state.view3d.camera.and_then(|camera| camera.camera()) {
+                viewport.view3d.camera = camera;
+                viewport.view3d.camera_restored = true;
+            }
             viewport.invalidate_hover();
             if let Some(target) = state.selection {
                 viewport.selected_anchor = state.selection_anchor;
@@ -709,7 +777,21 @@ impl BoardViewport {
                 );
             }
         }
-        if std::env::var_os("POMELO_3D_PREVIEW").is_some() {
+        let reopen_3d = prepared
+            .restored_view
+            .as_ref()
+            .is_some_and(|state| state.view3d.active);
+        // Validation hook alongside POMELO_3D_PREVIEW: start in a given display mode.
+        if let Ok(mode) = std::env::var("POMELO_3D_MODE") {
+            viewport.view3d.settings.mode = match mode.as_str() {
+                "wireframe" => pomelo_core::display3d::RenderMode3d::Wireframe,
+                "solid" => pomelo_core::display3d::RenderMode3d::Solid,
+                _ => pomelo_core::display3d::RenderMode3d::Default,
+            };
+        }
+        if (reopen_3d || std::env::var_os("POMELO_3D_PREVIEW").is_some())
+            && pomelo_render::backend::native::SolidRenderer::supported()
+        {
             viewport.toggle_3d(window, cx);
         }
         viewport

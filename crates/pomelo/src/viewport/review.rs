@@ -26,6 +26,8 @@ pub(super) enum ReviewTool {
     Clearance,
     BoxSelect,
     ZoomBox,
+    /// Routed length between two pins of one net.
+    PinPath,
 }
 
 /// A rectangle being dragged by the box-select or zoom tool, in window pixels.
@@ -64,6 +66,9 @@ pub(super) struct ReviewSession {
     pub clearance: Option<ClearanceRecord>,
     pub clearance_pending: bool,
     pub clearance_notice: Option<Message>,
+    pub path_first: Option<pomelo_core::model::ObjectId>,
+    pub path_pending: bool,
+    pub path_task: Option<Task<()>>,
     pub drag: Option<AreaDrag>,
     pub zoom_anchor: Option<Point<Pixels>>,
     pub free_measure: bool,
@@ -106,6 +111,9 @@ impl ReviewSession {
         self.zoom_anchor = None;
         self.clearance_first = None;
         self.clearance_notice = None;
+        self.path_first = None;
+        self.path_pending = false;
+        self.path_task = None;
         active
     }
 
@@ -205,9 +213,11 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.view3d.active {
+        // 3D offers point measurements only; the other tools need the 2D canvas.
+        if self.view3d.active && !matches!(tool, Some(ReviewTool::Measure(_)) | None) {
             return;
         }
+        self.cancel_measure_3d();
         let review = &mut self.review;
         // Selecting the active tool again turns it off.
         let tool = if review.tool == tool { None } else { tool };
@@ -243,6 +253,11 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active && self.cancel_measure_3d() {
+            cx.notify();
+            window.focus(&self.focus, cx);
+            return;
+        }
         if self.review.tool == Some(ReviewTool::BoxSelect) || !self.cancel_review_tool(cx) {
             self.clear_selection(&ClearSelection, window, cx);
         }
@@ -255,6 +270,11 @@ impl BoardViewport {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view3d.active {
+            self.finish_measure_3d();
+            cx.notify();
+            return;
+        }
         let review = &mut self.review;
         if let Some(active) = review.active.take() {
             let kind = active.kind;
@@ -459,12 +479,79 @@ impl BoardViewport {
                 true
             }
             Some(ReviewTool::BoxSelect | ReviewTool::ZoomBox) => true,
+            Some(ReviewTool::PinPath) => {
+                self.pick_path_pin(event.position, cx);
+                true
+            }
             None if event.modifiers.shift => {
                 self.edit_set_at(event.position, SetEdit::Toggle, window, cx);
                 true
             }
             None => false,
         }
+    }
+
+    /// First click picks the start pin, the second computes the routed path.
+    fn pick_path_pin(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Ok(Some(SelectedObject::Pin(pin))) = self.object_at(position) else {
+            self.review.notice = Some(Message::new(Key::PinPathPickPin));
+            cx.notify();
+            return;
+        };
+        let Some(first) = self.review.path_first.take() else {
+            self.review.path_first = Some(pin);
+            self.review.notice = None;
+            cx.notify();
+            return;
+        };
+        let scene = Arc::clone(&self.scene);
+        let cancel = CancellationToken::default();
+        self.review.path_pending = true;
+        let worker = cx.background_spawn(async move {
+            pomelo_core::review::net_report::pin_path(&scene, first, pin, &cancel).ok()
+        });
+        let label = |id: pomelo_core::model::ObjectId, scene: &pomelo_core::model::BoardScene| {
+            scene
+                .pins
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| (p.reference.clone(), p.name.clone()))
+                .unwrap_or_default()
+        };
+        let (from, to) = (label(first, &self.scene), label(pin, &self.scene));
+        self.review.path_task = Some(cx.spawn(async move |this, cx| {
+            let result = worker.await;
+            let _ = this.update(cx, |this, cx| {
+                this.review.path_pending = false;
+                let locale = i18n::current(cx);
+                let pin = |(reference, name): &(String, String)| {
+                    Message::new(Key::PinLabel)
+                        .arg("reference", reference.clone())
+                        .arg("pin", name.clone())
+                        .display(locale)
+                };
+                use pomelo_core::review::net_report::PathError as Missing;
+                this.review.notice = Some(match result {
+                    Some(Ok(path)) => Message::new(if path.alternatives {
+                        Key::PinPathResultLoops
+                    } else {
+                        Key::PinPathResult
+                    })
+                    .arg("from", pin(&from))
+                    .arg("to", pin(&to))
+                    .arg(
+                        "length",
+                        format_length(path.length, this.display.length_unit, locale),
+                    )
+                    .arg("vias", path.vias),
+                    Some(Err(Missing::DifferentNets)) => Message::new(Key::PinPathDifferentNets),
+                    _ => Message::new(Key::PinPathNotConnected),
+                });
+                this.right_panel = super::RightPanelTab::Review;
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     fn object_at(&self, position: Point<Pixels>) -> Result<Option<SelectedObject>, PathError> {
@@ -1004,6 +1091,9 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) {
         if self.view3d.active {
+            if self.step_3d_history(true) {
+                cx.notify();
+            }
             return;
         }
         self.wheel_history_at = None;
@@ -1024,6 +1114,9 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) {
         if self.view3d.active {
+            if self.step_3d_history(false) {
+                cx.notify();
+            }
             return;
         }
         self.wheel_history_at = None;
@@ -1051,6 +1144,8 @@ impl BoardViewport {
     }
 
     pub(super) fn clear_measurements(&mut self, cx: &mut Context<Self>) {
+        self.view3d.measurements.clear();
+        self.view3d.measuring = None;
         let review = &mut self.review;
         if matches!(
             review.tool,

@@ -5,7 +5,7 @@ use crate::backend::{
     solid_pipeline::{BufferKind, SolidDraw},
     solid_renderer::{SolidUniforms, hlsl_source},
 };
-use windows::Win32::Graphics::Direct3D::ID3DBlob;
+use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_LINELIST, ID3DBlob};
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 struct ColorTarget {
@@ -25,6 +25,8 @@ pub(crate) struct SolidDriver {
     transparent: ID3D11PixelShader,
     composite_vertex: ID3D11VertexShader,
     composite: ID3D11PixelShader,
+    edge_vertex: ID3D11VertexShader,
+    edge: ID3D11PixelShader,
     input: ID3D11InputLayout,
     uniforms: ID3D11Buffer,
     opaque_blend: ID3D11BlendState,
@@ -96,6 +98,9 @@ impl SolidDriver {
         let tb = compile(2, s!("ps_5_0"))?;
         let cvb = compile(3, s!("vs_5_0"))?;
         let cb = compile(4, s!("ps_5_0"))?;
+        let evb = compile(5, s!("vs_5_0"))?;
+        let eb = compile(6, s!("ps_5_0"))?;
+        let (mut edge_vertex, mut edge) = (None, None);
         let (
             mut vertex,
             mut opaque,
@@ -146,6 +151,12 @@ impl SolidDriver {
             device
                 .raw
                 .CreatePixelShader(blob_bytes(&cb), None, Some(&mut composite))?;
+            device
+                .raw
+                .CreateVertexShader(blob_bytes(&evb), None, Some(&mut edge_vertex))?;
+            device
+                .raw
+                .CreatePixelShader(blob_bytes(&eb), None, Some(&mut edge))?;
             device
                 .raw
                 .CreateInputLayout(&attributes, blob_bytes(&vb), Some(&mut input))?;
@@ -230,6 +241,8 @@ impl SolidDriver {
             transparent: transparent.context("SOLID_TRANSPARENT")?,
             composite_vertex: composite_vertex.context("SOLID_COMPOSITE_VERTEX")?,
             composite: composite.context("SOLID_COMPOSITE")?,
+            edge_vertex: edge_vertex.context("SOLID_EDGE_VERTEX")?,
+            edge: edge.context("SOLID_EDGE")?,
             input: input.context("SOLID_INPUT")?,
             uniforms: uniforms.context("SOLID_UNIFORMS")?,
             depth_write: depth_write.context("SOLID_DEPTH")?,
@@ -359,7 +372,7 @@ impl SolidDriver {
             ctx.OMSetBlendState(&self.opaque_blend, None, u32::MAX);
             ctx.PSSetShader(&self.opaque, None);
         }
-        let geometry = |batches: &[usize]| {
+        let geometry = |batches: &[usize], edges: bool| {
             let mut calls = 0;
             for &id in batches {
                 if !draw.visible[id] {
@@ -383,8 +396,11 @@ impl SolidDriver {
                         Some(offsets.as_ptr()),
                     );
                     ctx.IASetIndexBuffer(&mesh.indices.raw, DXGI_FORMAT_R32_UINT, 0);
-                    let indices =
-                        draw.scene.meshes[page.mesh].draw_indices(draw.uniforms.parameters[3]);
+                    let indices = if edges {
+                        draw.scene.meshes[page.mesh].edges.clone()
+                    } else {
+                        draw.scene.meshes[page.mesh].draw_indices(draw.uniforms.parameters[3])
+                    };
                     ctx.DrawIndexedInstanced(
                         indices.end - indices.start,
                         page.instances.len() as u32,
@@ -397,7 +413,22 @@ impl SolidDriver {
             }
             calls
         };
-        let mut calls = geometry(draw.opaque);
+        let mut calls = geometry(draw.opaque, false);
+        if !draw.edges.is_empty() {
+            // SAFETY: same targets and input layout as the opaque pass; lines only test depth.
+            unsafe {
+                ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+                ctx.VSSetShader(&self.edge_vertex, None);
+                ctx.PSSetShader(&self.edge, None);
+                ctx.OMSetDepthStencilState(&self.depth_read, 0);
+            }
+            calls += geometry(draw.edges, true);
+            // SAFETY: restore the triangle state for the transparent pass.
+            unsafe {
+                ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                ctx.VSSetShader(&self.vertex, None);
+            }
+        }
         // SAFETY: transparent MRTs share the opaque depth size; composition unbinds MRTs before sampling.
         unsafe {
             if !draw.transparent.is_empty() {
@@ -410,7 +441,7 @@ impl SolidDriver {
                 ctx.OMSetDepthStencilState(&self.depth_read, 0);
                 ctx.OMSetBlendState(&self.transparent_blend, None, u32::MAX);
                 ctx.PSSetShader(&self.transparent, None);
-                calls += geometry(draw.transparent);
+                calls += geometry(draw.transparent, false);
             }
             ctx.OMSetRenderTargets(Some(&previous.targets), None);
             ctx.OMSetDepthStencilState(None, 0);

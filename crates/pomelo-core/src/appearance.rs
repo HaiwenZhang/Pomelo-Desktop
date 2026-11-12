@@ -60,7 +60,10 @@ pub enum ColorTarget {
 impl ColorTarget {
     pub fn layer(layer: LayerId, primitive: LayerPrimitive) -> Self {
         match primitive {
-            LayerPrimitive::Traces => Self::Etch(layer),
+            // Copper shares the trace color, as on the layer color row.
+            LayerPrimitive::Traces | LayerPrimitive::Copper | LayerPrimitive::Components => {
+                Self::Etch(layer)
+            }
             LayerPrimitive::Pads => Self::Pin(layer),
             LayerPrimitive::Vias => Self::Via(layer),
         }
