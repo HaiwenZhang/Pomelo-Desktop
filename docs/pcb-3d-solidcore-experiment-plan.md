@@ -5,6 +5,8 @@
 
 本文是实验计划，不改变 [PCB 三维显示开发设计](pcb-3d-rendering-development-design.md) §1.1 的主路线决策。实验结论出来后再决定主路线是否调整。
 
+> **实验状态（2026-11-12）**：P0–P3 和 P5 已完成，P4 部分完成。结果和结论见 [实验报告](pcb-3d-solidcore-experiment-report.md)：内核路线慢三到四个数量级，建议维持直接拉伸。
+
 ## 1. 结论：可以做
 
 可以做，而且接入点很清楚。现有三维管线的所有实体网格都经过 `pomelo-core::geometry3d::solid::SolidMesh::extrude_*` 这一组函数（轮廓 → Clipper2 → Spade CDT → 顶/底面 + 侧壁）。solidcore 能在同一位置提供替代实现：

@@ -149,9 +149,28 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(seconds) = args.timeout {
         let cancel = cancel.clone();
+        // A kernel call cannot be interrupted, so cancellation can arrive long after the
+        // deadline. After a grace period, report what finished and exit.
+        let partial = serde_json::json!({
+            "path": path, "backend": args.backend, "layer": args.layer,
+            "import_ms": import_ms, "objects": objects, "completed": false,
+            "timed_out": true, "hard_timeout": true, "timeout_s": seconds,
+        });
+        #[cfg(feature = "kernel-3d")]
+        let stats = kernel_stats.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
             cancel.cancel();
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            #[allow(unused_mut)]
+            let mut partial = partial;
+            partial["cancel_ignored_s"] = 30.into();
+            #[cfg(feature = "kernel-3d")]
+            if let Some(stats) = stats {
+                partial["kernel"] = stats.to_json();
+            }
+            println!("{}", serde_json::to_string_pretty(&partial).unwrap_or_default());
+            std::process::exit(0);
         });
     }
     let started = Instant::now();
