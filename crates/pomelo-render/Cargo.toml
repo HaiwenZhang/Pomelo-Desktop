@@ -7,6 +7,14 @@ license.workspace = true
 
 [features]
 frame-profiling = []
+# Experimental: solid meshes built through the solidcore B-rep kernel for comparison.
+kernel-3d = [
+    "dep:solidcore",
+    "dep:solidcore-convert",
+    "dep:solidcore-ops",
+    "dep:solidcore-record",
+    "dep:solidcore-tess",
+]
 native-gpu = [
     "dep:anyhow",
     "dep:gpui",
@@ -28,6 +36,11 @@ serde_json.workspace = true
 sysinfo = { version = "=0.31.4", default-features = false, features = ["system"] }
 image.workspace = true
 base64.workspace = true
+solidcore = { workspace = true, optional = true }
+solidcore-convert = { workspace = true, optional = true }
+solidcore-ops = { workspace = true, optional = true }
+solidcore-record = { workspace = true, optional = true }
+solidcore-tess = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
 
@@ -63,3 +76,11 @@ unsafe_code = "deny"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[[example]]
+name = "kernel_k2"
+required-features = ["kernel-3d"]
+
+[[example]]
+name = "kernel_k3"
+required-features = ["kernel-3d"]

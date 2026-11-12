@@ -4979,6 +4979,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "solidcore",
+ "solidcore-convert",
+ "solidcore-ops",
+ "solidcore-record",
+ "solidcore-tess",
  "sysinfo",
  "thiserror 2.0.21",
  "windows 0.62.2",
@@ -6368,6 +6373,58 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "solidcore"
+version = "1.0.1"
+source = "git+https://github.com/tangency-labs/solidcore?rev=6833c2eb54514f6f8fe51fa0b75b564eed4ae459#6833c2eb54514f6f8fe51fa0b75b564eed4ae459"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "solidcore-convert"
+version = "0.1.0"
+source = "git+https://github.com/tangency-labs/solidcore?rev=6833c2eb54514f6f8fe51fa0b75b564eed4ae459#6833c2eb54514f6f8fe51fa0b75b564eed4ae459"
+dependencies = [
+ "solidcore",
+ "solidcore-record",
+]
+
+[[package]]
+name = "solidcore-ops"
+version = "0.1.0"
+source = "git+https://github.com/tangency-labs/solidcore?rev=6833c2eb54514f6f8fe51fa0b75b564eed4ae459#6833c2eb54514f6f8fe51fa0b75b564eed4ae459"
+dependencies = [
+ "solidcore",
+ "solidcore-convert",
+ "solidcore-record",
+]
+
+[[package]]
+name = "solidcore-record"
+version = "0.1.0"
+source = "git+https://github.com/tangency-labs/solidcore?rev=6833c2eb54514f6f8fe51fa0b75b564eed4ae459#6833c2eb54514f6f8fe51fa0b75b564eed4ae459"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "solidcore-tess"
+version = "0.1.0"
+source = "git+https://github.com/tangency-labs/solidcore?rev=6833c2eb54514f6f8fe51fa0b75b564eed4ae459#6833c2eb54514f6f8fe51fa0b75b564eed4ae459"
+dependencies = [
+ "rayon",
+ "serde",
+ "solidcore",
+ "solidcore-convert",
+ "solidcore-record",
+ "spade",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

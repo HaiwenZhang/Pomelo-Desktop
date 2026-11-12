@@ -28,5 +28,10 @@ fn main() -> std::process::ExitCode {
         println!("Pomelo {}", env!("CARGO_PKG_VERSION"));
         return std::process::ExitCode::SUCCESS;
     }
+    // Experimental solidcore comparison (docs/pcb-3d-solidcore-experiment-plan.md):
+    // POMELO_3D_BACKEND=kernel-thread|kernel-ops builds 3D solid meshes through the kernel.
+    #[cfg(feature = "kernel-3d")]
+    pomelo_render::scene::kernel3d::Backend3d::from_env()
+        .install(pomelo_render::scene::board3d::PreviewStackup::default().chord_mm);
     app::run()
 }

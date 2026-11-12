@@ -25,6 +25,14 @@ pomelo-core = { path = "crates/pomelo-core" }
 pomelo-import = { path = "crates/pomelo-import" }
 pomelo-render = { path = "crates/pomelo-render" }
 
+# solidcore B-rep kernel, only for the optional `kernel-3d` comparison experiment
+# (docs/pcb-3d-solidcore-experiment-plan.md). Pinned: the API is experimental.
+solidcore = { git = "https://github.com/tangency-labs/solidcore", rev = "6833c2eb54514f6f8fe51fa0b75b564eed4ae459" }
+solidcore-convert = { git = "https://github.com/tangency-labs/solidcore", rev = "6833c2eb54514f6f8fe51fa0b75b564eed4ae459" }
+solidcore-ops = { git = "https://github.com/tangency-labs/solidcore", rev = "6833c2eb54514f6f8fe51fa0b75b564eed4ae459" }
+solidcore-record = { git = "https://github.com/tangency-labs/solidcore", rev = "6833c2eb54514f6f8fe51fa0b75b564eed4ae459" }
+solidcore-tess = { git = "https://github.com/tangency-labs/solidcore", rev = "6833c2eb54514f6f8fe51fa0b75b564eed4ae459" }
+
 # GPUI Kit and native GPU backends
 gpui-kit = "=0.8.0"
 gpui = { git = "https://github.com/HaiwenZhang/gpui-fast.git", branch = "native-gpu", default-features = false }

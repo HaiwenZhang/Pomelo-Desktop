@@ -7,6 +7,8 @@ license.workspace = true
 
 [features]
 window-profiling = ["gpui/profiler", "pomelo-render/frame-profiling"]
+# Experimental: solidcore-built 3D meshes, chosen at launch with POMELO_3D_BACKEND.
+kernel-3d = ["pomelo-render/kernel-3d"]
 
 [dependencies]
 pomelo-core.workspace = true

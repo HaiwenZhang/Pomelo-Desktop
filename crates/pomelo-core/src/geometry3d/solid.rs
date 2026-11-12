@@ -1,9 +1,12 @@
 //! Material coverage extruded directly into display triangles, with no B-rep intermediate.
 
 use super::Bounds3;
+#[path = "solid/backend.rs"]
+mod backend;
 #[path = "solid/cdt.rs"]
 mod cdt;
 use crate::{model::Point, task::CancellationToken};
+pub use backend::{RegionExtruder, RegionInput, set_region_extruder};
 use clipper2_rust::{
     ClipType, EndType, FillRule, JoinType, PathD, PathsD, PointD, PolyTreeD, boolean_op_tree_d,
     inflate_paths_d, poly_tree_to_paths_d,
@@ -529,6 +532,22 @@ impl SolidMesh {
         }
         if expected_area <= 0.0 {
             return Err(SolidError::Invalid("REGION_AREA"));
+        }
+        if let Some(extruder) = backend::region_extruder() {
+            let local: Vec<Vec<[f64; 2]>> = rings
+                .iter()
+                .map(|ring| ring.iter().map(|p| [p.x, p.y]).collect())
+                .collect();
+            drop(points);
+            return extruder.extrude(
+                &RegionInput {
+                    rings: &local,
+                    origin,
+                    z,
+                    area: expected_area,
+                },
+                self,
+            );
         }
         let mut triangles: Vec<u32> = reserve(cap_count)?;
         cancel.check()?;
