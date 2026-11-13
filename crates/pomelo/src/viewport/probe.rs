@@ -166,7 +166,10 @@ impl BoardViewport {
             return None;
         }
         let at = self.probe.at?;
-        let theme = cx.theme();
+        let _ = cx;
+        // The card floats on the dark canvas in both UI themes.
+        let (_, ink, hairline) = crate::theme::canvas_colors();
+        let muted = crate::theme::canvas_muted();
         let net_name = |net: NetId| {
             self.scene
                 .nets
@@ -187,7 +190,7 @@ impl BoardViewport {
                         a: *a,
                     })
                 })
-                .unwrap_or(theme.muted_foreground);
+                .unwrap_or(muted);
             let (key, net) = match *hit {
                 ProbeHit::Trace(net) => (Key::ProbeTrace, Some(net)),
                 ProbeHit::Copper(net) => (Key::ProbeCopper, Some(net)),
@@ -206,14 +209,14 @@ impl BoardViewport {
                 .gap_2()
                 .min_h_5()
                 .text_xs()
-                .when(!selected, |row| row.text_color(theme.muted_foreground))
+                .text_color(if selected { ink } else { muted })
                 .child(
                     div()
                         .w_12()
                         .h_2()
                         .rounded_sm()
                         .border_1()
-                        .border_color(if filled { color } else { theme.border })
+                        .border_color(if filled { color } else { hairline })
                         .when(filled, |bar| bar.bg(color)),
                 )
                 .child(
@@ -233,27 +236,30 @@ impl BoardViewport {
         let unit = self.display.length_unit;
         Some(
             div()
-                .px_4()
+                .pl_3()
+                .pr_2()
                 .py_2()
-                .border_t_1()
-                .border_color(theme.border)
                 .flex()
                 .flex_col()
                 .gap_0p5()
                 .child(
                     div()
                         .flex()
+                        .flex_wrap()
                         .justify_between()
+                        .gap_x_2()
                         .pb_1()
+                        // Leave the close button's lane free.
+                        .pr_6()
                         .text_xs()
                         .child(
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.muted_foreground)
+                                .text_color(muted)
                                 .child(text(locale, Key::ProbeHeading)),
                         )
                         .child(
-                            div().text_color(theme.muted_foreground).child(
+                            div().text_color(muted).child(
                                 Message::new(Key::ProbePosition)
                                     .arg("x", super::review::format_length(at.x, unit, locale))
                                     .arg("y", super::review::format_length(at.y, unit, locale))

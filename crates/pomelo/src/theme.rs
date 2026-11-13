@@ -2,7 +2,7 @@
 
 use crate::services::preferences::{ThemePreference, ThemeStore};
 use gpui_kit::component::{Theme, ThemeMode};
-use gpui_kit::{App, AppContext, BorrowAppContext, Global, Task, Window};
+use gpui_kit::{App, AppContext, BorrowAppContext, Global, Hsla, Task, Window};
 use pomelo_core::{i18n::MessageKey, model::Diagnostic};
 
 pub struct ThemeState {
@@ -91,56 +91,77 @@ fn mode(preference: ThemePreference) -> ThemeMode {
     }
 }
 
-/// Product palette sampled from docs/ui-design; feature code uses semantic roles.
+/// "Ink & Stage" palette from the UI redesign: neutral chrome so the board keeps
+/// every hue, and one accent reserved for the default commit, the current
+/// canvas tool and keyboard focus. Feature code uses semantic roles only.
 fn apply_palette(cx: &mut App) {
     use gpui_kit::rgb;
     Theme::update(cx, |theme| {
         let dark = theme.is_dark();
-        let surface = rgb(if dark { 0x1d2522 } else { 0xfafbf6 }).into();
-        let foreground = rgb(if dark { 0xecf0ed } else { 0x18201c }).into();
-        let muted = rgb(if dark { 0xaab5b3 } else { 0x66716c }).into();
-        let border = rgb(if dark { 0x36413c } else { 0xdce2d8 }).into();
-        let primary = rgb(if dark { 0xa3cf72 } else { 0x587c30 }).into();
-        let primary_fg = rgb(if dark { 0x15200d } else { 0xffffff }).into();
+        let pick = |dark_value: u32, light_value: u32| -> Hsla {
+            rgb(if dark { dark_value } else { light_value }).into()
+        };
+        // Panels, chrome and the window share one flat surface; hairlines and
+        // the framed canvas stage separate them instead of tinted slabs.
+        let surface = pick(0x0b0b0c, 0xffffff);
+        let foreground = pick(0xf2f2f0, 0x0f0f10);
+        let muted = pick(0xa8a8a6, 0x5c5c5a);
+        let border = pick(0x2a2a2d, 0xddddda);
+        let primary = pick(0xc5e86c, 0x4f7a14);
+        let primary_fg = pick(0x10160a, 0xffffff);
+        // Neutral fills for selected rows, segments and pressed controls.
+        let selected = pick(0x252527, 0xededeb);
+        let hover = pick(0x1a1a1c, 0xf4f4f2);
+        let raised = pick(0x161618, 0xf6f6f4);
         theme.colors.background = surface;
         theme.colors.foreground = foreground;
-        theme.colors.sidebar_foreground = foreground;
-        theme.colors.title_bar_border = border;
+        theme.colors.muted = raised;
+        theme.colors.muted_foreground = muted;
         theme.colors.border = border;
         theme.colors.input = border;
-        theme.colors.muted_foreground = muted;
+        theme.colors.title_bar = surface;
+        theme.colors.title_bar_border = surface;
+        theme.colors.status_bar = surface;
+        theme.colors.status_bar_border = surface;
+        theme.colors.sidebar = surface;
+        theme.colors.sidebar_foreground = foreground;
+        theme.colors.sidebar_border = border;
+        theme.colors.popover = pick(0x111113, 0xffffff);
+        theme.colors.popover_foreground = foreground;
         theme.colors.primary = primary;
+        theme.colors.primary_hover = primary;
+        theme.colors.primary_active = primary;
         theme.colors.primary_foreground = primary_fg;
         theme.colors.button_primary = primary;
-        theme.colors.button_primary_foreground = primary_fg;
-        theme.colors.ring = primary;
-        theme.colors.accent = rgb(if dark { 0x304332 } else { 0xeaf3dd }).into();
-        theme.colors.accent_foreground = primary;
-        theme.colors.secondary = rgb(if dark { 0x26312b } else { 0xf0f3e9 }).into();
-        theme.colors.secondary_foreground = foreground;
-        theme.colors.secondary_hover = theme.colors.accent;
-        theme.colors.secondary_active = theme.colors.accent;
-        theme.colors.button_active = theme.colors.accent;
-        theme.colors.button_hover = theme.colors.accent;
-        theme.colors.button_foreground = foreground;
         theme.colors.button_primary_hover = primary;
         theme.colors.button_primary_active = primary;
+        theme.colors.button_primary_foreground = primary_fg;
+        theme.colors.ring = primary;
+        // Selection is neutral; the brand color stays reserved for commits and focus.
+        theme.colors.accent = selected;
+        theme.colors.accent_foreground = foreground;
+        theme.colors.secondary = raised;
+        theme.colors.secondary_foreground = foreground;
+        theme.colors.secondary_hover = hover;
+        theme.colors.secondary_active = selected;
+        theme.colors.button = surface;
+        theme.colors.button_hover = hover;
+        theme.colors.button_active = selected;
+        theme.colors.button_foreground = foreground;
         theme.colors.tab_bar = surface;
         theme.colors.tab_active = surface;
-        // Selection is neutral; the brand color stays reserved for commits and focus.
         theme.colors.tab_active_foreground = foreground;
         theme.colors.tab_foreground = muted;
-        // The selected segment takes the work surface color, so the track contrasts with it.
-        theme.colors.tab_bar_segmented = rgb(if dark { 0x2c3732 } else { 0xe6eadf }).into();
-        // Side panels and window chrome sit one step below the work surface.
-        let chrome = rgb(if dark { 0x1a211f } else { 0xf4f6ef }).into();
-        theme.colors.sidebar = chrome;
-        theme.colors.title_bar = chrome;
-        theme.colors.status_bar = chrome;
-        theme.colors.status_bar_border = border;
-        theme.colors.list_active = theme.colors.accent;
-        theme.colors.list_active_border = theme.colors.accent;
-        theme.colors.list_hover = rgb(if dark { 0x232c28 } else { 0xeef1e8 }).into();
+        // The track sits one step above the surface; the selected segment
+        // takes the strongest neutral so it reads without the accent.
+        theme.colors.tab_bar_segmented = raised;
+        theme.colors.list_active = selected;
+        theme.colors.list_active_border = selected;
+        theme.colors.list_hover = hover;
+        theme.colors.switch = pick(0x2e2e32, 0xcfcfcb);
+        theme.colors.slider_bar = foreground;
+        theme.colors.slider_thumb = foreground;
+        theme.colors.scrollbar_thumb = pick(0x34343a, 0xcfcfcb);
     });
     apply_ui_font(cx);
 }
@@ -175,14 +196,25 @@ pub fn apply_ui_font(cx: &mut App) {
     let _ = cx;
 }
 
-/// Canvas colors remain dark in both UI themes, as in the supplied designs.
+/// The canvas stage stays dark in both UI themes: background, ink and hairline.
 pub fn canvas_colors() -> (gpui_kit::Hsla, gpui_kit::Hsla, gpui_kit::Hsla) {
     use gpui_kit::rgb;
     (
-        rgb(0x1c201c).into(),
-        rgb(0xd9e1dc).into(),
-        rgb(0x34473a).into(),
+        rgb(0x050505).into(),
+        rgb(0xd6d6d4).into(),
+        rgb(0x2a2a2d).into(),
     )
+}
+
+/// Secondary ink for labels floating over the canvas.
+pub fn canvas_muted() -> gpui_kit::Hsla {
+    gpui_kit::rgb(0xa8a8a6).into()
+}
+
+/// Frame around the canvas stage: the dark hairline in the dark theme, the
+/// ink color in the light theme so the stage reads as one object.
+pub fn stage_border(dark: bool) -> gpui_kit::Hsla {
+    gpui_kit::rgb(if dark { 0x2a2a2d } else { 0x0f0f10 }).into()
 }
 
 /// Board overview materials stay recognizable against the dark canvas in both UI themes.
@@ -215,14 +247,29 @@ pub fn canvas_measure() -> gpui_kit::Hsla {
 
 /// The canvas command surface stays dark with the board in either UI theme.
 pub fn canvas_toolbar_surface() -> gpui_kit::Hsla {
-    gpui_kit::rgb(0x1d2522).into()
+    gpui_kit::rgb(0x0b0b0c).into()
+}
+
+/// Neutral fill for an open canvas popup trigger or a pressed canvas control.
+pub fn canvas_toolbar_open() -> gpui_kit::Hsla {
+    gpui_kit::rgb(0x2a2a2d).into()
 }
 
 pub fn canvas_toolbar_button(cx: &App) -> gpui_kit::component::button::ButtonCustomVariant {
     gpui_kit::component::button::ButtonCustomVariant::new(cx)
         .foreground(canvas_colors().1)
-        .hover(gpui_kit::rgb(0x304332).into())
-        .active(gpui_kit::rgb(0x3b542f).into())
+        .hover(gpui_kit::rgb(0x1c1c1f).into())
+        .active(canvas_toolbar_open())
+}
+
+/// The current canvas tool is one of the three places the accent appears.
+pub fn canvas_toolbar_current(cx: &App) -> gpui_kit::component::button::ButtonCustomVariant {
+    let accent: gpui_kit::Hsla = gpui_kit::rgb(0xc5e86c).into();
+    gpui_kit::component::button::ButtonCustomVariant::new(cx)
+        .color(accent)
+        .foreground(gpui_kit::rgb(0x10160a).into())
+        .hover(accent)
+        .active(accent)
 }
 
 fn missing_directory() -> Diagnostic {

@@ -1,4 +1,6 @@
 //! Document tab appearance; document lifetime and commands belong to Workbench.
+//! Tabs are pills in the title row: the open document takes a neutral fill,
+//! the others read as quiet text until hovered.
 use std::rc::Rc;
 
 use gpui_kit::{
@@ -8,7 +10,6 @@ use gpui_kit::{
         ActiveTheme, Sizable,
         button::{Button, ButtonVariants},
         menu::{DropdownMenu, PopupMenuItem},
-        tag::Tag,
     },
     prelude::FluentBuilder,
     *,
@@ -59,10 +60,9 @@ pub fn render(
                 div()
                     .id("document-tabs-scroll")
                     .flex()
-                    .items_end()
+                    .items_center()
                     .h_full()
-                    .pl_2()
-                    .gap_1()
+                    .gap_0p5()
                     .overflow_x_scroll()
                     .track_scroll(&tabs.scroll)
                     .children(tabs.items.into_iter().enumerate().map(|(index, tab)| {
@@ -76,21 +76,15 @@ pub fn render(
                             .selected(active)
                             .flex_shrink_0()
                             .min_w_0()
-                            .max_w(window.rem_size() * 24.0)
-                            .h_8()
+                            .max_w(window.rem_size() * 18.0)
+                            .h_7()
                             .pl_3()
                             .pr_1()
                             .gap_2()
-                            .rounded_t(theme.radius_lg)
-                            // The active document joins the work surface below it.
-                            .when(active, |tab| {
-                                tab.mb(px(-1.0))
-                                    .border_t_1()
-                                    .border_l_1()
-                                    .border_r_1()
-                                    .border_color(theme.border)
-                                    .bg(theme.background)
-                            })
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .when(active, |tab| tab.bg(theme.accent))
                             .text_sm()
                             .text_color(if active {
                                 theme.foreground
@@ -111,7 +105,13 @@ pub fn render(
                                     .child(tab.label.clone()),
                             )
                             .when_some(tab.format, |tab, format| {
-                                tab.child(Tag::secondary().small().flex_shrink_0().child(format))
+                                tab.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(format),
+                                )
                             })
                             .child(
                                 Button::new(("close-tab", index))

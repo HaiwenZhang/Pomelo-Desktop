@@ -15,6 +15,10 @@ pub struct PanelPreferences {
     pub right_collapsed: bool,
     pub left_width: f32,
     pub right_width: f32,
+    /// Optional surfaces floating over the canvas. The canvas toolbar itself
+    /// is always shown, so these can be hidden without losing a way back.
+    #[serde(default)]
+    pub overlays: CanvasOverlays,
 }
 impl Default for PanelPreferences {
     fn default() -> Self {
@@ -22,7 +26,46 @@ impl Default for PanelPreferences {
             left_collapsed: false,
             right_collapsed: false,
             left_width: 288.0,
-            right_width: 288.0,
+            right_width: 320.0,
+            overlays: CanvasOverlays::default(),
+        }
+    }
+}
+
+/// Which canvas overlays are shown; every overlay starts visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CanvasOverlays {
+    /// Location chip naming the current selection.
+    pub location: bool,
+    /// Per-layer stack under the pointer.
+    pub probe: bool,
+    /// Scale bar and board axes.
+    pub scale: bool,
+    /// Measurement, clearance and path marks drawn over the board.
+    pub review_marks: bool,
+    /// 3D view cube.
+    pub view_cube: bool,
+}
+impl Default for CanvasOverlays {
+    fn default() -> Self {
+        Self {
+            location: true,
+            probe: true,
+            scale: true,
+            review_marks: true,
+            view_cube: true,
+        }
+    }
+}
+impl CanvasOverlays {
+    pub fn all(visible: bool) -> Self {
+        Self {
+            location: visible,
+            probe: visible,
+            scale: visible,
+            review_marks: visible,
+            view_cube: visible,
         }
     }
 }

@@ -67,7 +67,6 @@ impl BoardViewport {
     pub(super) fn render_review_overlay(
         &self,
         locale: pomelo_core::i18n::Locale,
-        cx: &App,
     ) -> Vec<AnyElement> {
         if self.view3d.active {
             return vec![];
@@ -262,7 +261,6 @@ impl BoardViewport {
                 .into_any_element(),
             );
         }
-        let theme = cx.theme();
         for (position, label) in labels {
             let (x, y) = (f32::from(position.x), f32::from(position.y));
             if !x.is_finite()
@@ -289,33 +287,10 @@ impl BoardViewport {
                     .rounded_sm()
                     .bg(crate::theme::canvas_toolbar_surface())
                     .border_1()
-                    .border_color(theme.border)
+                    .border_color(crate::theme::canvas_colors().2)
                     .text_xs()
                     .text_color(color)
                     .child(label)
-                    .into_any_element(),
-            );
-        }
-        if let Some(hint) = self.review_hint(locale) {
-            elements.push(
-                div()
-                    .absolute()
-                    .top_24()
-                    .left_0()
-                    .right_0()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        div()
-                            .max_w(relative(0.8))
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(crate::theme::canvas_toolbar_surface())
-                            .text_xs()
-                            .text_color(crate::theme::canvas_colors().1)
-                            .child(hint),
-                    )
                     .into_any_element(),
             );
         }

@@ -253,6 +253,13 @@ impl BoardViewport {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Escape dismisses the topmost surface first: the display popup.
+        if self.display_quick_open {
+            self.display_quick_open = false;
+            cx.notify();
+            window.focus(&self.focus, cx);
+            return;
+        }
         if self.view3d.active && self.cancel_measure_3d() {
             cx.notify();
             window.focus(&self.focus, cx);

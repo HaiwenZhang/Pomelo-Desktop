@@ -66,7 +66,7 @@ impl BoardViewport {
             cx,
         )
         .disabled(!enabled)
-        .dropdown_menu(move |mut menu, window, _| {
+        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, _| {
             menu = menu
                 .min_w(window.rem_size() * 15.0)
                 .label(mode_label.clone());
@@ -101,7 +101,7 @@ impl BoardViewport {
         )
         .selected(selected != 1.0)
         .disabled(!enabled)
-        .dropdown_menu(move |mut menu, window, _| {
+        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, _| {
             menu = menu
                 .min_w(window.rem_size() * 14.0)
                 .label(stretch_label.clone());

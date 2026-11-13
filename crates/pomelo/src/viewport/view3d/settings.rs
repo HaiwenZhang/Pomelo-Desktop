@@ -33,9 +33,12 @@ impl BoardViewport {
         }
     }
 
+    /// The 3D display controls. `compact` keeps only the everyday rows for the
+    /// canvas display popup; the full page adds the slider, stack-up and dimming.
     pub(in crate::viewport) fn render_3d_settings(
         &self,
         locale: Locale,
+        compact: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let settings = self.view3d.settings;
@@ -208,6 +211,44 @@ impl BoardViewport {
                 scroll,
             )
         };
+        if compact {
+            let switches = vec![
+                toggle(
+                    "3d-quick-hover-preview",
+                    Key::HoverPreview,
+                    settings.hover_preview,
+                    |s, v| s.hover_preview = v,
+                ),
+                toggle(
+                    "3d-quick-show-stubs",
+                    Key::ShowStubs,
+                    settings.show_stubs,
+                    |s, v| s.show_stubs = v,
+                ),
+                toggle(
+                    "3d-quick-show-dielectric",
+                    Key::ShowDielectric,
+                    settings.show_dielectric,
+                    |s, v| s.show_dielectric = v,
+                ),
+                toggle(
+                    "3d-quick-selected-solid",
+                    Key::SelectedSolid,
+                    settings.selected_solid,
+                    |s, v| s.selected_solid = v,
+                ),
+            ];
+            return div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(row(Key::ToolbarDisplayMode, mode))
+                .child(row(Key::ZStretchFactor, scale))
+                .child(row(Key::StretchTarget, stretch))
+                .child(row(Key::UnselectedOpacity, dim))
+                .child(switch_grid(switches))
+                .into_any_element();
+        }
         let switches = vec![
             toggle(
                 "3d-hover-preview",

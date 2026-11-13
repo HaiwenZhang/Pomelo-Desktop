@@ -8,42 +8,38 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let locale = i18n::current(cx);
+        let _ = right_panel_width;
         let measurements = self.review.measurements.len();
-        let switcher = crate::panels::tabs::render(
-            crate::panels::tabs::SidebarTabs {
-                id: "right-panel-tabs",
-                tabs: vec![
-                    crate::panels::tabs::SidebarTab {
-                        label: text(locale, Key::Inspector).into(),
-                        icon: IconName::ScanSearch,
-                        count: None,
-                    },
-                    crate::panels::tabs::SidebarTab {
-                        label: text(locale, Key::DisplayPanel).into(),
-                        icon: IconName::SlidersHorizontal,
-                        count: None,
-                    },
-                    crate::panels::tabs::SidebarTab {
-                        label: text(locale, Key::ReviewPanel).into(),
-                        icon: IconName::Ruler,
-                        count: (measurements > 0).then(|| {
-                            Message::new(Key::UiNumber)
-                                .arg("value", measurements)
-                                .display(locale)
-                                .into()
-                        }),
-                    },
-                ],
-                selected: self.right_panel.index(),
-                width: right_panel_width - window.rem_size() * 1.5,
-            },
-            cx.listener(|this, index: &usize, _, cx| {
-                this.right_panel = super::RightPanelTab::from_index(*index);
-                cx.notify();
-            }),
-            window,
-            cx,
-        );
+        let switcher = if self.right_panel == super::RightPanelTab::Display {
+            self.render_display_page_header(locale, cx)
+        } else {
+            crate::panels::tabs::render(
+                crate::panels::tabs::SidebarTabs {
+                    id: "right-panel-tabs",
+                    tabs: vec![
+                        crate::panels::tabs::SidebarTab {
+                            label: text(locale, Key::Inspector).into(),
+                            count: None,
+                        },
+                        crate::panels::tabs::SidebarTab {
+                            label: text(locale, Key::ReviewPanel).into(),
+                            count: (measurements > 0).then(|| {
+                                Message::new(Key::UiNumber)
+                                    .arg("value", measurements)
+                                    .display(locale)
+                                    .into()
+                            }),
+                        },
+                    ],
+                    selected: self.right_panel.index(),
+                },
+                cx.listener(|this, index: &usize, _, cx| {
+                    this.right_panel = super::RightPanelTab::from_index(*index);
+                    cx.notify();
+                }),
+                cx,
+            )
+        };
         let body = match self.right_panel {
             super::RightPanelTab::Inspector => self.render_inspector_body(locale, window, cx),
             super::RightPanelTab::Display => self.render_display_body(locale, window, cx),
@@ -153,7 +149,6 @@ impl BoardViewport {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let report = self.render_net_report(locale, cx);
-        let probe = self.render_probe(locale, cx);
         let details = crate::panels::selection_details::render(
             crate::panels::selection_details::SelectionDetails {
                 selected_target: self.selected_target,
@@ -202,17 +197,54 @@ impl BoardViewport {
             window,
             cx,
         );
-        if report.is_none() && probe.is_none() {
+        let Some(report) = report else {
             return details;
-        }
+        };
         div()
             .flex()
             .flex_col()
             .size_full()
             .min_h_0()
-            .children(report)
+            .child(report)
             .child(div().flex_1().min_h_0().child(details))
-            .children(probe)
+            .into_any_element()
+    }
+
+    /// The display page replaces the tab row with its title and a way back.
+    fn render_display_page_header(
+        &self,
+        locale: pomelo_core::i18n::Locale,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .pt_2()
+            .pb_1()
+            .child(
+                Button::new("display-page-back")
+                    .ghost()
+                    .small()
+                    .icon(IconName::ChevronLeft)
+                    .accessibility_label(text(locale, Key::BackToPanel))
+                    .native_tooltip(text(locale, Key::BackToPanel))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.right_panel = super::RightPanelTab::Inspector;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(text(locale, Key::DisplaySettings)),
+            )
             .into_any_element()
     }
 
@@ -247,7 +279,7 @@ impl BoardViewport {
         let settings_3d = self
             .view3d
             .active
-            .then(|| self.render_3d_settings(locale, cx));
+            .then(|| self.render_3d_settings(locale, false, cx));
         div()
             .flex()
             .flex_col()
@@ -265,7 +297,10 @@ impl BoardViewport {
             .into_any_element()
     }
 
-    fn display_commands(&self, cx: &mut Context<Self>) -> crate::panels::display::DisplayCommands {
+    pub(super) fn display_commands(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> crate::panels::display::DisplayCommands {
         crate::panels::display::DisplayCommands {
             net_colors: Box::new(cx.listener(|this, shown: &bool, _, cx| {
                 Arc::make_mut(&mut this.display).appearance.hide_net_colors = !*shown;

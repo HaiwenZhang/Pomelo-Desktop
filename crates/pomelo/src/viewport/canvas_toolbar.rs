@@ -1,6 +1,8 @@
 //! The one floating toolbar at the bottom of the canvas. 2D and 3D share its
-//! groups and positions: view, display, tools. Buttons show icons only; the
-//! name and shortcut appear on hover, and multi-option tools open a menu.
+//! groups and positions: view, display, tools, overlays. Buttons show icons
+//! only; the name and shortcut appear on hover, and multi-option tools open a
+//! menu. The current canvas tool is one of the few places the accent appears;
+//! toggled states such as flip or single-layer use a neutral fill.
 use super::layout::canvas_separator;
 use super::*;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -21,6 +23,30 @@ pub(super) fn icon_button(
         .icon(icon)
         .accessibility_label(label.clone())
         .native_tooltip(label)
+}
+
+/// A review tool button takes the accent while it is the current tool.
+fn tool_button(
+    id: &'static str,
+    icon: IconName,
+    label: impl Into<SharedString>,
+    current: bool,
+    cx: &App,
+) -> Button {
+    icon_button(id, icon, label, cx)
+        .when(current, |button| {
+            button.custom(crate::theme::canvas_toolbar_current(cx))
+        })
+        .selected(current)
+        .toggled(current)
+}
+
+pub(super) fn labeled_value(locale: Locale, label: String, value: String) -> SharedString {
+    Message::new(Key::LabeledValue)
+        .arg("label", label)
+        .arg("value", value)
+        .display(locale)
+        .into()
 }
 
 fn with_shortcut(locale: Locale, key: Key, shortcut: &str) -> SharedString {
@@ -104,14 +130,13 @@ impl BoardViewport {
         if !in_3d {
             let active = self.review.tool == Some(ReviewTool::ZoomBox);
             items.push(
-                icon_button(
+                tool_button(
                     "canvas-zoom-box",
                     IconName::ZoomIn,
                     text(locale, Key::ZoomBoxTool),
+                    active,
                     cx,
                 )
-                .selected(active)
-                .toggled(active)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.set_review_tool(Some(ReviewTool::ZoomBox), window, cx)
                 }))
@@ -192,15 +217,13 @@ impl BoardViewport {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_plane_view(cx)))
                     .into_any_element()
                 },
-                self.isolate_button(locale, cx),
             ]
         };
-        if !display.is_empty() {
-            items.push(canvas_separator());
-            items.extend(display);
-        }
-        // Tool group.
-        let mut tools = Vec::new();
+        items.push(canvas_separator());
+        items.extend(display);
+        items.push(self.render_display_button(locale, cx));
+        // Tool group: pointer tools first, then review tools.
+        let mut tools = self.render_pointer_tools(locale, cx);
         {
             let active = MEASURE_TOOLS
                 .iter()
@@ -210,15 +233,14 @@ impl BoardViewport {
             let current = self.review.tool;
             let label = text(locale, Key::ToolbarMeasure);
             tools.push(
-                icon_button(
+                tool_button(
                     "canvas-measure",
                     IconName::Ruler,
                     active.map_or(label.clone(), |(_, key)| text(locale, *key)),
+                    active.is_some(),
                     cx,
                 )
-                .selected(active.is_some())
-                .toggled(active.is_some())
-                .dropdown_menu(move |mut menu, window, _| {
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, _| {
                     menu = menu.min_w(window.rem_size() * 14.0).label(label.clone());
                     for (tool, key) in MEASURE_TOOLS
                         .into_iter()
@@ -243,23 +265,20 @@ impl BoardViewport {
         if !in_3d {
             let active = self.review.tool == Some(ReviewTool::BoxSelect);
             tools.push(
-                icon_button(
+                tool_button(
                     "canvas-box-select",
                     IconName::SquareDashedMousePointer,
                     text(locale, Key::BoxSelectTool),
+                    active,
                     cx,
                 )
-                .selected(active)
-                .toggled(active)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.set_review_tool(Some(ReviewTool::BoxSelect), window, cx)
                 }))
                 .into_any_element(),
             );
         }
-        if in_3d {
-            tools.push(self.isolate_button(locale, cx));
-        }
+        tools.push(self.isolate_button(locale, cx));
         tools.push(
             icon_button(
                 "canvas-copy-image",
@@ -284,10 +303,10 @@ impl BoardViewport {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_length_table(cx)))
             .into_any_element(),
         );
-        if !tools.is_empty() {
-            items.push(canvas_separator());
-            items.extend(tools);
-        }
+        items.push(canvas_separator());
+        items.extend(tools);
+        items.push(canvas_separator());
+        items.push(self.render_overlay_menu(locale, cx));
         if self.review.tool.is_some() {
             items.push(
                 icon_button(

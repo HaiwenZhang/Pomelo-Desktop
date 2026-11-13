@@ -84,6 +84,16 @@ impl PanelLayout {
         self.sizes.update(cx, |sizes, _| sizes.clear());
         cx.notify();
     }
+    pub fn set_overlays(
+        &mut self,
+        overlays: crate::services::preferences::CanvasOverlays,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preferences.overlays != overlays {
+            self.preferences.overlays = overlays;
+            cx.notify();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +121,7 @@ mod tests {
             right_collapsed: true,
             left_width: 440.0,
             right_width: 440.0,
+            ..PanelPreferences::default()
         };
         assert_eq!(fit_to_window(panels, 1000.0, 40.0), panels);
     }

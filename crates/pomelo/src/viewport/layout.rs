@@ -102,14 +102,44 @@ impl Render for BoardViewport {
             total_bytes,
         } = self.render_canvas(layer_order, panels, window, cx);
         let grid = self.render_grid();
-        let review_overlay = self.render_review_overlay(locale, cx);
+        let overlays = self.overlays(cx);
+        let review_overlay = if overlays.review_marks {
+            self.render_review_overlay(locale)
+        } else {
+            Vec::new()
+        };
         let canvas_view_controls = self.render_canvas_toolbar(locale, cx);
-        let view_cube = self
-            .view3d
-            .active
-            .then(|| self.render_view_cube(locale, cx));
-        let status_bar = self.render_status_bar(ready, pointer_coordinates, locale, cx);
+        let view_cube =
+            (self.view3d.active && overlays.view_cube).then(|| self.render_view_cube(locale, cx));
+        let scale_bar = scale_bar.filter(|_| overlays.scale);
+        let location_chip = self.render_location_chip(locale, canvas_breadcrumb, cx);
+        let probe_card = self.render_probe_card(locale, cx);
+        let display_quick = self.render_display_quick(locale, cx);
+        let hover_text: SharedString = if let Some((object, context)) = &self.hovered
+            && self.hover_tooltip_ready
+            && context.matches_view(
+                self.navigation.camera(),
+                self.navigation.size(),
+                &self.display,
+                self.selection_mode,
+            ) {
+            let (kind, id) =
+                selection_identity(pomelo_core::selection::SelectionTarget::Object(*object));
+            Message::new(Key::HoverObject)
+                .arg("kind", text(locale, kind))
+                .arg("id", id)
+                .display(locale)
+                .into()
+        } else if let Some(message) = &self.hover_notice
+            && self.hover_tooltip_ready
+        {
+            message.display(locale).into()
+        } else {
+            SharedString::default()
+        };
+        let status_bar = self.render_status_bar(ready, pointer_coordinates, hover_text, locale, cx);
         let theme = cx.theme();
+        let stage_border = crate::theme::stage_border(theme.is_dark());
         let mut view = div()
             .id("board-viewport")
             .key_context("BoardWorkspace")
@@ -181,62 +211,6 @@ impl Render for BoardViewport {
             .size_full()
             .flex()
             .flex_col()
-            .child(toolbar::render(
-                toolbar::State {
-                    view3d: self.view3d.active,
-                    locale,
-                    pan_tool: self.pan_tool,
-                    color_mode: self.display.color_mode,
-                    selection_mode: self.selection_mode,
-                    pick_filter: self.pick_filter,
-                    left_panel_open: !panels.left_collapsed,
-                    right_panel_open: !panels.right_collapsed,
-                    search: &self.search_input,
-                },
-                toolbar::Commands {
-                    view3d: Box::new(cx.listener(|this, active: &bool, window, cx| {
-                        if this.view3d.active != *active {
-                            this.toggle_3d(window, cx);
-                        }
-                    })),
-                    tool: Box::new(cx.listener(|this, pan: &bool, window, cx| {
-                        this.pan_tool = *pan;
-                        this.review.tool = None;
-                        this.review.active = None;
-                        this.review.drag = None;
-                        this.pointer_gesture = None;
-                        if *pan {
-                            this.invalidate_hover();
-                        }
-                        window.focus(&this.focus, cx);
-                        cx.notify();
-                    })),
-                    colors: Box::new(cx.listener(
-                        |this, mode: &pomelo_core::display::ColorMode, _, cx| {
-                            Arc::make_mut(&mut this.display).color_mode = *mode;
-                            this.invalidate_hover();
-                            cx.notify();
-                        },
-                    )),
-                    fit: Box::new(cx.listener(|this, _, window, cx| {
-                        this.fit_board(&FitBoard, window, cx);
-                    })),
-                    pick_mode: Box::new(cx.listener(
-                        |this, mode: &pomelo_core::interaction::SelectionMode, window, cx| {
-                            this.set_selection_mode(*mode, window, cx)
-                        },
-                    )),
-                    pick_category: Box::new(cx.listener(
-                        |this,
-                         (category, enabled): &(pomelo_core::picking::PickCategory, bool),
-                         _,
-                         cx| {
-                            this.set_pick_category(*category, *enabled, cx)
-                        },
-                    )),
-                },
-                cx,
-            ))
             .child(
                 div().flex().flex_1().min_h_0().min_w_0().child(
                     h_resizable("board-panels")
@@ -273,8 +247,9 @@ impl Render for BoardViewport {
                                                 .min_h_0()
                                                 .min_w_0()
                                                 .overflow_hidden()
+                                                .rounded_xl()
                                                 .border_1()
-                                                .border_color(self.canvas_background())
+                                                .border_color(stage_border)
                                                 .bg(self.canvas_background())
                                                 .focus_visible(|style| {
                                                     style.border_color(theme.ring)
@@ -382,41 +357,22 @@ impl Render for BoardViewport {
                                                         )
                                                     },
                                                 )
-                                                .child(
-                                                    div()
-                                                        .absolute()
-                                                        .top_3()
-                                                        .left_4()
-                                                        .max_w(relative(0.6))
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap_2()
-                                                        .text_sm()
-                                                        .text_color(crate::theme::canvas_colors().1)
-                                                        .child(
-                                                            Icon::new(IconName::Layers)
-                                                                .small()
-                                                                .flex_shrink_0(),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .min_w_0()
-                                                                .truncate()
-                                                                .child(canvas_breadcrumb),
-                                                        ),
+                                                .children(location_chip)
+                                                .children(probe_card)
+                                                .when(
+                                                    !self.view3d.active && overlays.scale,
+                                                    |canvas| canvas.child(axes_indicator(locale)),
                                                 )
-                                                .when(!self.view3d.active, |canvas| {
-                                                    canvas.child(axes_indicator(locale))
-                                                })
                                                 .when_some(view_cube, |canvas, cube| {
                                                     canvas.child(
                                                         div()
                                                             .absolute()
                                                             .top_3()
-                                                            .right_4()
+                                                            .right_3()
                                                             .child(cube),
                                                     )
                                                 })
+                                                .children(display_quick)
                                                 .child(
                                                     div()
                                                         .absolute()
@@ -485,44 +441,6 @@ impl Render for BoardViewport {
                 ),
             )
             .child(status_bar);
-        let hover_text: SharedString = if let Some((object, context)) = &self.hovered
-            && self.hover_tooltip_ready
-            && context.matches_view(
-                self.navigation.camera(),
-                self.navigation.size(),
-                &self.display,
-                self.selection_mode,
-            ) {
-            let (kind, id) =
-                selection_identity(pomelo_core::selection::SelectionTarget::Object(*object));
-            Message::new(Key::HoverObject)
-                .arg("kind", text(locale, kind))
-                .arg("id", id)
-                .display(locale)
-                .into()
-        } else if let Some(message) = &self.hover_notice
-            && self.hover_tooltip_ready
-        {
-            message.display(locale).into()
-        } else {
-            SharedString::default()
-        };
-        if !hover_text.is_empty() {
-            view = view.child(
-                div()
-                    .absolute()
-                    .bottom_24()
-                    .left_72()
-                    .rounded_md()
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.border)
-                    .px_3()
-                    .py_2()
-                    .text_sm()
-                    .child(hover_text),
-            );
-        }
         if let Some(details) = failure {
             // Error details must not resize the canvas and invalidate its curve view.
             view = view.child(
@@ -557,6 +475,7 @@ impl BoardViewport {
         &self,
         ready: bool,
         pointer_coordinates: Option<String>,
+        hover_text: SharedString,
         locale: pomelo_core::i18n::Locale,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -599,6 +518,20 @@ impl BoardViewport {
                     .arg("nets", self.scene.nets.len())
                     .display(locale),
             )
+            // The active tool's next step reads here, so the canvas stays clear.
+            .when_some(self.review_hint(locale), |bar, hint| {
+                bar.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.foreground)
+                        .child(hint),
+                )
+            })
+            // What the pointer would pick, beside where it is.
+            .when(!hover_text.is_empty(), |bar| {
+                bar.child(div().min_w_0().truncate().child(hover_text))
+            })
             .when_some(pointer_coordinates, |bar, coordinates| {
                 bar.child(
                     div()
@@ -634,6 +567,11 @@ impl BoardViewport {
                             .display(locale),
                     )
                 },
+            )
+            .right(
+                div()
+                    .whitespace_nowrap()
+                    .child(text(locale, Key::StatusReadOnlyLocal)),
             )
             .right(
                 TabBar::new("length-unit")

@@ -2,6 +2,7 @@
 use crate::panels::focus_scroll::FocusScroll;
 use crate::tooltips::ButtonTooltipExt;
 mod appearance;
+mod canvas_overlays;
 mod canvas_toolbar;
 mod curves;
 mod diagnostics_panel;
@@ -114,6 +115,8 @@ pub struct BoardViewport {
     layer_matrix: bool,
     probe: probe::ProbeState,
     length_table: length_table::LengthTable,
+    /// The canvas display popup above the toolbar is open.
+    display_quick_open: bool,
     preparation_budget: pomelo_core::memory::MemoryBudget,
     hover_selection: Option<(
         pomelo_core::selection::SelectionTarget,
@@ -269,14 +272,16 @@ enum RightPanelTab {
 }
 
 impl RightPanelTab {
-    const ALL: [Self; 3] = [Self::Inspector, Self::Display, Self::Review];
+    /// Destinations in the panel's tab row. The display page is reached from
+    /// the canvas display popup and returns with its own back button.
+    const TABS: [Self; 2] = [Self::Inspector, Self::Review];
 
-    fn index(self) -> usize {
-        self as usize
+    fn index(self) -> Option<usize> {
+        Self::TABS.iter().position(|tab| *tab == self)
     }
 
     fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or(Self::Inspector)
+        Self::TABS.get(index).copied().unwrap_or(Self::Inspector)
     }
 }
 
@@ -645,6 +650,7 @@ impl BoardViewport {
             layer_matrix: true,
             probe: Default::default(),
             length_table: Default::default(),
+            display_quick_open: false,
             preparation_budget,
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),

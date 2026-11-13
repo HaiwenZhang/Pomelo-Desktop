@@ -21,6 +21,7 @@ use pomelo_import::{ImportOptions, formats::format_display_name};
 
 use crate::document::{DocumentSession, DocumentStatus};
 use crate::i18n::{self, LanguageState};
+use crate::tooltips::ButtonTooltipExt;
 use crate::welcome::recent::Presentation as RecentPresentation;
 
 use crate::actions::{

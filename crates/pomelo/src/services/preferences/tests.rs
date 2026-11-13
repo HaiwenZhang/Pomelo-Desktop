@@ -67,6 +67,11 @@ fn panel_layout_restores_each_side_and_remembered_expanded_width() {
         right_collapsed: false,
         left_width: 312.0,
         right_width: 360.0,
+        overlays: crate::services::preferences::CanvasOverlays {
+            probe: false,
+            view_cube: false,
+            ..Default::default()
+        },
     };
     store.save(panels).unwrap();
     let reloaded = PanelStore(JsonFileStore {

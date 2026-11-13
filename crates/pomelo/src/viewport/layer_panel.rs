@@ -217,28 +217,23 @@ impl BoardViewport {
                 tabs: vec![
                     crate::panels::tabs::SidebarTab {
                         label: text(locale, Key::Layers).into(),
-                        icon: IconName::Layers,
                         count: None,
                     },
                     crate::panels::tabs::SidebarTab {
                         label: text(locale, Key::SearchNets).into(),
-                        icon: IconName::Waypoints,
                         count: None,
                     },
                     crate::panels::tabs::SidebarTab {
                         label: text(locale, Key::SearchComponents).into(),
-                        icon: IconName::Cpu,
                         count: None,
                     },
                 ],
-                selected: self.left_panel.index(),
-                width: left_panel_width - window.rem_size() * 1.5,
+                selected: Some(self.left_panel.index()),
             },
             cx.listener(|this, index: &usize, _, cx| {
                 this.left_panel = super::LeftPanelTab::from_index(*index);
                 cx.notify();
             }),
-            window,
             cx,
         );
         let panel = div()
@@ -517,18 +512,21 @@ impl BoardViewport {
             )
             .child(self.render_visibility_views(locale, cx))
             .child(
+                // The count and the commands wrap as whole items so a longer
+                // translation moves to its own line instead of being cut.
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
-                    .gap_2()
+                    .gap_x_2()
                     .pl_4()
                     .pr_2()
                     .pt_1()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(
-                        div().truncate().child(
+                        div().whitespace_nowrap().child(
                             Message::new(Key::LayersVisible)
                                 .arg("visible", visible_count)
                                 .arg("total", all_layers.len())
@@ -539,6 +537,7 @@ impl BoardViewport {
                         div()
                             .flex()
                             .flex_shrink_0()
+                            .ml_auto()
                             .child(
                                 Button::new("restore-layer-visibility")
                                     .ghost()

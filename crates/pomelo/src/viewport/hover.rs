@@ -20,7 +20,10 @@ impl BoardViewport {
         if self.pan_tool || self.pointer_gesture.is_some() {
             return;
         }
-        self.probe_at(position, window, cx);
+        // A hidden probe card costs nothing: skip the per-layer hit query.
+        if self.overlay_shown(super::canvas_overlays::Overlay::Probe, cx) {
+            self.probe_at(position, window, cx);
+        }
         let Some(bounds) = self.bounds else {
             return;
         };

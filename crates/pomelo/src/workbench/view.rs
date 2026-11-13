@@ -12,14 +12,12 @@ impl Workbench {
                     if self.recent_only {
                         RecentPresentation::All
                     } else {
-                        RecentPresentation::Continue
+                        RecentPresentation::Wall
                     },
                     cx,
                 ),
-                self.recent_list(RecentPresentation::Sidebar, cx),
                 self.recent_only,
                 &self.welcome_scroll,
-                window,
                 cx,
             );
         };
@@ -347,6 +345,70 @@ impl Workbench {
             },
         )
     }
+
+    /// Language, appearance and settings, in the title row while no board is open.
+    fn app_preferences(
+        &self,
+        locale: Locale,
+        preference: LanguagePreference,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .flex_shrink_0()
+            .child(
+                Button::new("language")
+                    .ghost()
+                    .small()
+                    .label(locale.native_name())
+                    .dropdown_menu(move |mut menu, _, _| {
+                        menu = menu
+                            .item(
+                                PopupMenuItem::new(text(locale, Key::FollowSystem))
+                                    .checked(preference == LanguagePreference::System)
+                                    .action(i18n::action(LanguagePreference::System)),
+                            )
+                            .separator();
+                        for language in Locale::ALL {
+                            let candidate = LanguagePreference::Explicit(language);
+                            menu = menu.item(
+                                PopupMenuItem::new(language.native_name())
+                                    .checked(preference == candidate)
+                                    .action(i18n::action(candidate)),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                Button::new("theme")
+                    .ghost()
+                    .small()
+                    .icon(if cx.theme().is_dark() {
+                        IconName::Moon
+                    } else {
+                        IconName::Sun
+                    })
+                    .label(text(locale, Key::SettingsTheme))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_theme(&ToggleTheme, window, cx)
+                    })),
+            )
+            .child(
+                Button::new("settings")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Settings)
+                    .accessibility_label(text(locale, Key::SettingsMenu))
+                    .native_tooltip(text(locale, Key::SettingsMenu))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_settings(&OpenSettings, window, cx)
+                    })),
+            )
+            .into_any_element()
+    }
 }
 
 impl Render for Workbench {
@@ -383,7 +445,6 @@ impl Render for Workbench {
             self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
             self.menu_revision = revision;
         }
-        let theme = cx.theme();
         // Reserve the native macOS traffic lights on the left. Bound the
         // content to the remaining space so long titles cannot displace controls.
         let title_left_padding = if cfg!(target_os = "macos") {
@@ -409,18 +470,6 @@ impl Render for Workbench {
             - controls_width
             - fullscreen_padding)
             .max(px(0.0));
-        let title = self
-            .active
-            .and_then(|index| self.documents.get(index))
-            .map(|document| {
-                document
-                    .path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .unwrap_or_else(|| "Pomelo · PCB Viewer".into());
         let tabs = self
             .documents
             .iter()
@@ -444,6 +493,23 @@ impl Render for Workbench {
                 }
             })
             .collect::<Vec<_>>();
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        let (title_search, title_trailing) = match self
+            .active
+            .and_then(|index| self.documents.get(index))
+            .and_then(|document| document.viewport.clone())
+        {
+            Some(viewport) => {
+                let controls = viewport.update(cx, |viewport, cx| {
+                    viewport.render_title_controls(window, cx)
+                });
+                (Some(controls.search), Some(controls.trailing))
+            }
+            None => (None, None),
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        let (title_search, title_trailing): (Option<AnyElement>, Option<AnyElement>) = (None, None);
+        let theme = cx.theme();
         div()
             .key_context("Pomelo")
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
@@ -522,19 +588,21 @@ impl Render for Workbench {
                 i18n::select(LanguagePreference::Explicit(Locale::Korean), cx);
             }))
             .child(
-                TitleBar::new().h_10().pl(title_left_padding).child(
+                TitleBar::new().h_11().pl(title_left_padding).child(
                     div()
                         .w(title_content_width)
                         .min_w_0()
                         .h_full()
                         .flex()
                         .items_center()
+                        .gap_3()
                         .pl_3()
+                        .pr_2()
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_3()
+                                .gap_2()
                                 .h_full()
                                 .flex_shrink_0()
                                 .child(self.logo.as_ref().map_or_else(
@@ -546,40 +614,28 @@ impl Render for Workbench {
                                     },
                                     |logo| {
                                         img(logo.clone())
-                                            .w_6()
-                                            .h_7()
+                                            .size_5()
                                             .object_fit(ObjectFit::Contain)
                                             .into_any_element()
                                     },
                                 ))
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Pomelo"))
                                 .child(self.menu_bar.clone()),
                         )
                         .map(|bar| {
                             if tabs.is_empty() {
-                                return bar.child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_center()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child(title),
-                                );
+                                return bar.child(div().flex_1().min_w_0());
                             }
                             // Documents are the window's objects, so they share the
                             // title row; its empty space remains the drag region.
                             bar.child(
                                 div()
-                                    .flex_1()
+                                    .flex_initial()
                                     .min_w_0()
+                                    .max_w(relative(0.45))
                                     .h_full()
                                     .flex()
-                                    .items_end()
-                                    .ml_3()
-                                    .border_l_1()
-                                    .border_color(theme.border)
+                                    .items_center()
+                                    .gap_1()
                                     .child(document_tabs::render(
                                         document_tabs::DocumentTabs {
                                             items: tabs,
@@ -596,24 +652,38 @@ impl Render for Workbench {
                                         }),
                                         window,
                                         cx,
-                                    )),
+                                    ))
+                                    .child(
+                                        Button::new("title-open-file")
+                                            .ghost()
+                                            .xsmall()
+                                            .flex_shrink_0()
+                                            .icon(IconName::Plus)
+                                            .accessibility_label(text(locale, Key::OpenFile))
+                                            .native_tooltip(format!(
+                                                "{} ({})",
+                                                text(locale, Key::OpenFile),
+                                                crate::shortcuts::shortcut_label(
+                                                    crate::shortcuts::keys::OPEN_FILE
+                                                )
+                                            ))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_file(&OpenFile, window, cx)
+                                            })),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .flex_shrink_0()
+                                    .flex_1()
+                                    .min_w_0()
                                     .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .mx_3()
-                                    .px_2()
-                                    .h_5()
-                                    .rounded_full()
-                                    .bg(theme.secondary)
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(Icon::new(IconName::Lock).xsmall())
-                                    .child(text(locale, Key::ReadOnly)),
+                                    .justify_center()
+                                    .children(title_search),
                             )
+                        })
+                        .map(|bar| match title_trailing {
+                            Some(trailing) => bar.child(trailing),
+                            None => bar.child(self.app_preferences(locale, preference, cx)),
                         }),
                 ),
             )
@@ -715,55 +785,7 @@ impl Render for Workbench {
                                     }),
                             ),
                         )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .child(
-                                    Button::new("language")
-                                        .ghost()
-                                        .small()
-                                        .label(locale.native_name())
-                                        .dropdown_menu(move |mut menu, _, _| {
-                                            menu = menu
-                                                .item(
-                                                    PopupMenuItem::new(text(
-                                                        locale,
-                                                        Key::FollowSystem,
-                                                    ))
-                                                    .checked(
-                                                        preference == LanguagePreference::System,
-                                                    )
-                                                    .action(i18n::action(
-                                                        LanguagePreference::System,
-                                                    )),
-                                                )
-                                                .separator();
-                                            for language in Locale::ALL {
-                                                let candidate =
-                                                    LanguagePreference::Explicit(language);
-                                                menu = menu.item(
-                                                    PopupMenuItem::new(language.native_name())
-                                                        .checked(preference == candidate)
-                                                        .action(i18n::action(candidate)),
-                                                );
-                                            }
-                                            menu
-                                        }),
-                                )
-                                .child(
-                                    Button::new("theme")
-                                        .ghost()
-                                        .small()
-                                        .icon(IconName::Moon)
-                                        .label(text(locale, Key::SettingsTheme))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.toggle_theme(&ToggleTheme, window, cx)
-                                        })),
-                                )
-                                .child(div().child(text(locale, Key::LocalFile))),
-                        ),
+                        .child(div().child(text(locale, Key::LocalFile))),
                 )
             })
     }

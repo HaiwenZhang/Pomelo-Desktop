@@ -1,4 +1,6 @@
-//! Board commands grouped by file access, canvas tool, picking, search, coloring and panels.
+//! Board commands outside the side panels. The window's title row carries the
+//! board search, the 2D/3D switch and the panel toggles; the canvas toolbar
+//! carries the pointer tools and what a click picks.
 use std::rc::Rc;
 
 use gpui_kit::{
@@ -7,50 +9,22 @@ use gpui_kit::{
     component::{
         ActiveTheme, Icon, Sizable,
         button::{Button, ButtonVariants},
-        input::{Input, InputState},
+        input::Input,
         menu::{DropdownMenu, PopupMenuItem},
-        separator::Separator,
         tab::{Tab, TabBar},
     },
     prelude::FluentBuilder,
     *,
 };
 use pomelo_core::{
-    display::ColorMode,
     i18n::{Locale, MessageKey as Key, text},
     interaction::SelectionMode,
     picking::{PickCategory, PickFilter},
 };
 
+use super::BoardViewport;
+use super::canvas_toolbar::icon_button;
 use crate::{panels::picking, tooltips::ButtonTooltipExt, workbench::panel_layout::Side};
-
-pub(super) struct State<'a> {
-    pub locale: Locale,
-    pub pan_tool: bool,
-    pub view3d: bool,
-    pub color_mode: ColorMode,
-    pub selection_mode: SelectionMode,
-    pub pick_filter: PickFilter,
-    pub left_panel_open: bool,
-    pub right_panel_open: bool,
-    pub search: &'a Entity<InputState>,
-}
-
-type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-/// Receives the requested state: 3D/2D or pan/select.
-type ToolHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
-type ColorHandler = Box<dyn Fn(&ColorMode, &mut Window, &mut App)>;
-type ModeHandler = Box<dyn Fn(&SelectionMode, &mut Window, &mut App)>;
-type CategoryHandler = Box<dyn Fn(&(PickCategory, bool), &mut Window, &mut App)>;
-
-pub(super) struct Commands {
-    pub view3d: ToolHandler,
-    pub tool: ToolHandler,
-    pub colors: ColorHandler,
-    pub fit: ClickHandler,
-    pub pick_mode: ModeHandler,
-    pub pick_category: CategoryHandler,
-}
 
 /// Selection modes in menu order with their localized names.
 pub(super) const SELECTION_MODES: [(SelectionMode, Key); 4] = [
@@ -60,170 +34,181 @@ pub(super) const SELECTION_MODES: [(SelectionMode, Key); 4] = [
     (SelectionMode::Component, Key::ModeComponent),
 ];
 
-pub(super) fn render(state: State<'_>, commands: Commands, cx: &App) -> AnyElement {
-    let locale = state.locale;
-    let colors = Rc::new(commands.colors);
-    let separator = || Separator::vertical().h_5().flex_shrink_0();
-    let shortcut = |keystroke: &str| {
-        div()
-            .flex_shrink_0()
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .child(crate::shortcuts::shortcut_label(keystroke))
-    };
-    let pan_tool = state.pan_tool;
-    let view3d = state.view3d;
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .px_3()
-        .h_11()
-        .flex_shrink_0()
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .child(
-            Button::new("board-open")
-                .ghost()
-                .small()
-                .flex_shrink_0()
-                .icon(IconName::FolderOpen)
-                .label(text(locale, Key::OpenFile))
-                .native_tooltip(format!(
-                    "{} ({})",
-                    text(locale, Key::OpenFile),
-                    crate::shortcuts::shortcut_label(crate::shortcuts::keys::OPEN_FILE)
-                ))
-                .on_click(|_, window, cx| {
-                    window.dispatch_action(Box::new(crate::actions::OpenFile), cx)
-                }),
-        )
-        .child(separator())
-        .child(
-            TabBar::new("board-view-mode")
-                .segmented()
-                .small()
-                .flex_shrink_0()
-                .selected_index(usize::from(view3d))
-                .child(Tab::new().label(text(locale, Key::View2d)))
-                .child(
-                    Tab::new()
-                        .label(text(locale, Key::View3d))
-                        .aria_label(text(locale, Key::View3dPreview))
-                        .disabled(!pomelo_render::backend::native::SolidRenderer::supported())
-                        .native_tooltip(text(locale, Key::Preview3dHint)),
-                )
-                .on_click(move |index, window, cx| {
-                    if (*index == 1) != view3d {
-                        (commands.view3d)(&(*index == 1), window, cx);
-                    }
-                }),
-        )
-        .child(separator())
-        .child(
-            TabBar::new("canvas-tool")
-                .segmented()
-                .small()
-                .flex_shrink_0()
-                .selected_index(usize::from(pan_tool))
-                // In 3D the first tool orbits with the left button; clicks still select.
-                .child(
-                    Tab::new()
-                        .icon(if view3d {
-                            IconName::Rotate3d
-                        } else {
-                            IconName::MousePointer2
-                        })
-                        .aria_label(text(
-                            locale,
-                            if view3d {
-                                Key::OrbitTool
-                            } else {
-                                Key::SelectTool
-                            },
-                        ))
-                        .native_tooltip(text(
-                            locale,
-                            if view3d {
-                                Key::OrbitTool
-                            } else {
-                                Key::SelectTool
-                            },
-                        )),
-                )
-                .child(
-                    Tab::new()
-                        .icon(IconName::Hand)
-                        .aria_label(text(
-                            locale,
-                            if view3d { Key::PanTool3d } else { Key::PanTool },
-                        ))
-                        .native_tooltip(text(
-                            locale,
-                            if view3d { Key::PanTool3d } else { Key::PanTool },
-                        )),
-                )
-                .on_click(move |index, window, cx| (commands.tool)(&(*index == 1), window, cx)),
-        )
-        .child(pick_menu(
-            locale,
-            state.selection_mode,
-            state.pick_filter,
-            commands.pick_mode,
-            commands.pick_category,
-            cx,
-        ))
-        .child(
-            div().flex_1().min_w_0().flex().justify_center().child(
-                div().w_full().max_w(rems(36.0)).child(
-                    Input::new(state.search)
-                        .small()
-                        .prefix(Icon::new(IconName::Search).small())
-                        .suffix(shortcut(crate::shortcuts::keys::FOCUS_SEARCH))
-                        .aria_label(text(locale, Key::SearchBoard)),
-                ),
-            ),
-        )
-        .child(
-            TabBar::new("board-color-mode")
-                .segmented()
-                .small()
-                .flex_shrink_0()
-                .selected_index(match state.color_mode {
-                    ColorMode::Layer => 0,
-                    ColorMode::Net => 1,
-                })
-                .child(Tab::new().label(text(locale, Key::LayerColor)))
-                .child(Tab::new().label(text(locale, Key::NetColor)))
-                .on_click(move |index, window, cx| {
-                    let mode = if *index == 0 {
-                        ColorMode::Layer
-                    } else {
-                        ColorMode::Net
-                    };
-                    colors(&mode, window, cx)
-                }),
-        )
-        .child(separator())
-        .child(
-            Button::new("fit-board")
-                .ghost()
-                .small()
-                .flex_shrink_0()
-                .icon(IconName::Scan)
-                .label(text(locale, Key::FitBoard))
-                .child(shortcut(crate::shortcuts::keys::FIT_ACTIVE_BOARD))
-                .on_click(commands.fit),
-        )
-        .child(separator())
-        .child(panel_toggle(Side::Left, state.left_panel_open, locale))
-        .child(panel_toggle(Side::Right, state.right_panel_open, locale))
-        .into_any_element()
+/// The board's share of the window title row.
+pub(crate) struct TitleControls {
+    /// Board search, centered between the document tabs and the trailing controls.
+    pub search: AnyElement,
+    /// The 2D/3D switch and the side panel toggles.
+    pub trailing: AnyElement,
 }
 
+impl BoardViewport {
+    /// Render the board controls that live in the window title row. The
+    /// workbench places them; behavior stays with this viewport.
+    pub(crate) fn render_title_controls(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TitleControls {
+        let locale = crate::i18n::current(cx);
+        let panels = crate::workbench::panel_layout::fit_to_window(
+            self.panel_layout.read(cx).snapshot(cx),
+            window.viewport_size().width.as_f32(),
+            0.0,
+        );
+        let theme = cx.theme();
+        let search = div()
+            .w_full()
+            .max_w(rems(28.0))
+            .min_w(rems(12.0))
+            .child(
+                Input::new(&self.search_input)
+                    .small()
+                    .prefix(Icon::new(IconName::Search).small())
+                    .suffix(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(crate::shortcuts::shortcut_label(
+                                crate::shortcuts::keys::FOCUS_SEARCH,
+                            )),
+                    )
+                    .aria_label(text(locale, Key::SearchBoard)),
+            )
+            .into_any_element();
+        let view3d = self.view3d.active;
+        let trailing = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .flex_shrink_0()
+            .child(
+                TabBar::new("board-view-mode")
+                    .segmented()
+                    .small()
+                    .flex_shrink_0()
+                    .selected_index(usize::from(view3d))
+                    .child(Tab::new().label(text(locale, Key::View2d)))
+                    .child(
+                        Tab::new()
+                            .label(text(locale, Key::View3d))
+                            .aria_label(text(locale, Key::View3dPreview))
+                            .disabled(!pomelo_render::backend::native::SolidRenderer::supported())
+                            .native_tooltip(text(locale, Key::Preview3dHint)),
+                    )
+                    .on_click(cx.listener(move |this, index: &usize, window, cx| {
+                        if (*index == 1) != this.view3d.active {
+                            this.toggle_3d(window, cx);
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(panel_toggle(Side::Left, !panels.left_collapsed, locale))
+                    .child(panel_toggle(Side::Right, !panels.right_collapsed, locale)),
+            )
+            .into_any_element();
+        TitleControls { search, trailing }
+    }
+
+    /// Choose the pointer tool. Picking a pointer tool ends any review tool.
+    fn set_pointer_tool(&mut self, pan: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.pan_tool = pan;
+        self.review.tool = None;
+        self.review.active = None;
+        self.review.drag = None;
+        self.pointer_gesture = None;
+        if pan {
+            self.invalidate_hover();
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Select (or orbit in 3D), pan, and what a click picks. The current
+    /// pointer tool takes the accent, like any current canvas tool.
+    pub(super) fn render_pointer_tools(
+        &self,
+        locale: Locale,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let in_3d = self.view3d.active;
+        let idle = self.review.tool.is_none();
+        let select_current = idle && !self.pan_tool;
+        let pan_current = idle && self.pan_tool;
+        let select_label = text(
+            locale,
+            if in_3d {
+                Key::OrbitTool
+            } else {
+                Key::SelectTool
+            },
+        );
+        let pan_label = text(locale, if in_3d { Key::PanTool3d } else { Key::PanTool });
+        let select = icon_button(
+            "canvas-select",
+            if in_3d {
+                IconName::Rotate3d
+            } else {
+                IconName::MousePointer2
+            },
+            select_label,
+            cx,
+        )
+        .when(select_current, |button| {
+            button.custom(crate::theme::canvas_toolbar_current(cx))
+        })
+        .selected(select_current)
+        .toggled(select_current)
+        .on_click(cx.listener(|this, _, window, cx| this.set_pointer_tool(false, window, cx)));
+        let pan = icon_button("canvas-pan", IconName::Hand, pan_label, cx)
+            .when(pan_current, |button| {
+                button.custom(crate::theme::canvas_toolbar_current(cx))
+            })
+            .selected(pan_current)
+            .toggled(pan_current)
+            .on_click(cx.listener(|this, _, window, cx| this.set_pointer_tool(true, window, cx)));
+        let view = cx.entity().downgrade();
+        let pick = pick_menu(
+            locale,
+            self.selection_mode,
+            self.pick_filter,
+            {
+                let view = view.clone();
+                Box::new(
+                    move |mode: &SelectionMode, window: &mut Window, cx: &mut App| {
+                        let _ =
+                            view.update(cx, |this, cx| this.set_selection_mode(*mode, window, cx));
+                    },
+                )
+            },
+            Box::new(
+                move |(category, enabled): &(PickCategory, bool), _: &mut Window, cx: &mut App| {
+                    let _ = view.update(cx, |this, cx| {
+                        this.set_pick_category(*category, *enabled, cx)
+                    });
+                },
+            ),
+            cx,
+        );
+        vec![
+            select.into_any_element(),
+            pan.into_any_element(),
+            pick.into_any_element(),
+        ]
+    }
+}
+
+type ModeHandler = Box<dyn Fn(&SelectionMode, &mut Window, &mut App)>;
+type CategoryHandler = Box<dyn Fn(&(PickCategory, bool), &mut Window, &mut App)>;
+
 /// Selection mode and pick filters share one menu because both decide what a
-/// canvas click selects. The trigger names the current mode and marks a
-/// restricted filter so the state is visible without opening the menu.
+/// canvas click selects. A restricted filter keeps the trigger filled, and a
+/// filter that blocks the mode is flagged, so the state shows without opening.
 fn pick_menu(
     locale: Locale,
     mode: SelectionMode,
@@ -240,68 +225,51 @@ fn pick_menu(
         .map_or(Key::ModeObject, |(_, key)| *key);
     let hint = picking::filter_hint(filter, mode);
     let restricted = filter != PickFilter::all();
-    Button::new("pick-mode")
-        .outline()
-        .small()
-        .flex_shrink_0()
-        .dropdown_caret(true)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(text(locale, Key::PickMode)),
-                )
-                .child(text(locale, mode_label))
-                .when(restricted, |label| {
-                    label.child(
-                        Icon::new(if hint.is_some() {
-                            IconName::TriangleAlert
-                        } else {
-                            IconName::ListFilter
-                        })
-                        .xsmall()
-                        .text_color(if hint.is_some() {
-                            cx.theme().warning
-                        } else {
-                            cx.theme().muted_foreground
-                        }),
-                    )
-                }),
-        )
-        .accessibility_label(text(locale, Key::PickModeTooltip))
-        .dropdown_menu(move |mut menu, window, _| {
-            menu = menu
-                .min_w(window.rem_size() * 14.0)
-                .label(text(locale, Key::PickMode));
-            for (candidate, key) in SELECTION_MODES {
-                let on_mode = Rc::clone(&on_mode);
-                menu = menu.item(
-                    PopupMenuItem::new(text(locale, key))
-                        .checked(candidate == mode)
-                        .on_click(move |_, window, cx| on_mode(&candidate, window, cx)),
-                );
-            }
-            menu = menu.separator().label(text(locale, Key::PickCategories));
-            for (category, key) in picking::CATEGORIES {
-                let on_category = Rc::clone(&on_category);
-                let enabled = filter.contains(category);
-                menu = menu.item(
-                    PopupMenuItem::new(text(locale, key))
-                        .checked(enabled)
-                        .on_click(move |_, window, cx| {
-                            on_category(&(category, !enabled), window, cx)
-                        }),
-                );
-            }
-            if let Some(hint) = hint {
-                menu = menu.separator().label(text(locale, hint));
-            }
-            menu
-        })
+    let label = super::canvas_toolbar::labeled_value(
+        locale,
+        text(locale, Key::PickMode),
+        text(locale, mode_label),
+    );
+    icon_button(
+        "canvas-pick-mode",
+        if hint.is_some() {
+            IconName::TriangleAlert
+        } else if restricted {
+            IconName::ListFilter
+        } else {
+            IconName::MousePointerClick
+        },
+        label,
+        cx,
+    )
+    .selected(restricted)
+    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, _| {
+        menu = menu
+            .min_w(window.rem_size() * 14.0)
+            .label(text(locale, Key::PickMode));
+        for (candidate, key) in SELECTION_MODES {
+            let on_mode = Rc::clone(&on_mode);
+            menu = menu.item(
+                PopupMenuItem::new(text(locale, key))
+                    .checked(candidate == mode)
+                    .on_click(move |_, window, cx| on_mode(&candidate, window, cx)),
+            );
+        }
+        menu = menu.separator().label(text(locale, Key::PickCategories));
+        for (category, key) in picking::CATEGORIES {
+            let on_category = Rc::clone(&on_category);
+            let enabled = filter.contains(category);
+            menu = menu.item(
+                PopupMenuItem::new(text(locale, key))
+                    .checked(enabled)
+                    .on_click(move |_, window, cx| on_category(&(category, !enabled), window, cx)),
+            );
+        }
+        if let Some(hint) = hint {
+            menu = menu.separator().label(text(locale, hint));
+        }
+        menu
+    })
 }
 
 fn panel_toggle(side: Side, open: bool, locale: Locale) -> Button {

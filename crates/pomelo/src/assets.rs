@@ -69,7 +69,9 @@ gpui_kit::assets::icon_assets!(
         PanelBottom,
         Table,
         Route,
-        House
+        House,
+        PanelsTopLeft,
+        Upload
     ]
 );
 pub struct Assets;

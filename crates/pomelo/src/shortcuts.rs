@@ -10,6 +10,7 @@ pub mod keys {
     pub const TOGGLE_RIGHT_PANEL: &str = "secondary-shift-b";
     pub const NAVIGATE_BACK: &str = "alt-left";
     pub const NAVIGATE_FORWARD: &str = "alt-right";
+    pub const SINGLE_LAYER: &str = "l";
 }
 
 /// Formats a binding such as `secondary-shift-b` with the current platform's names:

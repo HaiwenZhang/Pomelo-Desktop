@@ -104,7 +104,11 @@ pub fn run() -> ExitCode {
                 viewport::PreviousActiveLayer,
                 Some("BoardViewport"),
             ),
-            KeyBinding::new("l", viewport::ToggleSingleLayer, Some("BoardViewport")),
+            KeyBinding::new(
+                crate::shortcuts::keys::SINGLE_LAYER,
+                viewport::ToggleSingleLayer,
+                Some("BoardViewport"),
+            ),
             KeyBinding::new("n", viewport::NextCandidate, Some("BoardViewport")),
             KeyBinding::new("=", viewport::ZoomIn, Some("BoardViewport")),
             KeyBinding::new("shift-=", viewport::ZoomIn, Some("BoardViewport")),

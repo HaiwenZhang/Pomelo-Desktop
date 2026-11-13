@@ -11,7 +11,7 @@ use pomelo_core::{
     i18n::{Locale, MessageKey as Key, text},
 };
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-type VisibilityHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
+pub type VisibilityHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
 type LabelHandler = Box<dyn Fn(&(LabelKind, bool), &mut Window, &mut App)>;
 pub struct DisplayCommands {
     pub net_colors: VisibilityHandler,
@@ -261,6 +261,7 @@ pub fn section(title: String, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
 }
 
 /// One immediate setting: its label leads and the switch holds the trailing lane.
+/// The label wraps rather than truncates, so every locale shows the full name.
 pub fn setting_switch(
     id: &'static str,
     label: String,
@@ -281,7 +282,8 @@ pub fn setting_switch(
                 .flex_1()
                 .min_w_0()
                 .text_sm()
-                .truncate()
+                // Longer translations wrap instead of losing their ending.
+                .whitespace_normal()
                 .child(label)
                 // The full name recovers a short or truncated label.
                 .tooltip({
