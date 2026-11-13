@@ -86,7 +86,7 @@ impl BoardViewport {
         self.set_overlays(overlays, cx);
     }
 
-    fn set_overlays(&mut self, overlays: CanvasOverlays, cx: &mut Context<Self>) {
+    pub(super) fn set_overlays(&mut self, overlays: CanvasOverlays, cx: &mut Context<Self>) {
         if !overlays.probe {
             self.probe = Default::default();
         }

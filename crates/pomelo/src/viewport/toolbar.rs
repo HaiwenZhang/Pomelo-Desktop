@@ -42,7 +42,64 @@ pub(crate) struct TitleControls {
     pub trailing: AnyElement,
 }
 
+#[derive(Clone, Copy)]
+enum TitlePart {
+    Search,
+    Trailing,
+}
+
+/// One part of the board's share of the title row, as its own view. It
+/// redraws whenever the viewport changes (search results, the palette, the
+/// 2D/3D mode) without redrawing the rest of the workbench.
+pub(crate) struct BoardTitle {
+    viewport: WeakEntity<BoardViewport>,
+    part: TitlePart,
+    _viewport_changes: Subscription,
+}
+
+impl BoardTitle {
+    fn new(viewport: &Entity<BoardViewport>, part: TitlePart, cx: &mut Context<Self>) -> Self {
+        Self {
+            viewport: viewport.downgrade(),
+            part,
+            _viewport_changes: cx.observe(viewport, |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for BoardTitle {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let part = self.part;
+        self.viewport
+            .update(cx, |viewport, cx| {
+                let controls = viewport.render_title_controls(window, cx);
+                match part {
+                    TitlePart::Search => controls.search,
+                    TitlePart::Trailing => controls.trailing,
+                }
+            })
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
 impl BoardViewport {
+    /// The search and trailing title views for this board, created once.
+    pub(crate) fn title_views(&mut self, cx: &mut Context<Self>) -> (AnyView, AnyView) {
+        let (search, trailing) = match &self.title_views {
+            Some(views) => views.clone(),
+            None => {
+                let this = cx.entity();
+                let views = (
+                    cx.new(|cx| BoardTitle::new(&this, TitlePart::Search, cx)),
+                    cx.new(|cx| BoardTitle::new(&this, TitlePart::Trailing, cx)),
+                );
+                self.title_views = Some(views.clone());
+                views
+            }
+        };
+        (search.into(), trailing.into())
+    }
+
     /// Render the board controls that live in the window title row. The
     /// workbench places them; behavior stays with this viewport.
     pub(crate) fn render_title_controls(
@@ -56,11 +113,47 @@ impl BoardViewport {
             window.viewport_size().width.as_f32(),
             0.0,
         );
+        let palette = self.render_palette(locale, window, cx);
         let theme = cx.theme();
         let search = div()
             .w_full()
             .max_w(rems(28.0))
             .min_w(rems(12.0))
+            .flex()
+            .flex_col()
+            // The field keeps arrows for the palette while it is open, and
+            // Escape leaves the search like it does on the canvas.
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                    if this.palette_open(window, cx) {
+                        this.step_palette(-1, cx);
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::MoveDown, window, cx| {
+                    if this.palette_open(window, cx) {
+                        this.step_palette(1, cx);
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Escape, window, cx| {
+                    this.palette.dismissed = true;
+                    this.leave_search(&super::LeaveSearch, window, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.palette.dismissed {
+                        this.palette.dismissed = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .child(
                 Input::new(&self.search_input)
                     .small()
@@ -76,6 +169,7 @@ impl BoardViewport {
                     )
                     .aria_label(text(locale, Key::SearchBoard)),
             )
+            .children(palette)
             .into_any_element();
         let view3d = self.view3d.active;
         let trailing = div()

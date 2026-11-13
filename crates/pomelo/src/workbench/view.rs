@@ -500,10 +500,12 @@ impl Render for Workbench {
             .and_then(|document| document.viewport.clone())
         {
             Some(viewport) => {
-                let controls = viewport.update(cx, |viewport, cx| {
-                    viewport.render_title_controls(window, cx)
-                });
-                (Some(controls.search), Some(controls.trailing))
+                let (search, trailing) =
+                    viewport.update(cx, |viewport, cx| viewport.title_views(cx));
+                (
+                    Some(search.into_any_element()),
+                    Some(trailing.into_any_element()),
+                )
             }
             None => (None, None),
         };
@@ -619,7 +621,11 @@ impl Render for Workbench {
                                             .into_any_element()
                                     },
                                 ))
-                                .child(self.menu_bar.clone()),
+                                // macOS shows these menus in the system menu bar;
+                                // other platforms have no native bar to rely on.
+                                .when(!cfg!(target_os = "macos"), |row| {
+                                    row.child(self.menu_bar.clone())
+                                }),
                         )
                         .map(|bar| {
                             if tabs.is_empty() {

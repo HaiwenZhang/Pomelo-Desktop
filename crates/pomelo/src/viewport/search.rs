@@ -13,6 +13,8 @@ impl BoardViewport {
         self.search_cancel.cancel();
         self.search_cancel = pomelo_core::task::CancellationToken::default();
         self.search_query = query.clone();
+        self.palette.active = 0;
+        self.palette.dismissed = false;
         if !query.trim().is_empty() && self.left_panel == LeftPanelTab::Layers {
             self.left_panel = LeftPanelTab::Nets;
         }
@@ -220,6 +222,7 @@ impl BoardViewport {
             });
         }
         let focus = self.search_input.read(cx).focus_handle(cx);
+        self.palette.dismissed = false;
         window.focus(&focus, cx);
     }
 

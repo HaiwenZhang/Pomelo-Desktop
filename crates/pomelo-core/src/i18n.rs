@@ -922,6 +922,13 @@ message_keys! {
     WelcomeShortcutSearch => "welcome.shortcut_search" [],
     WelcomeShortcutSingleLayer => "welcome.shortcut_single_layer" [],
     RecentCardMeta => "ui.recent_card_meta" ["summary", "opened"],
+    PaletteCommands => "view.palette_commands" [],
+    PaletteGoTo => "view.palette_go_to" ["x", "y"],
+    PaletteObjects => "view.palette_objects" ["count"],
+    PalettePins => "view.palette_pins" ["count"],
+    PaletteSwitchView => "view.palette_switch_view" ["view"],
+    PaletteShowOverlays => "view.palette_show_overlays" [],
+    PaletteHint => "view.palette_hint" [],
 }
 
 /// Typed values remain machine-readable; complete sentences are never arguments.

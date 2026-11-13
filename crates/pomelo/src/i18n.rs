@@ -149,6 +149,9 @@ pub fn action(preference: LanguagePreference) -> Box<dyn gpui_kit::Action> {
     }
 }
 
+/// The product's own name, which is not translated.
+const PRODUCT_NAME: &str = "Pomelo";
+
 fn rebuild_menus(cx: &mut App) {
     let state = cx.global::<LanguageState>();
     let locale = state.locale;
@@ -167,18 +170,39 @@ fn rebuild_menus(cx: &mut App) {
             disabled: false,
         });
     }
-    let menus = vec![
-        Menu::new(text(locale, MessageKey::FileMenu)).items([
-            MenuItem::action(text(locale, MessageKey::OpenFile), OpenFile),
-            MenuItem::action(text(locale, MessageKey::ReloadDocument), ReloadDocument)
-                .disabled(!cx.global::<DocumentMenuState>().reload_available),
-            MenuItem::action(text(locale, MessageKey::CloseDocument), CloseDocument)
-                .disabled(!cx.global::<DocumentMenuState>().has_document),
+    let file_items = [
+        MenuItem::action(text(locale, MessageKey::OpenFile), OpenFile),
+        MenuItem::action(text(locale, MessageKey::ReloadDocument), ReloadDocument)
+            .disabled(!cx.global::<DocumentMenuState>().reload_available),
+        MenuItem::action(text(locale, MessageKey::CloseDocument), CloseDocument)
+            .disabled(!cx.global::<DocumentMenuState>().has_document),
+    ];
+    let mut menus = Vec::new();
+    if cfg!(target_os = "macos") {
+        // macOS turns the first menu into the application menu, so About,
+        // Settings and Quit get their own and File keeps only file commands.
+        menus.push(Menu::new(PRODUCT_NAME).items([
+            MenuItem::action(
+                text(locale, MessageKey::AboutPomelo),
+                crate::actions::AboutPomelo,
+            ),
             MenuItem::separator(),
             MenuItem::action(text(locale, MessageKey::SettingsMenu), OpenSettings),
             MenuItem::separator(),
             MenuItem::action(text(locale, MessageKey::Quit), Quit),
-        ]),
+        ]));
+        menus.push(Menu::new(text(locale, MessageKey::FileMenu)).items(file_items));
+    } else {
+        menus.push(Menu::new(text(locale, MessageKey::FileMenu)).items(
+            file_items.into_iter().chain([
+                MenuItem::separator(),
+                MenuItem::action(text(locale, MessageKey::SettingsMenu), OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action(text(locale, MessageKey::Quit), Quit),
+            ]),
+        ));
+    }
+    menus.extend([
         Menu::new(text(locale, MessageKey::ViewMenu)).items([
             MenuItem::action(text(locale, MessageKey::NextDocument), NextDocument)
                 .disabled(!cx.global::<DocumentMenuState>().can_cycle),
@@ -201,7 +225,7 @@ fn rebuild_menus(cx: &mut App) {
             text(locale, MessageKey::AboutPomelo),
             crate::actions::AboutPomelo,
         )]),
-    ];
+    ]);
     cx.set_menus(menus);
     let owned = cx.get_menus().unwrap_or_default();
     gpui_kit::base::GlobalState::global_mut(cx).set_app_menus(owned);

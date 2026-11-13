@@ -24,6 +24,7 @@ mod net_colors;
 mod net_panel;
 mod object_filter;
 mod opacity;
+mod palette;
 mod patterns;
 mod picking;
 mod probe;
@@ -117,6 +118,10 @@ pub struct BoardViewport {
     length_table: length_table::LengthTable,
     /// The canvas display popup above the toolbar is open.
     display_quick_open: bool,
+    /// Highlighted row of the command palette under the title search.
+    palette: palette::PaletteState,
+    /// The board's views in the window title row, created on first use.
+    title_views: Option<(Entity<toolbar::BoardTitle>, Entity<toolbar::BoardTitle>)>,
     preparation_budget: pomelo_core::memory::MemoryBudget,
     hover_selection: Option<(
         pomelo_core::selection::SelectionTarget,
@@ -478,6 +483,17 @@ impl BoardViewport {
                     secondary: false,
                     shift: false
                 }
+            ) && this.palette_open(window, cx)
+                && this.run_active_palette_item(window, cx)
+            {
+                // The palette's highlighted row ran: a coordinate, a board
+                // result or a command.
+            } else if matches!(
+                event,
+                InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false
+                }
             ) && let Some(point) = pomelo_core::units::parse_coordinates(
                 &input.read(cx).value(),
                 this.display.length_unit,
@@ -651,6 +667,8 @@ impl BoardViewport {
             probe: Default::default(),
             length_table: Default::default(),
             display_quick_open: false,
+            palette: Default::default(),
+            title_views: None,
             preparation_budget,
             format_name: pomelo_import::formats::format_display_name(&prepared.board.source.format)
                 .to_owned(),
