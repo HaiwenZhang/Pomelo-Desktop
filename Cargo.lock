@@ -4892,7 +4892,7 @@ dependencies = [
 
 [[package]]
 name = "pomelo"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4917,7 +4917,7 @@ dependencies = [
 
 [[package]]
 name = "pomelo-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "clipper2-rust",
@@ -4937,7 +4937,7 @@ dependencies = [
 
 [[package]]
 name = "pomelo-import"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chardetng",
@@ -4957,7 +4957,7 @@ dependencies = [
 
 [[package]]
 name = "pomelo-render"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
